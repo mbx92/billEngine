@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { Check, ChevronLeft, ChevronRight, Plus, RefreshCw } from '@lucide/vue'
-import type { BillingCycle } from '#shared/constants/domain'
 import type { ApiService, ApiServiceOptions, Paginated } from '#shared/types/api'
 import { billingCycleUnit } from '#shared/utils/billing-display'
 import { apiErrorMessage } from '~/lib/api-error'
@@ -24,11 +23,9 @@ const today = new Date().toLocaleDateString('en-CA', {
 })
 const form = reactive({
   customerId: '',
+  planId: '',
   name: '',
   description: '',
-  currency: appSettings.value.billingCurrency,
-  priceAmount: '',
-  billingCycle: 'monthly' as BillingCycle,
   billingStartDate: today,
   nextDueDate: today,
   invoiceLeadDays: '0',
@@ -46,11 +43,13 @@ const { data: optionData, refresh: refreshOptions } = await useFetch<{ data: Api
 
 const services = computed(() => data.value?.data ?? [])
 const meta = computed(() => data.value?.meta)
+const plans = computed(() => optionData.value?.data.plans ?? [])
 const customers = computed(() => optionData.value?.data.customers ?? [])
 const resources = computed(() => optionData.value?.data.resources ?? [])
 const selectedCustomer = computed(() =>
   customers.value.find((customer) => customer.id === form.customerId),
 )
+const selectedPlan = computed(() => plans.value.find((plan) => plan.id === form.planId))
 const selectedResources = computed(() =>
   resources.value.filter((resource) => form.resourceIds.includes(resource.id)),
 )
@@ -63,29 +62,11 @@ const filteredResources = computed(() => {
       .some((value) => value!.toLocaleLowerCase().includes(query)),
   )
 })
-const priceLabel = computed(() =>
-  form.billingCycle === 'one_time'
-    ? 'Harga sekali bayar'
-    : `Harga per ${billingCycleUnit(form.billingCycle)}`,
-)
-const priceHint = computed(() => {
-  if (form.billingCycle === 'one_time') return 'Nominal ditagihkan satu kali.'
-  return `Nominal ini ditagihkan setiap ${billingCycleUnit(form.billingCycle)}.`
-})
-
 const wizardSteps = [
   { number: 1, label: 'Service' },
   { number: 2, label: 'Billing' },
   { number: 3, label: 'Resources' },
   { number: 4, label: 'Konfirmasi' },
-]
-
-const billingCycles: Array<{ value: BillingCycle; label: string }> = [
-  { value: 'one_time', label: 'Sekali bayar' },
-  { value: 'monthly', label: 'Bulanan' },
-  { value: 'quarterly', label: 'Tiga bulanan' },
-  { value: 'semi_annually', label: 'Enam bulanan' },
-  { value: 'annually', label: 'Tahunan' },
 ]
 
 watch(
@@ -99,11 +80,9 @@ watch(
 function resetForm() {
   Object.assign(form, {
     customerId: '',
+    planId: '',
     name: '',
     description: '',
-    currency: appSettings.value.billingCurrency,
-    priceAmount: '',
-    billingCycle: 'monthly',
     billingStartDate: today,
     nextDueDate: today,
     invoiceLeadDays: '0',
@@ -131,14 +110,11 @@ function closeServiceDialog() {
 function validateCurrentStep() {
   if (wizardStep.value === 1) {
     if (!form.customerId) return 'Pilih customer untuk service ini.'
+    if (!form.planId) return 'Pilih plan untuk service ini.'
     if (form.name.trim().length < 2) return 'Nama service minimal 2 karakter.'
   }
 
   if (wizardStep.value === 2) {
-    if (!/^\d+$/.test(form.priceAmount) || BigInt(form.priceAmount) <= 0n) {
-      return 'Harga service harus berupa angka dan lebih besar dari nol.'
-    }
-    if (form.currency.trim().length !== 3) return 'Mata uang harus menggunakan kode 3 huruf.'
     if (!form.billingStartDate) return 'Tanggal mulai billing wajib diisi.'
     if (!form.nextDueDate) {
       return 'Jadwal invoice pertama wajib diisi.'
@@ -193,7 +169,16 @@ async function addService() {
       {
         method: 'POST',
         body: {
-          ...form,
+          customerId: form.customerId,
+          planId: form.planId,
+          name: form.name,
+          description: form.description,
+          billingStartDate: form.billingStartDate,
+          nextDueDate: form.nextDueDate,
+          invoiceLeadDays: form.invoiceLeadDays,
+          paymentDueDays: form.paymentDueDays,
+          taxRate: form.taxRate,
+          resourceIds: form.resourceIds,
         },
       },
     )
@@ -219,7 +204,7 @@ async function addService() {
         </p>
         <h1 class="text-2xl font-semibold tracking-tight text-ink">Services</h1>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">
-          Billable business services, recurring price, billing cycle, and linked Coolify resources.
+          Service customer berdasarkan plan, jadwal billing, dan resource Coolify yang terhubung.
         </p>
       </div>
       <div class="flex gap-2">
@@ -227,7 +212,7 @@ async function addService() {
           <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
           Refresh
         </UiButton>
-        <UiButton @click="openServiceDialog">
+        <UiButton :disabled="plans.length === 0" @click="openServiceDialog">
           <Plus :size="15" aria-hidden="true" />
           Tambah service
         </UiButton>
@@ -291,7 +276,7 @@ async function addService() {
 
       <form id="add-service-form" @submit.prevent="addService">
         <div v-if="wizardStep === 1" class="grid gap-4 md:grid-cols-2">
-          <label class="block md:col-span-2">
+          <label class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Customer</span>
             <select
               v-model="form.customerId"
@@ -309,6 +294,23 @@ async function addService() {
               terlebih dahulu.
             </span>
           </label>
+          <label class="block">
+            <span class="mb-2 block text-xs font-semibold text-muted">Plan</span>
+            <select
+              v-model="form.planId"
+              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            >
+              <option value="" disabled>Pilih plan aktif</option>
+              <option v-for="plan in plans" :key="plan.id" :value="plan.id">
+                {{ plan.name }} · {{ format.money(plan.priceAmount, plan.currency) }}
+              </option>
+            </select>
+            <span v-if="plans.length === 0" class="mt-1.5 block text-xs text-warning">
+              Belum ada plan aktif.
+              <NuxtLink class="font-semibold underline" to="/plans">Buat plan</NuxtLink>
+              terlebih dahulu.
+            </span>
+          </label>
           <UiInput v-model="form.name" label="Nama service" placeholder="Production Hosting" />
           <label class="block md:col-span-2">
             <span class="mb-2 block text-xs font-semibold text-muted">Deskripsi</span>
@@ -319,28 +321,53 @@ async function addService() {
               class="focus-ring min-h-10 w-full rounded-md border border-line-strong bg-canvas px-3 py-2 text-sm text-ink placeholder:text-muted/60"
             />
           </label>
+          <div
+            v-if="selectedPlan"
+            class="rounded-md border border-brand/25 bg-brand/5 p-4 md:col-span-2"
+          >
+            <div class="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
+              <div>
+                <p class="text-sm font-semibold text-ink">{{ selectedPlan.name }}</p>
+                <p v-if="selectedPlan.description" class="mt-1 text-xs text-muted">
+                  {{ selectedPlan.description }}
+                </p>
+              </div>
+              <p class="shrink-0 font-mono text-sm font-semibold text-ink">
+                {{ format.money(selectedPlan.priceAmount, selectedPlan.currency) }}
+                <template v-if="selectedPlan.billingCycle !== 'one_time'">
+                  / {{ billingCycleUnit(selectedPlan.billingCycle) }}
+                </template>
+              </p>
+            </div>
+            <ul class="mt-3 grid gap-1.5 border-t pt-3 text-xs text-ink sm:grid-cols-2">
+              <li v-for="item in selectedPlan.inclusions" :key="item" class="flex gap-2">
+                <Check class="mt-0.5 shrink-0 text-brand" :size="12" aria-hidden="true" />
+                {{ item }}
+              </li>
+            </ul>
+          </div>
         </div>
 
         <div v-else-if="wizardStep === 2" class="grid gap-4 md:grid-cols-2">
-          <UiMoneyInput
-            v-model="form.priceAmount"
-            :label="priceLabel"
-            :currency="form.currency"
-            :hint="`${priceHint} Pemisah ribuan ditambahkan otomatis.`"
-            placeholder="500000"
-          />
-          <UiInput v-model="form.currency" label="Mata uang" maxlength="3" placeholder="IDR" />
-          <label class="block">
-            <span class="mb-2 block text-xs font-semibold text-muted">Siklus billing</span>
-            <select
-              v-model="form.billingCycle"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option v-for="cycle in billingCycles" :key="cycle.value" :value="cycle.value">
-                {{ cycle.label }}
-              </option>
-            </select>
-          </label>
+          <div class="rounded-md border bg-canvas/60 p-4 md:col-span-2">
+            <p class="text-xs font-semibold tracking-wide text-muted uppercase">
+              Billing dari plan
+            </p>
+            <div class="mt-2 flex flex-wrap items-baseline justify-between gap-2">
+              <span class="font-medium text-ink">{{ selectedPlan?.name }}</span>
+              <span class="font-mono text-sm font-semibold text-ink">
+                {{
+                  format.money(selectedPlan?.priceAmount ?? '0', selectedPlan?.currency ?? 'IDR')
+                }}
+                <template v-if="selectedPlan?.billingCycle !== 'one_time'">
+                  / {{ billingCycleUnit(selectedPlan?.billingCycle ?? 'monthly') }}
+                </template>
+              </span>
+            </div>
+            <p class="mt-2 text-xs text-muted">
+              Harga dan siklus disalin dari plan sebagai snapshot saat service dibuat.
+            </p>
+          </div>
           <UiInput v-model="form.billingStartDate" label="Mulai billing" type="date" />
           <UiInput
             v-model="form.nextDueDate"
@@ -434,16 +461,21 @@ async function addService() {
                 </p>
               </div>
               <p class="font-mono text-base font-semibold text-ink">
-                {{ format.money(form.priceAmount, form.currency.toUpperCase()) }}
-                <template v-if="form.billingCycle === 'one_time'"> sekali bayar</template>
-                <template v-else> / {{ billingCycleUnit(form.billingCycle) }}</template>
+                {{
+                  format.money(selectedPlan?.priceAmount ?? '0', selectedPlan?.currency ?? 'IDR')
+                }}
+                <template v-if="selectedPlan?.billingCycle === 'one_time'"> sekali bayar</template>
+                <template v-else>
+                  / {{ billingCycleUnit(selectedPlan?.billingCycle ?? 'monthly') }}
+                </template>
               </p>
             </div>
             <dl class="mt-4 grid gap-3 border-t pt-4 text-xs sm:grid-cols-3">
               <div>
-                <dt class="text-muted">Siklus</dt>
+                <dt class="text-muted">Plan</dt>
                 <dd class="mt-1 font-medium text-ink">
-                  {{ format.billingCycle(form.billingCycle) }}
+                  {{ selectedPlan?.name }} ·
+                  {{ format.billingCycle(selectedPlan?.billingCycle ?? 'monthly') }}
                 </dd>
               </div>
               <div>
@@ -469,6 +501,14 @@ async function addService() {
                 <dd class="mt-1 text-ink">{{ form.taxRate || 'Tanpa pajak' }}</dd>
               </div>
             </dl>
+            <div v-if="selectedPlan" class="mt-4 border-t pt-4">
+              <p class="mb-2 text-xs font-semibold text-muted">Termasuk dalam plan</p>
+              <div class="flex flex-wrap gap-2">
+                <UiBadge v-for="item in selectedPlan.inclusions" :key="item" tone="success">
+                  {{ item }}
+                </UiBadge>
+              </div>
+            </div>
           </div>
           <div>
             <p class="mb-2 text-xs font-semibold text-muted">
@@ -501,7 +541,7 @@ async function addService() {
             </UiButton>
             <UiButton
               v-if="wizardStep < wizardSteps.length"
-              :disabled="customers.length === 0"
+              :disabled="customers.length === 0 || plans.length === 0"
               @click="nextStep"
             >
               Lanjut
@@ -536,11 +576,19 @@ async function addService() {
       <UiEmptyState
         v-else-if="services.length === 0"
         title="Belum ada service"
-        description="Service adalah unit billing. Buat service untuk menghubungkan customer dengan Coolify resources."
+        :description="
+          plans.length
+            ? 'Service adalah unit billing. Buat service untuk menghubungkan customer, plan, dan Coolify resources.'
+            : 'Buat plan beserta harga dan benefit terlebih dahulu sebelum membuat service.'
+        "
       >
-        <UiButton size="sm" @click="openServiceDialog">
+        <UiButton v-if="plans.length" size="sm" @click="openServiceDialog">
           <Plus :size="14" aria-hidden="true" />
           Tambah service
+        </UiButton>
+        <UiButton v-else size="sm" @click="navigateTo('/plans')">
+          <Plus :size="14" aria-hidden="true" />
+          Buat plan
         </UiButton>
       </UiEmptyState>
 
@@ -568,6 +616,9 @@ async function addService() {
                   <span class="block font-medium text-ink">{{ service.name }}</span>
                   <span class="block font-mono text-xs text-muted">{{
                     service.serviceNumber
+                  }}</span>
+                  <span class="mt-1 block text-xs text-brand">{{
+                    service.planName || 'Legacy'
                   }}</span>
                 </td>
                 <td class="px-4 py-3">

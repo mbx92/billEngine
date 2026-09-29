@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { BILLING_CYCLES } from '../constants/domain'
 
 const optionalText = (max: number) =>
   z.preprocess(
@@ -22,11 +21,9 @@ const optionalTaxRate = z.preprocess(
 export const createServiceSchema = z
   .object({
     customerId: z.uuid(),
+    planId: z.uuid(),
     name: z.string().trim().min(2).max(200),
     description: optionalText(5_000),
-    currency: z.string().trim().length(3).toUpperCase().default('IDR'),
-    priceAmount: z.coerce.bigint().positive('Harga service harus lebih besar dari nol.'),
-    billingCycle: z.enum(BILLING_CYCLES),
     billingStartDate: z.iso.date(),
     nextDueDate: z.preprocess(
       (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),

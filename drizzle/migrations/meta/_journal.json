@@ -15,6 +15,13 @@
       "when": 1790685485394,
       "tag": "0001_wild_leopardon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790701693229,
+      "tag": "0002_slippery_mantis",
+      "breakpoints": true
     }
   ]
 }

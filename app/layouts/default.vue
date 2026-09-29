@@ -4,6 +4,7 @@ import {
   Boxes,
   CreditCard,
   FileText,
+  GalleryVerticalEnd,
   Layers3,
   LayoutDashboard,
   LogOut,
@@ -28,6 +29,7 @@ watchEffect(() => {
 const primaryNavigation = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard },
   { label: 'Customers', to: '/customers', icon: Users },
+  { label: 'Plans', to: '/plans', icon: GalleryVerticalEnd },
   { label: 'Services', to: '/services', icon: Layers3 },
   { label: 'Invoices', to: '/invoices', icon: FileText },
   { label: 'Payments', to: '/payments', icon: CreditCard },

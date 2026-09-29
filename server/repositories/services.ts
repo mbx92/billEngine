@@ -10,11 +10,16 @@ import {
   serviceResources,
   services,
 } from '../database/schema'
+import { PlanRepository, type PlanRecord } from './plans'
 
 type QueryExecutor = Database | Transaction
 
 export class ServiceRepository {
-  constructor(private readonly database: Database = useDatabase()) {}
+  private readonly plans: PlanRepository
+
+  constructor(private readonly database: Database = useDatabase()) {
+    this.plans = new PlanRepository(database)
+  }
 
   async list(page: number, perPage: number) {
     const offset = (page - 1) * perPage
@@ -29,6 +34,9 @@ export class ServiceRepository {
           id: services.id,
           serviceNumber: services.serviceNumber,
           name: services.name,
+          planId: services.planId,
+          planName: services.planName,
+          planInclusions: services.planInclusions,
           status: services.status,
           currency: services.currency,
           priceAmount: services.priceAmount,
@@ -55,6 +63,9 @@ export class ServiceRepository {
         id: row.id,
         serviceNumber: row.serviceNumber,
         name: row.name,
+        planId: row.planId,
+        planName: row.planName,
+        planInclusions: row.planInclusions,
         status: row.status,
         currency: row.currency,
         priceAmount: row.priceAmount.toString(),
@@ -71,7 +82,8 @@ export class ServiceRepository {
   }
 
   async listCreateOptions(): Promise<ApiServiceOptions> {
-    const [customerRows, resourceRows] = await Promise.all([
+    const [planRows, customerRows, resourceRows] = await Promise.all([
+      this.plans.listActiveOptions(),
       this.database
         .select({
           id: customers.id,
@@ -114,7 +126,7 @@ export class ServiceRepository {
         .orderBy(asc(coolifyServers.name), asc(coolifyResources.name)),
     ])
 
-    return { customers: customerRows, resources: resourceRows }
+    return { plans: planRows, customers: customerRows, resources: resourceRows }
   }
 
   async findActiveCustomer(transaction: QueryExecutor, id: string) {
@@ -178,6 +190,7 @@ export class ServiceRepository {
   async create(
     transaction: Transaction,
     input: CreateServiceInput,
+    plan: PlanRecord,
     serviceNumber: string,
     nextDueDate: string | null,
     createdBy: string | null,
@@ -186,12 +199,15 @@ export class ServiceRepository {
       .insert(services)
       .values({
         customerId: input.customerId,
+        planId: plan.id,
+        planName: plan.name,
+        planInclusions: plan.inclusions,
         serviceNumber,
         name: input.name,
         description: input.description,
-        currency: input.currency,
-        priceAmount: input.priceAmount,
-        billingCycle: input.billingCycle,
+        currency: plan.currency,
+        priceAmount: plan.priceAmount,
+        billingCycle: plan.billingCycle,
         billingStartDate: input.billingStartDate,
         nextDueDate,
         invoiceLeadDays: input.invoiceLeadDays,

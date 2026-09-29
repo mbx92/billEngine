@@ -55,10 +55,37 @@ export interface ApiServiceResourceLink {
   status: ResourceStatus
 }
 
+export interface ApiPlan {
+  id: string
+  name: string
+  description: string | null
+  currency: string
+  priceAmount: DecimalString
+  billingCycle: BillingCycle
+  inclusions: string[]
+  isActive: boolean
+  serviceCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiPlanOption {
+  id: string
+  name: string
+  description: string | null
+  currency: string
+  priceAmount: DecimalString
+  billingCycle: BillingCycle
+  inclusions: string[]
+}
+
 export interface ApiService {
   id: string
   serviceNumber: string
   name: string
+  planId: string | null
+  planName: string | null
+  planInclusions: string[]
   status: ServiceStatus
   currency: string
   priceAmount: DecimalString
@@ -72,6 +99,7 @@ export interface ApiService {
 }
 
 export interface ApiServiceOptions {
+  plans: ApiPlanOption[]
   customers: Array<{
     id: string
     customerNumber: string

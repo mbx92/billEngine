@@ -7,6 +7,7 @@ import {
   ensureDocumentSequenceFloor,
 } from '../../repositories/document-sequences'
 import { ServiceRepository } from '../../repositories/services'
+import { PlanRepository } from '../../repositories/plans'
 import { formatDocumentNumber } from '../../utils/document-number'
 import { DomainError } from '../../utils/errors'
 
@@ -21,6 +22,7 @@ export class ServiceCatalogService {
     private readonly database: Database = useDatabase(),
     private readonly repository = new ServiceRepository(database),
     private readonly audit = new AuditLogRepository(database),
+    private readonly plans = new PlanRepository(database),
   ) {}
 
   list(page: number, perPage: number) {
@@ -35,6 +37,9 @@ export class ServiceCatalogService {
     return this.database.transaction(async (transaction) => {
       const customer = await this.repository.findActiveCustomer(transaction, input.customerId)
       if (!customer) throw DomainError.validation('Customer aktif tidak ditemukan.')
+
+      const plan = await this.plans.findActiveById(transaction, input.planId)
+      if (!plan) throw DomainError.validation('Plan aktif tidak ditemukan.')
 
       // Serialize assignments for each selected resource. This closes the race
       // between availability validation and inserting the service-resource rows.
@@ -69,6 +74,7 @@ export class ServiceCatalogService {
       const created = await this.repository.create(
         transaction,
         input,
+        plan,
         serviceNumber,
         nextDueDate,
         actor.userId,
@@ -83,9 +89,11 @@ export class ServiceCatalogService {
           serviceNumber: created.serviceNumber,
           customerId: created.customerId,
           name: created.name,
-          priceAmount: created.priceAmount.toString(),
-          currency: created.currency,
-          billingCycle: created.billingCycle,
+          planId: plan.id,
+          planName: plan.name,
+          priceAmount: plan.priceAmount.toString(),
+          currency: plan.currency,
+          billingCycle: plan.billingCycle,
           resourceIds: input.resourceIds,
         },
         ipAddress: actor.ipAddress,

@@ -1,10 +1,12 @@
 import { sql } from 'drizzle-orm'
 import {
   bigint,
+  boolean,
   check,
   date,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -18,6 +20,27 @@ import { coolifyResources } from './coolify'
 import { customers } from './customers'
 import { billingCycle, serviceStatus } from './enums'
 
+export const plans = pgTable(
+  'plans',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 160 }).notNull(),
+    description: text('description'),
+    currency: varchar('currency', { length: 3 }).notNull().default('IDR'),
+    priceAmount: bigint('price_amount', { mode: 'bigint' }).notNull(),
+    billingCycle: billingCycle('billing_cycle').notNull(),
+    inclusions: jsonb('inclusions').$type<string[]>().notNull().default([]),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('plans_name_uidx').on(table.name),
+    index('plans_active_idx').on(table.isActive),
+    check('plans_price_amount_check', sql`${table.priceAmount} > 0`),
+  ],
+)
+
 export const services = pgTable(
   'services',
   {
@@ -25,6 +48,9 @@ export const services = pgTable(
     customerId: uuid('customer_id')
       .notNull()
       .references(() => customers.id, { onDelete: 'restrict' }),
+    planId: uuid('plan_id').references(() => plans.id, { onDelete: 'restrict' }),
+    planName: varchar('plan_name', { length: 160 }),
+    planInclusions: jsonb('plan_inclusions').$type<string[]>().notNull().default([]),
     serviceNumber: varchar('service_number', { length: 32 }).notNull(),
     name: varchar('name', { length: 200 }).notNull(),
     description: text('description'),
@@ -44,6 +70,7 @@ export const services = pgTable(
   (table) => [
     uniqueIndex('services_service_number_uidx').on(table.serviceNumber),
     index('services_customer_id_idx').on(table.customerId),
+    index('services_plan_id_idx').on(table.planId),
     index('services_status_idx').on(table.status),
     index('services_next_due_date_idx').on(table.nextDueDate),
     index('services_customer_status_idx').on(table.customerId, table.status),
