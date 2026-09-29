@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Plus, RefreshCw, Zap } from '@lucide/vue'
+import { ClockAlert, Plus, RefreshCw, Zap } from '@lucide/vue'
 import type { InvoiceStatus } from '#shared/constants/domain'
 import type { ApiInvoiceListResponse, ApiRecurringRunResult } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
@@ -8,11 +8,13 @@ definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Invoices · Billing Infra' })
 
 const format = useFormat()
+const settings = useAppSettings()
 const page = ref(1)
 const perPage = 25
 const statusFilter = ref<InvoiceStatus | ''>('')
 const query = ref('')
-const busy = ref<'generate' | null>(null)
+const busy = ref<'generate' | 'overdue' | null>(null)
+const showManualForm = ref(false)
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 
@@ -81,6 +83,31 @@ async function generateRecurring() {
     busy.value = null
   }
 }
+
+async function markOverdue() {
+  busy.value = 'overdue'
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    const response = await $fetch<{ data: { marked: number; asOf: string } }>(
+      '/api/invoices/mark-overdue',
+      { method: 'POST', body: {} },
+    )
+    actionMessage.value = response.data.marked
+      ? `${format.count(response.data.marked)} invoice ditandai overdue per ${format.date(response.data.asOf)}.`
+      : 'Tidak ada invoice baru yang perlu ditandai overdue.'
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Gagal memperbarui status overdue.')
+  } finally {
+    busy.value = null
+  }
+}
+
+async function manualInvoiceCreated(invoice: { id: string; invoiceNumber: string }) {
+  showManualForm.value = false
+  await navigateTo(`/invoices/${invoice.id}`)
+}
 </script>
 
 <template>
@@ -100,9 +127,26 @@ async function generateRecurring() {
           <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
           Refresh
         </UiButton>
-        <UiButton :disabled="busy === 'generate'" @click="generateRecurring()">
+        <UiButton variant="secondary" :disabled="busy !== null" @click="markOverdue()">
+          <ClockAlert :size="15" :stroke-width="1.8" aria-hidden="true" />
+          {{ busy === 'overdue' ? 'Memproses…' : 'Mark overdue' }}
+        </UiButton>
+        <UiButton
+          variant="secondary"
+          :disabled="busy !== null || !settings.billingAutomationEnabled"
+          :title="
+            settings.billingAutomationEnabled
+              ? 'Jalankan recurring billing sekarang'
+              : 'Aktifkan billing automation melalui Settings'
+          "
+          @click="generateRecurring()"
+        >
           <Zap :size="15" :stroke-width="1.8" aria-hidden="true" />
           {{ busy === 'generate' ? 'Menjalankan…' : 'Generate recurring' }}
+        </UiButton>
+        <UiButton @click="showManualForm = true">
+          <Plus :size="15" :stroke-width="1.8" aria-hidden="true" />
+          Manual invoice
         </UiButton>
       </div>
     </header>
@@ -140,6 +184,12 @@ async function generateRecurring() {
     >
       {{ actionMessage }}
     </div>
+
+    <ManualInvoiceDialog
+      v-if="showManualForm"
+      @close="showManualForm = false"
+      @created="manualInvoiceCreated"
+    />
 
     <UiCard :padded="false">
       <div class="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -191,17 +241,12 @@ async function generateRecurring() {
         :description="
           statusFilter || query
             ? 'Tidak ada invoice yang cocok dengan filter saat ini.'
-            : 'Jalankan billing engine untuk membuat invoice dari service yang siap ditagihkan.'
+            : 'Buat manual invoice, atau aktifkan billing automation untuk invoice recurring.'
         "
       >
-        <UiButton
-          v-if="!statusFilter && !query"
-          size="sm"
-          :disabled="busy === 'generate'"
-          @click="generateRecurring()"
-        >
+        <UiButton v-if="!statusFilter && !query" size="sm" @click="showManualForm = true">
           <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-          Generate recurring
+          Buat manual invoice
         </UiButton>
       </UiEmptyState>
 

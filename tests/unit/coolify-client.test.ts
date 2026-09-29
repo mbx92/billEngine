@@ -59,4 +59,61 @@ describe('Coolify client', () => {
 
     expect(servers).toMatchObject([{ uuid: 'node-1', name: 'localhost' }])
   })
+
+  it('returns disabled without contacting Sentinel when metrics are off', async () => {
+    const request = vi.fn()
+    vi.stubGlobal('fetch', request)
+
+    const usage = await new CoolifyClient(
+      'https://coolify.example.test',
+      'secret',
+    ).getContainerUsage(
+      {
+        is_metrics_enabled: false,
+        sentinel_custom_url: 'http://sentinel.internal:8888',
+        sentinel_token: 'metrics-secret',
+      },
+      'app-1',
+    )
+
+    expect(usage).toMatchObject({ status: 'disabled', cpuPercent: null, memoryUsageBytes: null })
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('reads the latest CPU and memory samples from Sentinel', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ time: 1_800_000_000_000, percent: 12.5 }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ time: 1_800_000_000_000, used: 134_217_728 }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    vi.stubGlobal('fetch', request)
+
+    const usage = await new CoolifyClient(
+      'https://coolify.example.test',
+      'secret',
+    ).getContainerUsage(
+      {
+        is_metrics_enabled: true,
+        sentinel_custom_url: 'http://sentinel.internal:8888',
+        sentinel_token: 'metrics-secret',
+      },
+      'app-1',
+    )
+
+    expect(usage).toMatchObject({
+      status: 'available',
+      cpuPercent: 12.5,
+      memoryUsageBytes: 134_217_728n,
+    })
+    expect(request).toHaveBeenCalledTimes(2)
+  })
 })

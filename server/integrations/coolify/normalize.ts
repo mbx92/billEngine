@@ -44,10 +44,23 @@ function nullableString(value: string | number | null | undefined): string | nul
   return value === null || value === undefined || value === '' ? null : String(value)
 }
 
-function nullableBigInt(value: string | number | null | undefined): bigint | null {
+/** Parses the Docker memory format used by Coolify, e.g. 512m or 1g. */
+export function parseDockerMemoryBytes(value: string | number | null | undefined): bigint | null {
   if (value === null || value === undefined || value === '') return null
+
+  const normalized = String(value).trim().toLowerCase()
+  const match = /^(\d+)([bkmg])?$/.exec(normalized)
+  if (!match) return null
+
+  const multipliers: Record<string, bigint> = {
+    b: 1n,
+    k: 1024n,
+    m: 1024n ** 2n,
+    g: 1024n ** 3n,
+  }
+
   try {
-    return BigInt(value)
+    return BigInt(match[1]!) * (multipliers[match[2] ?? 'b'] ?? 1n)
   } catch {
     return null
   }
@@ -82,9 +95,9 @@ export function normalizeCoolifyApplication(
     limitsCpus: nullableString(application.limits_cpus),
     limitsCpuset: application.limits_cpuset ?? null,
     limitsCpuShares: application.limits_cpu_shares ?? null,
-    limitsMemoryBytes: nullableBigInt(application.limits_memory),
-    memoryReservationBytes: nullableBigInt(application.limits_memory_reservation),
-    memorySwapBytes: nullableBigInt(application.limits_memory_swap),
+    limitsMemoryBytes: parseDockerMemoryBytes(application.limits_memory),
+    memoryReservationBytes: parseDockerMemoryBytes(application.limits_memory_reservation),
+    memorySwapBytes: parseDockerMemoryBytes(application.limits_memory_swap),
     // Coolify's application payload can include webhook/basic-auth secrets.
     // Keep useful provider metadata for diagnostics without persisting credentials.
     rawMetadata: sanitizeMetadata(application) as Record<string, unknown>,

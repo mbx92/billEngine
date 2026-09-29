@@ -9,7 +9,7 @@ definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Services · Billing Infra' })
 
 const format = useFormat()
-const config = useRuntimeConfig()
+const appSettings = useAppSettings()
 const page = ref(1)
 const perPage = 25
 const showAddForm = ref(false)
@@ -20,20 +20,20 @@ const saving = ref(false)
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const today = new Date().toLocaleDateString('en-CA', {
-  timeZone: config.public.billingTimezone,
+  timeZone: appSettings.value.billingTimezone,
 })
 const form = reactive({
   customerId: '',
   name: '',
   description: '',
-  currency: 'IDR',
+  currency: appSettings.value.billingCurrency,
   priceAmount: '',
   billingCycle: 'monthly' as BillingCycle,
   billingStartDate: today,
   nextDueDate: today,
   invoiceLeadDays: '0',
   paymentDueDays: '7',
-  taxRate: '',
+  taxRate: appSettings.value.defaultTaxRate ?? '',
   resourceIds: [] as string[],
 })
 
@@ -101,14 +101,14 @@ function resetForm() {
     customerId: '',
     name: '',
     description: '',
-    currency: 'IDR',
+    currency: appSettings.value.billingCurrency,
     priceAmount: '',
     billingCycle: 'monthly',
     billingStartDate: today,
     nextDueDate: today,
     invoiceLeadDays: '0',
     paymentDueDays: '7',
-    taxRate: '',
+    taxRate: appSettings.value.defaultTaxRate ?? '',
     resourceIds: [],
   })
   wizardStep.value = 1

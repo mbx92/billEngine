@@ -1,3 +1,5 @@
+import { SettingsService } from '../services/settings/settings-service'
+
 export interface BillingSeller {
   name: string
   email: string | null
@@ -10,6 +12,7 @@ export interface BillingConfig {
   currency: string
   /** Default tax rate as a numeric(7,4) fraction, e.g. "0.11" for 11%. */
   defaultTaxRate: string | null
+  billingAutomationEnabled: boolean
   companyName: string
   seller: BillingSeller
 }
@@ -18,19 +21,20 @@ export interface BillingConfig {
  * Company identity and billing defaults come from server-side configuration,
  * not from hardcoded constants (docs §17: tax must be configurable).
  */
-export function useBillingConfig(): BillingConfig {
-  const config = useRuntimeConfig()
+export async function useBillingConfig(): Promise<BillingConfig> {
+  const settings = await new SettingsService().getBillingSettings()
 
   return {
-    timezone: config.billingTimezone || 'UTC',
-    currency: config.billingCurrency || 'IDR',
-    defaultTaxRate: config.billingDefaultTaxRate || null,
-    companyName: config.companyName,
+    timezone: settings.billingTimezone,
+    currency: settings.billingCurrency,
+    defaultTaxRate: settings.defaultTaxRate,
+    billingAutomationEnabled: settings.billingAutomationEnabled,
+    companyName: settings.companyName,
     seller: {
-      name: config.companyName,
-      email: config.companyEmail || null,
-      address: config.companyAddress || null,
-      taxId: config.companyTaxId || null,
+      name: settings.companyName,
+      email: settings.companyEmail,
+      address: settings.companyAddress,
+      taxId: settings.companyTaxId,
     },
   }
 }

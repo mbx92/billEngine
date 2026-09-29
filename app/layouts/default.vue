@@ -16,6 +16,14 @@ import { authClient } from '~/lib/auth-client'
 
 const route = useRoute()
 const mobileOpen = ref(false)
+const appSettings = useAppSettings()
+const { data: settingsResponse } = await useFetch<{ data: typeof appSettings.value }>(
+  '/api/settings',
+)
+
+watchEffect(() => {
+  if (settingsResponse.value?.data) appSettings.value = settingsResponse.value.data
+})
 
 const primaryNavigation = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard },
@@ -60,7 +68,9 @@ async function signOut() {
             >B_</span
           >
           <span>
-            <strong class="block text-sm leading-tight">Billing Infra</strong>
+            <strong class="block max-w-40 truncate text-sm leading-tight">{{
+              appSettings.companyName
+            }}</strong>
             <span class="font-mono text-[10px] tracking-wider text-muted uppercase"
               >control plane</span
             >
@@ -166,7 +176,9 @@ async function signOut() {
           </div>
         </div>
         <div class="flex items-center gap-3">
-          <span class="hidden font-mono text-[11px] text-muted sm:block">Asia/Makassar</span>
+          <span class="hidden font-mono text-[11px] text-muted sm:block">{{
+            appSettings.billingTimezone
+          }}</span>
           <UiThemeToggle />
           <span
             class="flex size-8 items-center justify-center rounded-full border bg-surface-raised text-xs font-semibold"

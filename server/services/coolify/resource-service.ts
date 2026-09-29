@@ -3,22 +3,133 @@ import {
   normalizeCoolifyApplication,
   normalizeCoolifyServer,
 } from '../../integrations/coolify/normalize'
-import type { CreateCoolifyServerInput } from '../../../shared/schemas/coolify'
+import type {
+  BulkUpdateResourceClassificationInput,
+  CreateCoolifyServerInput,
+  ResourceListQuery,
+  UpdateResourceClassificationInput,
+} from '../../../shared/schemas/coolify'
 import { CoolifyResourceRepository, normalizeBaseUrl } from '../../repositories/coolify-resources'
+import { AuditLogRepository } from '../../repositories/audit'
 import { decryptCredential, encryptCredential } from '../../utils/credentials'
+import type { ApiResourceUsageMetric } from '../../../shared/types/api'
+import { useDatabase, type Database } from '../../database/client'
+import { DomainError } from '../../utils/errors'
+
+interface ResourceActorContext {
+  userId: string | null
+  ipAddress?: string | null
+  userAgent?: string | null
+}
 
 export class CoolifyResourceService {
   constructor(
-    private readonly repository = new CoolifyResourceRepository(),
+    private readonly database: Database = useDatabase(),
+    private readonly repository = new CoolifyResourceRepository(database),
+    private readonly audit = new AuditLogRepository(database),
     private readonly client?: CoolifyClient,
   ) {}
 
-  list(page: number, perPage: number) {
-    return this.repository.list(page, perPage)
+  list(input: ResourceListQuery) {
+    return this.repository.list(input)
   }
 
   summary() {
     return this.repository.summary()
+  }
+
+  updateClassification(
+    resourceId: string,
+    input: UpdateResourceClassificationInput,
+    actor: ResourceActorContext,
+  ) {
+    return this.updateClassifications(
+      { resourceIds: [resourceId], classification: input.classification },
+      actor,
+    ).then((result) => result.resources[0]!)
+  }
+
+  async updateClassifications(
+    input: BulkUpdateResourceClassificationInput,
+    actor: ResourceActorContext,
+  ) {
+    return this.database.transaction(async (transaction) => {
+      const rows = await this.repository.findByIdsForUpdate(transaction, input.resourceIds)
+      if (rows.length !== input.resourceIds.length) {
+        throw DomainError.notFound('Satu atau lebih resource tidak ditemukan.')
+      }
+
+      const changedRows = rows.filter((row) => row.classification !== input.classification)
+      const updatedResources = await this.repository.updateClassification(
+        transaction,
+        changedRows.map((row) => row.id),
+        input.classification,
+      )
+
+      for (const row of changedRows) {
+        await this.audit.record(transaction, {
+          actorUserId: actor.userId,
+          action: 'resource.classification.updated',
+          entityType: 'coolify_resource',
+          entityId: row.id,
+          beforeData: { classification: row.classification },
+          afterData: { classification: input.classification },
+          metadata: { resourceName: row.name },
+          ipAddress: actor.ipAddress,
+          userAgent: actor.userAgent,
+        })
+      }
+
+      return {
+        resources: rows.map((row) => ({ ...row, classification: input.classification })),
+        updatedCount: updatedResources.length,
+      }
+    })
+  }
+
+  async usageMetrics(resourceIds: string[]): Promise<ApiResourceUsageMetric[]> {
+    const targets = await this.repository.metricsTargets(resourceIds)
+    const contexts = new Map<
+      string,
+      { client: CoolifyClient; settings: ReturnType<CoolifyClient['getSentinelSettings']> }
+    >()
+
+    return Promise.all(
+      targets.map(async (target): Promise<ApiResourceUsageMetric> => {
+        const metadata = target.rawMetadata as Record<string, unknown> | null
+        if (metadata?.build_pack === 'dockercompose') {
+          return emptyApiMetric(target.resourceId, 'unsupported')
+        }
+        if (!target.coolifyNodeUuid) {
+          return emptyApiMetric(target.resourceId, 'unreachable')
+        }
+
+        const contextKey = `${target.coolifyServerId}:${target.coolifyNodeUuid}`
+        let context = contexts.get(contextKey)
+        if (!context) {
+          const client = this.clientForConnection(target)
+          context = {
+            client,
+            settings: client.getSentinelSettings(target.coolifyNodeUuid),
+          }
+          contexts.set(contextKey, context)
+        }
+
+        try {
+          const settings = await context.settings
+          const usage = await context.client.getContainerUsage(settings, target.coolifyUuid)
+          return {
+            resourceId: target.resourceId,
+            status: usage.status,
+            cpuPercent: usage.cpuPercent,
+            memoryUsageBytes: usage.memoryUsageBytes?.toString() ?? null,
+            sampledAt: usage.sampledAt?.toISOString() ?? null,
+          }
+        } catch {
+          return emptyApiMetric(target.resourceId, 'unreachable')
+        }
+      }),
+    )
   }
 
   async listServers() {
@@ -136,6 +247,19 @@ export class CoolifyResourceService {
     }
 
     throw new Error('COOLIFY_CREDENTIALS_MISSING')
+  }
+}
+
+function emptyApiMetric(
+  resourceId: string,
+  status: Exclude<ApiResourceUsageMetric['status'], 'available'>,
+): ApiResourceUsageMetric {
+  return {
+    resourceId,
+    status,
+    cpuPercent: null,
+    memoryUsageBytes: null,
+    sampledAt: null,
   }
 }
 

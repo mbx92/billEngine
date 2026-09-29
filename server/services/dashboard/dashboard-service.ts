@@ -8,6 +8,8 @@ import {
   monthlyRecurringAmount,
   summarizeInvoiceBalances,
 } from '../billing/overview'
+import { useBillingConfig } from '../../utils/billing-config'
+import { todayIsoDate } from '../../utils/clock'
 
 export class DashboardService {
   constructor(
@@ -16,33 +18,35 @@ export class DashboardService {
   ) {}
 
   async overview(): Promise<ApiDashboard> {
-    const [customerTotals, serviceRows, invoiceRows, resourceSummary] = await Promise.all([
-      this.database
-        .select({
-          total: count(),
-          active: sql<number>`count(*) filter (where ${customers.status} = 'active')`.mapWith(
-            Number,
-          ),
-        })
-        .from(customers),
-      this.database
-        .select({
-          status: services.status,
-          currency: services.currency,
-          priceAmount: services.priceAmount,
-          billingCycle: services.billingCycle,
-        })
-        .from(services)
-        .where(ne(services.status, 'cancelled')),
-      this.database
-        .select({
-          status: invoices.status,
-          balanceDue: invoices.balanceDue,
-          dueDate: invoices.dueDate,
-        })
-        .from(invoices),
-      this.resources.summary(),
-    ])
+    const [customerTotals, serviceRows, invoiceRows, resourceSummary, billingConfig] =
+      await Promise.all([
+        this.database
+          .select({
+            total: count(),
+            active: sql<number>`count(*) filter (where ${customers.status} = 'active')`.mapWith(
+              Number,
+            ),
+          })
+          .from(customers),
+        this.database
+          .select({
+            status: services.status,
+            currency: services.currency,
+            priceAmount: services.priceAmount,
+            billingCycle: services.billingCycle,
+          })
+          .from(services)
+          .where(ne(services.status, 'cancelled')),
+        this.database
+          .select({
+            status: invoices.status,
+            balanceDue: invoices.balanceDue,
+            dueDate: invoices.dueDate,
+          })
+          .from(invoices),
+        this.resources.summary(),
+        useBillingConfig(),
+      ])
 
     const activeServices = serviceRows.filter((row) => isActiveService(row.status))
     const currency = activeServices[0]?.currency ?? serviceRows[0]?.currency ?? 'IDR'
@@ -50,7 +54,7 @@ export class DashboardService {
       (sum, row) => sum + monthlyRecurringAmount(row.priceAmount, row.billingCycle),
       0n,
     )
-    const balances = summarizeInvoiceBalances(invoiceRows, todayIsoDate())
+    const balances = summarizeInvoiceBalances(invoiceRows, todayIsoDate(billingConfig.timezone))
 
     return {
       revenue: {
@@ -80,16 +84,4 @@ export class DashboardService {
       },
     }
   }
-}
-
-/** Billing timezone decides which calendar day counts as "today". */
-function todayIsoDate(): string {
-  const config = useRuntimeConfig()
-  const timeZone = config.billingTimezone || 'UTC'
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date())
 }

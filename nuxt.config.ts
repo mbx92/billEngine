@@ -61,6 +61,7 @@ export default defineNuxtConfig({
     billingCurrency: process.env.BILLING_CURRENCY || 'IDR',
     // numeric(7,4) fraction, e.g. 0.11 for 11% VAT. Empty means no tax.
     billingDefaultTaxRate: process.env.BILLING_DEFAULT_TAX_RATE || '',
+    billingAutomationEnabled: process.env.BILLING_AUTOMATION_ENABLED === 'true',
     public: {
       appUrl: process.env.APP_URL || 'http://localhost:3000',
       billingTimezone: process.env.BILLING_TIMEZONE || 'Asia/Makassar',

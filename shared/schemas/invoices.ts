@@ -21,35 +21,59 @@ const isoDateSchema = z.iso.date()
  * the line items; totals are always recomputed server-side from the lines so a
  * client can never dictate the amount owed.
  */
-export const createInvoiceSchema = z.object({
-  customerId: uuidSchema,
-  issueDate: isoDateSchema,
-  dueDate: isoDateSchema,
-  notes: z.string().trim().max(5_000).optional(),
-  items: z
-    .array(
-      z.object({
-        serviceId: uuidSchema.optional(),
-        description: z.string().trim().min(2).max(500),
-        /** numeric(14,4) as a string, e.g. "1" or "1.5". */
-        quantity: z
-          .string()
-          .trim()
-          .regex(/^\d+(\.\d{1,4})?$/, 'Quantity tidak valid.')
-          .default('1'),
-        unitPriceAmount: idrAmountSchema,
-        /** numeric(7,4) fraction, e.g. "0.11" for 11%. */
-        taxRate: z
-          .string()
-          .trim()
-          .regex(/^\d+(\.\d{1,4})?$/, 'Tax rate tidak valid.')
-          .optional(),
-        servicePeriodStart: isoDateSchema.optional(),
-        servicePeriodEnd: isoDateSchema.optional(),
-      }),
-    )
-    .min(1, 'Invoice harus memiliki minimal satu item.'),
-})
+export const createInvoiceSchema = z
+  .object({
+    customerId: uuidSchema,
+    issueDate: isoDateSchema,
+    dueDate: isoDateSchema,
+    notes: z.string().trim().max(5_000).optional(),
+    items: z
+      .array(
+        z.object({
+          serviceId: uuidSchema.optional(),
+          description: z.string().trim().min(2).max(500),
+          /** numeric(14,4) as a string, e.g. "1" or "1.5". */
+          quantity: z
+            .string()
+            .trim()
+            .regex(/^\d+(\.\d{1,4})?$/, 'Quantity tidak valid.')
+            .default('1'),
+          unitPriceAmount: idrAmountSchema,
+          /** numeric(7,4) fraction, e.g. "0.11" for 11%. */
+          taxRate: z
+            .string()
+            .trim()
+            .regex(/^(0(\.\d{1,4})?|1(\.0{1,4})?)$/, 'Tax rate harus antara 0 dan 1.')
+            .optional(),
+          servicePeriodStart: isoDateSchema.optional(),
+          servicePeriodEnd: isoDateSchema.optional(),
+        }),
+      )
+      .min(1, 'Invoice harus memiliki minimal satu item.'),
+  })
+  .superRefine((input, context) => {
+    if (input.dueDate < input.issueDate) {
+      context.addIssue({
+        code: 'custom',
+        path: ['dueDate'],
+        message: 'Due date tidak boleh sebelum issue date.',
+      })
+    }
+
+    input.items.forEach((item, index) => {
+      if (
+        item.servicePeriodStart &&
+        item.servicePeriodEnd &&
+        item.servicePeriodEnd < item.servicePeriodStart
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['items', index, 'servicePeriodEnd'],
+          message: 'Akhir periode tidak boleh sebelum awal periode.',
+        })
+      }
+    })
+  })
 
 export const generateRecurringInvoicesSchema = z.object({
   /** Defaults to the billing timezone's current date on the server. */
@@ -70,10 +94,13 @@ export const recordPaymentSchema = z.object({
 })
 
 export const paymentListQuerySchema = paginationSchema.extend({
-  invoiceId: uuidSchema.optional(),
-  status: z.enum(PAYMENT_STATUSES).optional(),
-  from: isoDateSchema.optional(),
-  to: isoDateSchema.optional(),
+  invoiceId: z.preprocess((value) => (value === '' ? undefined : value), uuidSchema.optional()),
+  status: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.enum(PAYMENT_STATUSES).optional(),
+  ),
+  from: z.preprocess((value) => (value === '' ? undefined : value), isoDateSchema.optional()),
+  to: z.preprocess((value) => (value === '' ? undefined : value), isoDateSchema.optional()),
 })
 
 export const markOverdueSchema = z.object({

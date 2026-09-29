@@ -59,3 +59,31 @@ export const coolifyServersSchema = z.union([
 ])
 
 export type CoolifyServer = z.infer<typeof coolifyServerSchema>
+
+export const coolifySentinelSettingsSchema = z
+  .object({
+    is_metrics_enabled: z.boolean().default(false),
+    sentinel_token: z.string().min(1).optional(),
+    sentinel_custom_url: z.url().optional(),
+  })
+  .passthrough()
+
+export const coolifyCpuMetricsSchema = z.array(
+  z
+    .object({
+      time: z.coerce.number(),
+      percent: z.coerce.number(),
+    })
+    .passthrough(),
+)
+
+export const coolifyMemoryMetricsSchema = z.array(
+  z
+    .object({
+      time: z.coerce.number(),
+      used: z.coerce.number(),
+    })
+    .passthrough(),
+)
+
+export type CoolifySentinelSettings = z.infer<typeof coolifySentinelSettingsSchema>

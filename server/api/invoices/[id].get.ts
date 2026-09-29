@@ -1,6 +1,7 @@
 import type { ApiInvoiceDetail } from '../../../shared/types/api'
 import { InvoiceService } from '../../services/invoices/invoice-service'
 import { todayIsoDate } from '../../utils/clock'
+import { useBillingConfig } from '../../utils/billing-config'
 import { daysPastDue } from '../../services/billing/cycles'
 import { DomainError } from '../../utils/errors'
 
@@ -13,7 +14,7 @@ export default defineEventHandler(async (event) => {
   if (!detail) throw DomainError.notFound('Invoice tidak ditemukan.')
 
   const { invoice, items, payments } = detail
-  const today = todayIsoDate()
+  const today = todayIsoDate((await useBillingConfig()).timezone)
 
   const data: ApiInvoiceDetail = {
     invoice: {

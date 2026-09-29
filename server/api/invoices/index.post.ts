@@ -11,5 +11,11 @@ export default defineEventHandler(async (event) => {
   )
 
   setResponseStatus(event, 201)
-  return { data: invoice }
+  return {
+    data: {
+      id: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+    },
+  }
 })

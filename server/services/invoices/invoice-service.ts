@@ -10,6 +10,7 @@ import { AuditLogRepository } from '../../repositories/audit'
 import { CustomerRepository } from '../../repositories/customers'
 import { allocateDocumentNumber } from '../../repositories/document-sequences'
 import { InvoiceRepository, type NewInvoiceItem } from '../../repositories/invoices'
+import { ServiceRepository } from '../../repositories/services'
 import { useBillingConfig } from '../../utils/billing-config'
 import { todayIsoDate } from '../../utils/clock'
 import { DomainError } from '../../utils/errors'
@@ -43,6 +44,7 @@ export class InvoiceService {
     private readonly database: Database = useDatabase(),
     private readonly invoices = new InvoiceRepository(database),
     private readonly customers = new CustomerRepository(database),
+    private readonly services = new ServiceRepository(database),
     private readonly audit = new AuditLogRepository(database),
   ) {}
 
@@ -72,8 +74,25 @@ export class InvoiceService {
 
     const customer = await this.customers.findById(input.customerId)
     if (!customer) throw DomainError.notFound('Customer tidak ditemukan.')
+    if (customer.status !== 'active') {
+      throw DomainError.invalidState('Manual invoice hanya dapat dibuat untuk customer aktif.')
+    }
 
-    const config = useBillingConfig()
+    const serviceIds = [
+      ...new Set(input.items.flatMap((item) => (item.serviceId ? [item.serviceId] : []))),
+    ]
+    const validServiceIds = await this.services.findActiveCustomerServiceIds(
+      this.database,
+      customer.id,
+      serviceIds,
+    )
+    if (validServiceIds.length !== serviceIds.length) {
+      throw DomainError.validation(
+        'Satu atau lebih service tidak aktif atau bukan milik customer yang dipilih.',
+      )
+    }
+
+    const config = await useBillingConfig()
     const totals = computeInvoiceTotals(
       input.items.map((item) => ({
         quantity: item.quantity,
@@ -167,7 +186,13 @@ export class InvoiceService {
     input: GenerateRecurringInvoicesInput,
     actor: ActorContext,
   ): Promise<RecurringRunResult> {
-    const asOf = input.asOf ?? todayIsoDate()
+    const config = await useBillingConfig()
+    if (!config.billingAutomationEnabled) {
+      throw DomainError.invalidState(
+        'Billing automation sedang nonaktif. Aktifkan melalui Settings sebelum menjalankan recurring billing.',
+      )
+    }
+    const asOf = input.asOf ?? todayIsoDate(config.timezone)
     const dueServices = await this.invoices.listDueServices(asOf)
 
     const result: RecurringRunResult = { asOf, created: [], skipped: [], processed: 0 }
@@ -235,7 +260,7 @@ export class InvoiceService {
     const customer = await this.customers.findById(service.customerId)
     if (!customer) throw new Error('Customer tidak ditemukan.')
 
-    const config = useBillingConfig()
+    const config = await useBillingConfig()
     const dueDate = addDays(issueDate, service.paymentDueDays)
     const advanced = nextBillingDate(billingDate, service.billingCycle)
 
@@ -325,6 +350,11 @@ export class InvoiceService {
       if (existing.status === 'paid') {
         throw DomainError.invalidState(
           'Invoice yang sudah dibayar tidak dapat dibatalkan. Catat refund melalui audit.',
+        )
+      }
+      if (existing.amountPaid > 0n) {
+        throw DomainError.invalidState(
+          'Invoice dengan pembayaran tidak dapat dibatalkan sebelum pembayaran direfund.',
         )
       }
       if (existing.status === 'cancelled') {

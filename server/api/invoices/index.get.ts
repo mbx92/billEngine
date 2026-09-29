@@ -3,6 +3,7 @@ import type { ApiInvoiceListItem, ApiInvoiceSummary } from '../../../shared/type
 import { InvoiceService } from '../../services/invoices/invoice-service'
 import { daysPastDue } from '../../services/billing/cycles'
 import { todayIsoDate } from '../../utils/clock'
+import { useBillingConfig } from '../../utils/billing-config'
 
 export default defineEventHandler(async (event) => {
   await requireAdmin(event)
@@ -19,7 +20,7 @@ export default defineEventHandler(async (event) => {
     service.openBalance(),
   ])
 
-  const today = todayIsoDate()
+  const today = todayIsoDate((await useBillingConfig()).timezone)
   const summary: ApiInvoiceSummary = {
     counts,
     currencies: balances.map((entry) => ({
@@ -47,6 +48,11 @@ export default defineEventHandler(async (event) => {
   return {
     data,
     summary,
-    meta: { page: query.page, perPage: query.perPage, total, totalPages: Math.ceil(total / query.perPage) },
+    meta: {
+      page: query.page,
+      perPage: query.perPage,
+      total,
+      totalPages: Math.ceil(total / query.perPage),
+    },
   }
 })

@@ -149,6 +149,8 @@ export interface ApiResourceSummary {
   degraded: number
   unknown: number
   billable: number
+  internal: number
+  ignored: number
   notBilled: number
   totalCpuCores: DecimalString | null
   totalMemoryBytes: DecimalString | null
@@ -159,6 +161,21 @@ export interface ApiResourceListResponse {
   data: ApiResourceListItem[]
   summary: ApiResourceSummary
   meta: Paginated<never>['meta']
+}
+
+export type ResourceMetricsStatus =
+  'available' | 'disabled' | 'unreachable' | 'no_data' | 'unsupported'
+
+export interface ApiResourceUsageMetric {
+  resourceId: string
+  status: ResourceMetricsStatus
+  cpuPercent: number | null
+  memoryUsageBytes: DecimalString | null
+  sampledAt: string | null
+}
+
+export interface ApiResourceMetricsResponse {
+  data: ApiResourceUsageMetric[]
 }
 
 export interface ApiCoolifySyncResult {
@@ -220,6 +237,39 @@ export interface ApiDashboard {
     memoryBytes: DecimalString | null
     resourceCount: number
   }
+}
+
+export interface ApiBillingSettings {
+  companyName: string
+  companyEmail: string | null
+  companyAddress: string | null
+  companyTaxId: string | null
+  billingTimezone: string
+  billingCurrency: string
+  defaultTaxRate: string | null
+  billingAutomationEnabled: boolean
+  source: 'environment' | 'database'
+  updatedAt: string | null
+}
+
+export interface ApiManualInvoiceOptions {
+  customers: Array<{
+    id: string
+    customerNumber: string
+    name: string
+    companyName: string | null
+    email: string
+  }>
+  services: Array<{
+    id: string
+    serviceNumber: string
+    name: string
+    customerId: string
+    currency: string
+    priceAmount: DecimalString
+    billingCycle: BillingCycle
+    nextDueDate: string | null
+  }>
 }
 
 export interface ApiInvoiceListItem {
@@ -298,6 +348,7 @@ export interface ApiInvoiceDetail {
 }
 
 export interface ApiPaymentListItem extends ApiPayment {
+  invoiceId: string
   invoiceNumber: string
   customerName: string
   customerCompanyName: string | null
@@ -306,6 +357,17 @@ export interface ApiPaymentListItem extends ApiPayment {
 export interface ApiPaymentListResponse {
   data: ApiPaymentListItem[]
   meta: Paginated<never>['meta']
+}
+
+export interface ApiPaymentInvoiceOption {
+  id: string
+  invoiceNumber: string
+  status: Extract<InvoiceStatus, 'unpaid' | 'overdue'>
+  currency: string
+  balanceDue: DecimalString
+  dueDate: string
+  customerName: string
+  customerCompanyName: string | null
 }
 
 export interface ApiRecurringRunResult {

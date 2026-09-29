@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, lte, sql } from 'drizzle-orm'
+import { and, count, desc, eq, gte, sql } from 'drizzle-orm'
 import type { PaymentStatus } from '../../shared/constants/domain'
 import { useDatabase, type Database, type Transaction } from '../database/client'
 import { invoices, payments, users } from '../database/schema'
@@ -10,6 +10,7 @@ export interface PaymentListFilters {
   status?: PaymentStatus
   from?: string
   to?: string
+  timeZone?: string
 }
 
 export interface NewPayment {
@@ -31,11 +32,18 @@ export class PaymentRepository {
   async list(page: number, perPage: number, filters: PaymentListFilters = {}) {
     const offset = (page - 1) * perPage
     const conditions = []
+    const timeZone = filters.timeZone ?? useRuntimeConfig().billingTimezone ?? 'UTC'
 
     if (filters.invoiceId) conditions.push(eq(payments.invoiceId, filters.invoiceId))
     if (filters.status) conditions.push(eq(payments.status, filters.status))
-    if (filters.from) conditions.push(gte(payments.paidAt, new Date(filters.from)))
-    if (filters.to) conditions.push(lte(payments.paidAt, new Date(filters.to)))
+    if (filters.from) {
+      conditions.push(sql`${payments.paidAt} >= (${filters.from}::date AT TIME ZONE ${timeZone})`)
+    }
+    if (filters.to) {
+      conditions.push(
+        sql`${payments.paidAt} < ((${filters.to}::date + 1) AT TIME ZONE ${timeZone})`,
+      )
+    }
 
     const where = conditions.length ? and(...conditions) : undefined
 
@@ -75,7 +83,10 @@ export class PaymentRepository {
    * Sums captured payments only. Failed, refunded, and cancelled records must
    * never reduce what the customer owes.
    */
-  async sumCompletedPayments(database: Transaction | Database, invoiceId: string): Promise<bigint[]> {
+  async sumCompletedPayments(
+    database: Transaction | Database,
+    invoiceId: string,
+  ): Promise<bigint[]> {
     const rows = await database
       .select({ amount: payments.amount })
       .from(payments)

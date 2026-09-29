@@ -6,7 +6,7 @@ definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Infrastructure Overview · Billing Infra' })
 
 const format = useFormat()
-const { companyName, companyEmail } = useRuntimeConfig().public
+const appSettings = useAppSettings()
 
 const { data, status, error, refresh } = await useFetch<{ data: ApiDashboard }>('/api/dashboard')
 
@@ -186,7 +186,8 @@ const stats = computed(() => {
     </div>
 
     <footer class="mt-8 border-t pt-4 font-mono text-[10px] tracking-wider text-muted uppercase">
-      {{ companyName }}<span v-if="companyEmail"> · {{ companyEmail }}</span>
+      {{ appSettings.companyName
+      }}<span v-if="appSettings.companyEmail"> · {{ appSettings.companyEmail }}</span>
     </footer>
   </div>
 </template>

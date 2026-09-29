@@ -10,11 +10,12 @@ import {
 
 /** Formatters bound to the configured billing timezone. */
 export function useFormat() {
-  const { billingTimezone } = useRuntimeConfig().public
+  const settings = useAppSettings()
 
   return {
     date: formatIsoDate,
-    dateTime: (value: string | null | undefined) => formatDateTime(value, billingTimezone),
+    dateTime: (value: string | null | undefined) =>
+      formatDateTime(value, settings.value.billingTimezone),
     money: formatMoney,
     count: formatCount,
     cpu: formatCpuCores,

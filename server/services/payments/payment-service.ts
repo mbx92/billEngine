@@ -8,6 +8,7 @@ import { todayIsoDate } from '../../utils/clock'
 import { DomainError } from '../../utils/errors'
 import { daysPastDue } from '../billing/cycles'
 import { formatDocumentNumber } from '../../utils/document-number'
+import { useBillingConfig } from '../../utils/billing-config'
 import { invoiceStateFromNet, summarizePaymentEffect } from './status'
 
 export interface ActorContext {
@@ -31,8 +32,13 @@ export class PaymentService {
     private readonly audit = new AuditLogRepository(database),
   ) {}
 
-  list(page: number, perPage: number, filters: PaymentListFilters = {}) {
-    return this.payments.list(page, perPage, filters)
+  async list(page: number, perPage: number, filters: PaymentListFilters = {}) {
+    const config = await useBillingConfig()
+    return this.payments.list(page, perPage, { ...filters, timeZone: config.timezone })
+  }
+
+  listCollectibleInvoices() {
+    return this.invoices.listCollectible()
   }
 
   /**
@@ -40,14 +46,16 @@ export class PaymentService {
    * transaction, so an invoice can never end up paid without its payment row.
    */
   async record(input: RecordPaymentInput, actor: ActorContext) {
-    const paidAt = input.paidAt ? new Date(input.paidAt) : new Date(todayIsoDate())
+    const paidAt = input.paidAt ? new Date(input.paidAt) : new Date()
+    const config = await useBillingConfig()
+    const today = todayIsoDate(config.timezone)
 
     return this.database.transaction(async (transaction) => {
       const invoice = await this.invoices.findById(input.invoiceId, transaction)
       if (!invoice) throw DomainError.notFound('Invoice tidak ditemukan.')
 
-      if (invoice.status === 'cancelled') {
-        throw DomainError.invalidState('Invoice sudah dibatalkan dan tidak dapat menerima payment.')
+      if (invoice.status === 'draft' || invoice.status === 'cancelled') {
+        throw DomainError.invalidState('Invoice belum diterbitkan atau sudah dibatalkan.')
       }
 
       if (input.status === 'completed' && invoice.status === 'paid') {
@@ -60,11 +68,9 @@ export class PaymentService {
         )
       }
 
-      // Only captured payments consume a document number.
-      const sequence =
-        input.status === 'completed'
-          ? await allocateDocumentNumber(transaction, 'payment', todayIsoDate().slice(0, 4))
-          : 0n
+      // Every row needs its own number because payment_number is unique, even
+      // when the row is informational (pending or failed).
+      const sequence = await allocateDocumentNumber(transaction, 'payment', today.slice(0, 4))
 
       const payment = await this.payments.create(transaction, {
         invoiceId: invoice.id,
@@ -101,7 +107,7 @@ export class PaymentService {
 
       const rows = await this.payments.listByInvoice(transaction, invoice.id)
       const effect = summarizePaymentEffect(rows)
-      const isPastDue = daysPastDue(invoice.dueDate, todayIsoDate()) > 0
+      const isPastDue = daysPastDue(invoice.dueDate, today) > 0
       const previousStatus = invoice.status
 
       const updated = await this.invoices.applyPaymentState(

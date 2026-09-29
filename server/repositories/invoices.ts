@@ -153,6 +153,24 @@ export class InvoiceRepository {
     return invoice ?? null
   }
 
+  /** Issued invoices that can still receive a manual payment. */
+  async listCollectible() {
+    return this.database
+      .select({
+        id: invoices.id,
+        invoiceNumber: invoices.invoiceNumber,
+        status: invoices.status,
+        currency: invoices.currency,
+        balanceDue: invoices.balanceDue,
+        dueDate: invoices.dueDate,
+        customerName: invoices.customerName,
+        customerCompanyName: invoices.customerCompanyName,
+      })
+      .from(invoices)
+      .where(inArray(invoices.status, ['unpaid', 'overdue']))
+      .orderBy(asc(invoices.dueDate), asc(invoices.invoiceNumber))
+  }
+
   /** Finds an existing billing run for an exact service period (idempotency). */
   async findBillingRun(
     serviceId: string,

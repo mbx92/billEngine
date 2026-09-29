@@ -1,5 +1,6 @@
 import { CustomerOptionRepository } from '../../repositories/customer-options'
 import { ServiceRepository } from '../../repositories/services'
+import type { ApiManualInvoiceOptions } from '../../../shared/types/api'
 
 /**
  * Reference data for the manual invoice form: which customer to bill and which
@@ -13,10 +14,11 @@ export default defineEventHandler(async (event) => {
     new ServiceRepository().list(1, 100),
   ])
 
-  return {
-    data: {
-      customers,
-      services: services.rows.map((service) => ({
+  const data: ApiManualInvoiceOptions = {
+    customers,
+    services: services.rows
+      .filter((service) => service.status === 'active')
+      .map((service) => ({
         id: service.id,
         serviceNumber: service.serviceNumber,
         name: service.name,
@@ -26,6 +28,9 @@ export default defineEventHandler(async (event) => {
         billingCycle: service.billingCycle,
         nextDueDate: service.nextDueDate,
       })),
-    },
+  }
+
+  return {
+    data,
   }
 })

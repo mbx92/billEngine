@@ -14,6 +14,7 @@ export default defineEventHandler(async (event) => {
 
   const data: ApiPaymentListItem[] = rows.map((row) => ({
     id: row.payment.id,
+    invoiceId: row.payment.invoiceId,
     paymentNumber: row.payment.paymentNumber,
     status: row.payment.status,
     amount: row.payment.amount.toString(),

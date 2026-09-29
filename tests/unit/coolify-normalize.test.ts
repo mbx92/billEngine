@@ -3,6 +3,7 @@ import {
   normalizeCoolifyApplication,
   normalizeCoolifyServer,
   normalizeCoolifyStatus,
+  parseDockerMemoryBytes,
 } from '../../server/integrations/coolify/normalize'
 
 describe('Coolify normalization', () => {
@@ -34,6 +35,13 @@ describe('Coolify normalization', () => {
       projectName: 'customer-a',
       environmentName: 'production',
     })
+  })
+
+  it('parses Docker memory units returned by Coolify', () => {
+    expect(parseDockerMemoryBytes('1g')).toBe(1_073_741_824n)
+    expect(parseDockerMemoryBytes('512M')).toBe(536_870_912n)
+    expect(parseDockerMemoryBytes('2147483648')).toBe(2_147_483_648n)
+    expect(parseDockerMemoryBytes('invalid')).toBeNull()
   })
 
   it('does not persist secrets returned in Coolify metadata', () => {

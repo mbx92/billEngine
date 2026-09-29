@@ -1,4 +1,5 @@
-import { and, asc, count, eq, inArray, ne, notInArray, sql, sum } from 'drizzle-orm'
+import { and, asc, count, eq, ilike, inArray, ne, notInArray, or, sql, sum } from 'drizzle-orm'
+import type { ResourceListQuery } from '../../shared/schemas/coolify'
 import type {
   ApiResourceListItem,
   ApiResourceServer,
@@ -9,7 +10,7 @@ import type {
   NormalizedCoolifyNode,
   NormalizedCoolifyResource,
 } from '../integrations/coolify/normalize'
-import { useDatabase, type Database } from '../database/client'
+import { useDatabase, type Database, type Transaction } from '../database/client'
 import {
   auditLogs,
   coolifyNodes,
@@ -32,11 +33,37 @@ const notBilledCondition = sql`not exists (
     and ${services.status} = 'active'
 )`
 
+type QueryExecutor = Database | Transaction
+
 export class CoolifyResourceRepository {
   constructor(private readonly database: Database = useDatabase()) {}
 
-  async list(page: number, perPage: number) {
+  async list(input: ResourceListQuery) {
+    const { page, perPage, q, status, classification, assignment } = input
     const offset = (page - 1) * perPage
+    const filters = [eq(coolifyServers.isActive, true)]
+
+    if (q) {
+      const query = `%${q}%`
+      filters.push(
+        or(
+          ilike(coolifyResources.name, query),
+          ilike(coolifyResources.coolifyUuid, query),
+          ilike(coolifyResources.projectName, query),
+          ilike(coolifyResources.environmentName, query),
+          ilike(coolifyResources.fqdn, query),
+          ilike(coolifyServers.name, query),
+        )!,
+      )
+    }
+    if (status) filters.push(eq(coolifyResources.status, status))
+    if (classification) filters.push(eq(coolifyResources.classification, classification))
+    if (assignment === 'assigned') filters.push(sql`not (${notBilledCondition})`)
+    if (assignment === 'unassigned') filters.push(notBilledCondition)
+    if (assignment === 'not_billed') {
+      filters.push(eq(coolifyResources.classification, 'billable'), notBilledCondition)
+    }
+    const where = and(...filters)
 
     const [rows, totals] = await Promise.all([
       this.database
@@ -66,7 +93,7 @@ export class CoolifyResourceRepository {
             eq(coolifyNodes.coolifyUuid, coolifyResources.coolifyNodeUuid),
           ),
         )
-        .where(eq(coolifyServers.isActive, true))
+        .where(where)
         .orderBy(asc(coolifyResources.name))
         .limit(perPage)
         .offset(offset),
@@ -74,7 +101,7 @@ export class CoolifyResourceRepository {
         .select({ total: count() })
         .from(coolifyResources)
         .innerJoin(coolifyServers, eq(coolifyServers.id, coolifyResources.coolifyServerId))
-        .where(eq(coolifyServers.isActive, true)),
+        .where(where),
     ])
 
     const linkedServices = await this.findServiceLinks(rows.map((row) => row.id))
@@ -102,6 +129,58 @@ export class CoolifyResourceRepository {
     }
   }
 
+  async findByIdsForUpdate(transaction: Transaction, ids: string[]) {
+    if (ids.length === 0) return []
+
+    return transaction
+      .select({
+        id: coolifyResources.id,
+        name: coolifyResources.name,
+        classification: coolifyResources.classification,
+      })
+      .from(coolifyResources)
+      .where(inArray(coolifyResources.id, ids))
+      .orderBy(asc(coolifyResources.id))
+      .for('update')
+  }
+
+  async updateClassification(
+    transaction: QueryExecutor,
+    ids: string[],
+    classification: 'billable' | 'internal' | 'ignored',
+  ) {
+    if (ids.length === 0) return []
+
+    return transaction
+      .update(coolifyResources)
+      .set({ classification, updatedAt: new Date() })
+      .where(inArray(coolifyResources.id, ids))
+      .returning({
+        id: coolifyResources.id,
+        name: coolifyResources.name,
+        classification: coolifyResources.classification,
+      })
+  }
+
+  async metricsTargets(resourceIds: string[]) {
+    if (resourceIds.length === 0) return []
+
+    return this.database
+      .select({
+        resourceId: coolifyResources.id,
+        coolifyUuid: coolifyResources.coolifyUuid,
+        resourceType: coolifyResources.resourceType,
+        rawMetadata: coolifyResources.rawMetadata,
+        coolifyNodeUuid: coolifyResources.coolifyNodeUuid,
+        coolifyServerId: coolifyServers.id,
+        baseUrl: coolifyServers.baseUrl,
+        tokenEncrypted: coolifyServers.tokenEncrypted,
+      })
+      .from(coolifyResources)
+      .innerJoin(coolifyServers, eq(coolifyServers.id, coolifyResources.coolifyServerId))
+      .where(and(inArray(coolifyResources.id, resourceIds), eq(coolifyServers.isActive, true)))
+  }
+
   async summary(): Promise<ApiResourceSummary> {
     const [totals, lastSync] = await Promise.all([
       this.database
@@ -127,7 +206,18 @@ export class CoolifyResourceRepository {
             sql<number>`count(*) filter (where ${coolifyResources.classification} = 'billable')`.mapWith(
               Number,
             ),
-          notBilled: sql<number>`count(*) filter (where ${notBilledCondition})`.mapWith(Number),
+          internal:
+            sql<number>`count(*) filter (where ${coolifyResources.classification} = 'internal')`.mapWith(
+              Number,
+            ),
+          ignored:
+            sql<number>`count(*) filter (where ${coolifyResources.classification} = 'ignored')`.mapWith(
+              Number,
+            ),
+          notBilled:
+            sql<number>`count(*) filter (where ${coolifyResources.classification} = 'billable' and ${notBilledCondition})`.mapWith(
+              Number,
+            ),
           totalCpuCores: sum(coolifyResources.limitsCpus),
           totalMemoryBytes: sum(coolifyResources.limitsMemoryBytes),
         })
@@ -151,6 +241,8 @@ export class CoolifyResourceRepository {
       degraded: row?.degraded ?? 0,
       unknown: row?.unknown ?? 0,
       billable: row?.billable ?? 0,
+      internal: row?.internal ?? 0,
+      ignored: row?.ignored ?? 0,
       notBilled: row?.notBilled ?? 0,
       totalCpuCores: row?.totalCpuCores ?? null,
       totalMemoryBytes: row?.totalMemoryBytes?.toString() ?? null,

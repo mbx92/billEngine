@@ -146,6 +146,25 @@ export class ServiceRepository {
     return rows.map((row) => row.id)
   }
 
+  async findActiveCustomerServiceIds(
+    transaction: QueryExecutor,
+    customerId: string,
+    ids: string[],
+  ) {
+    if (ids.length === 0) return []
+    const rows = await transaction
+      .select({ id: services.id })
+      .from(services)
+      .where(
+        and(
+          inArray(services.id, ids),
+          eq(services.customerId, customerId),
+          eq(services.status, 'active'),
+        ),
+      )
+    return rows.map((row) => row.id)
+  }
+
   async findAssignedResourceIds(transaction: QueryExecutor, ids: string[]) {
     if (ids.length === 0) return []
     const rows = await transaction

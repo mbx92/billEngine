@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ArrowLeft, Download } from '@lucide/vue'
+import { ArrowLeft, Ban, CreditCard, Download, LoaderCircle } from '@lucide/vue'
 import type { ApiInvoiceDetail } from '#shared/types/api'
 import { billingPeriodMonths, monthlyEquivalent } from '#shared/utils/billing-display'
+import { apiErrorMessage } from '~/lib/api-error'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -16,6 +17,19 @@ const { data, status, error, refresh } = await useFetch<{ data: ApiInvoiceDetail
 
 const detail = computed(() => data.value?.data)
 const invoice = computed(() => detail.value?.invoice)
+const showCancelConfirm = ref(false)
+const cancelling = ref(false)
+const actionError = ref<string | null>(null)
+const actionMessage = ref<string | null>(null)
+const canCancel = computed(
+  () =>
+    Boolean(invoice.value) &&
+    ['draft', 'unpaid', 'overdue'].includes(invoice.value!.status) &&
+    invoice.value!.amountPaid === '0',
+)
+const canRecordPayment = computed(
+  () => invoice.value?.status === 'unpaid' || invoice.value?.status === 'overdue',
+)
 
 useHead(() => ({
   title: invoice.value
@@ -33,6 +47,24 @@ function monthlyBreakdown(item: ApiInvoiceDetail['items'][number]) {
   if (months <= 1) return null
   const monthly = monthlyEquivalent(BigInt(item.unitPriceAmount), months)
   return `Rata-rata ${format.money(monthly, detail.value!.invoice.currency)} / bulan × ${months} bulan`
+}
+
+async function cancelInvoice() {
+  cancelling.value = true
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    await $fetch(`/api/invoices/${encodeURIComponent(invoiceId.value)}/cancel`, {
+      method: 'POST',
+    })
+    showCancelConfirm.value = false
+    actionMessage.value = 'Invoice berhasil dibatalkan.'
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Invoice tidak dapat dibatalkan.')
+  } finally {
+    cancelling.value = false
+  }
 }
 </script>
 
@@ -63,6 +95,21 @@ function monthlyBreakdown(item: ApiInvoiceDetail['items'][number]) {
     </UiCard>
 
     <template v-else>
+      <p
+        v-if="actionMessage"
+        class="mb-5 rounded-md border border-brand/30 bg-brand/10 px-4 py-3 text-sm text-brand"
+        role="status"
+      >
+        {{ actionMessage }}
+      </p>
+      <p
+        v-if="actionError"
+        class="mb-5 rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger"
+        role="alert"
+      >
+        {{ actionError }}
+      </p>
+
       <header class="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
@@ -79,15 +126,56 @@ function monthlyBreakdown(item: ApiInvoiceDetail['items'][number]) {
             {{ format.date(detail.invoice.dueDate) }}
           </p>
         </div>
-        <a
-          :href="pdfUrl"
-          download
-          class="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-brand bg-brand px-4 text-sm font-semibold text-[#071109] transition hover:bg-brand-strong"
-        >
-          <Download :size="15" aria-hidden="true" />
-          Download PDF
-        </a>
+        <div class="flex flex-wrap gap-2">
+          <UiButton v-if="canCancel" variant="danger" @click="showCancelConfirm = true">
+            <Ban :size="15" aria-hidden="true" />
+            Cancel invoice
+          </UiButton>
+          <NuxtLink
+            v-if="canRecordPayment"
+            :to="{ path: '/payments', query: { invoiceId: detail.invoice.id } }"
+            class="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line-strong bg-surface-raised px-4 text-sm font-semibold text-ink transition hover:border-muted hover:bg-[#1a222d]"
+          >
+            <CreditCard :size="15" aria-hidden="true" />
+            Record payment
+          </NuxtLink>
+          <a
+            :href="pdfUrl"
+            download
+            class="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-brand bg-brand px-4 text-sm font-semibold text-[#071109] transition hover:bg-brand-strong"
+          >
+            <Download :size="15" aria-hidden="true" />
+            Download PDF
+          </a>
+        </div>
       </header>
+
+      <UiDialog
+        v-if="showCancelConfirm"
+        title="Batalkan invoice?"
+        :description="`${detail.invoice.invoiceNumber} akan berstatus cancelled dan tidak dapat menerima pembayaran.`"
+        size="md"
+        :close-disabled="cancelling"
+        @close="showCancelConfirm = false"
+      >
+        <div
+          class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
+        >
+          Jika invoice berasal dari recurring billing, periode service akan dikembalikan agar dapat
+          dibuat ulang. Invoice yang sudah memiliki pembayaran tidak dapat dibatalkan.
+        </div>
+        <template #footer>
+          <div class="flex justify-end gap-2">
+            <UiButton variant="secondary" :disabled="cancelling" @click="showCancelConfirm = false">
+              Kembali
+            </UiButton>
+            <UiButton variant="danger" :disabled="cancelling" @click="cancelInvoice">
+              <LoaderCircle v-if="cancelling" class="animate-spin" :size="15" aria-hidden="true" />
+              {{ cancelling ? 'Membatalkan…' : 'Ya, batalkan invoice' }}
+            </UiButton>
+          </div>
+        </template>
+      </UiDialog>
 
       <div class="mb-5 grid gap-4 lg:grid-cols-2">
         <UiCard>
