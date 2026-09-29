@@ -1,0 +1,88 @@
+@import 'tailwindcss';
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --color-canvas: var(--ui-canvas);
+  --color-sidebar: var(--ui-sidebar);
+  --color-surface: var(--ui-surface);
+  --color-surface-raised: var(--ui-surface-raised);
+  --color-line: var(--ui-line);
+  --color-line-strong: var(--ui-line-strong);
+  --color-ink: var(--ui-ink);
+  --color-muted: var(--ui-muted);
+  --color-brand: var(--ui-brand);
+  --color-brand-strong: var(--ui-brand-strong);
+  --color-danger: var(--ui-danger);
+  --color-warning: var(--ui-warning);
+  --color-info: var(--ui-info);
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --ui-canvas: #f4f6f8;
+    --ui-sidebar: #ffffff;
+    --ui-surface: #ffffff;
+    --ui-surface-raised: #eef2f5;
+    --ui-line: #dce2e8;
+    --ui-line-strong: #c5ced8;
+    --ui-ink: #17202b;
+    --ui-muted: #667386;
+    --ui-brand: #15803d;
+    --ui-brand-strong: #166534;
+    --ui-danger: #be123c;
+    --ui-warning: #b45309;
+    --ui-info: #2563eb;
+    --ui-grid-line: rgba(15, 23, 42, 0.035);
+  }
+
+  :root.dark {
+    color-scheme: dark;
+    --ui-canvas: #080b10;
+    --ui-sidebar: #0b0f15;
+    --ui-surface: #10151d;
+    --ui-surface-raised: #151b24;
+    --ui-line: #242c38;
+    --ui-line-strong: #334052;
+    --ui-ink: #e8edf4;
+    --ui-muted: #8c98a8;
+    --ui-brand: #4ade80;
+    --ui-brand-strong: #22c55e;
+    --ui-danger: #fb7185;
+    --ui-warning: #fbbf24;
+    --ui-info: #60a5fa;
+    --ui-grid-line: rgba(255, 255, 255, 0.018);
+  }
+
+  html {
+    background: var(--ui-canvas);
+  }
+
+  body {
+    @apply min-h-screen bg-canvas text-ink antialiased transition-colors duration-200;
+  }
+
+  * {
+    @apply border-line;
+  }
+
+  ::selection {
+    @apply bg-brand/25 text-white;
+  }
+}
+
+@layer utilities {
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
+  }
+
+  .technical-grid {
+    background-image:
+      linear-gradient(var(--ui-grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--ui-grid-line) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+}

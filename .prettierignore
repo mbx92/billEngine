@@ -1,0 +1,10 @@
+.nuxt
+.output
+node_modules
+coverage
+playwright-report
+test-results
+drizzle/migrations
+docs
+package-lock.json
+

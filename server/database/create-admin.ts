@@ -1,0 +1,51 @@
+import 'dotenv/config'
+import { hashPassword } from 'better-auth/crypto'
+import { eq } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/node-postgres'
+import pg from 'pg'
+import { accounts, users } from './schema'
+
+const email = process.env.ADMIN_EMAIL?.trim().toLowerCase()
+const password = process.env.ADMIN_PASSWORD
+const name = process.env.ADMIN_NAME?.trim() || 'Platform Administrator'
+
+if (!process.env.DATABASE_URL || !email || !password) {
+  throw new Error('DATABASE_URL, ADMIN_EMAIL, and ADMIN_PASSWORD are required.')
+}
+
+if (password.length < 12) {
+  throw new Error('ADMIN_PASSWORD must be at least 12 characters.')
+}
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+const database = drizzle(pool)
+
+try {
+  await database.transaction(async (transaction) => {
+    const existing = await transaction
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1)
+
+    if (existing.length) throw new Error('A user with this email already exists.')
+
+    const userId = crypto.randomUUID()
+    await transaction.insert(users).values({
+      id: userId,
+      name,
+      email,
+      emailVerified: true,
+      role: 'super_admin',
+    })
+    await transaction.insert(accounts).values({
+      accountId: userId,
+      providerId: 'credential',
+      userId,
+      password: await hashPassword(password),
+    })
+  })
+  console.log(`Created super admin: ${email}`)
+} finally {
+  await pool.end()
+}
