@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BillingAccessRepository } from '../../server/repositories/billing-access'
 import { BillingAccessControlService } from '../../server/services/billing/access-control-service'
 import type { SettingsService } from '../../server/services/settings/settings-service'
@@ -11,6 +11,30 @@ const settings = {
 }
 
 describe('billing access control service', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('uses an explicit host-scoped test state without querying the database', async () => {
+    vi.stubEnv('BILLING_GATE_TEST_HOST', 'opswiki.example.test')
+    vi.stubEnv('BILLING_GATE_TEST_STATE', 'grace')
+    const repository = {
+      findServiceByHost: vi.fn(),
+      findOldestOpenOverdueInvoice: vi.fn(),
+    } as unknown as BillingAccessRepository
+    const settingsService = {
+      getBillingSettings: vi.fn(),
+    } as unknown as SettingsService
+
+    const decision = await new BillingAccessControlService(repository, settingsService).evaluate(
+      'opswiki.example.test',
+      'secret',
+      '2026-09-30',
+    )
+
+    expect(decision).toMatchObject({ state: 'grace', daysPastDue: 1, graceEndsAt: '2026-10-06' })
+    expect(settingsService.getBillingSettings).not.toHaveBeenCalled()
+    expect(repository.findServiceByHost).not.toHaveBeenCalled()
+  })
+
   it('does no lookup when access control is disabled', async () => {
     const repository = {
       findServiceByHost: vi.fn(),

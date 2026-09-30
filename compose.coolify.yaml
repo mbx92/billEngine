@@ -21,13 +21,8 @@ services:
       dockerfile: Dockerfile
       target: migrator
     restart: 'no'
-    command:
-      - sh
-      - -c
-      - npm run db:migrate:deploy && node scripts/seed-billing-gate-test.mjs
     environment:
       NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@postgres:5432/billing
-      BILLING_GATE_TEST_STATE: ${BILLING_GATE_TEST_STATE:-grace}
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +48,8 @@ services:
       NUXT_GRACE_NOTICE_INTERVAL_HOURS: '24'
       NUXT_BILLING_GATE_SECRET: ${BILLING_GATE_SECRET:?}
       NUXT_BILLING_GATE_SHARED_KEY: ${BILLING_GATE_SHARED_KEY:?}
+      BILLING_GATE_TEST_HOST: opswiki.ocnetworks.web.id
+      BILLING_GATE_TEST_STATE: ${BILLING_GATE_TEST_STATE:-grace}
     ports:
       - '${APP_PORT:-8010}:3000'
     networks:
