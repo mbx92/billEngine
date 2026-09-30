@@ -2,6 +2,7 @@ import pg from 'pg'
 
 const databaseUrl = process.env.NUXT_DATABASE_URL || process.env.DATABASE_URL
 const state = process.env.BILLING_GATE_TEST_STATE || 'grace'
+const rollback = process.env.BILLING_GATE_TEST_ROLLBACK === 'true'
 
 if (!databaseUrl) throw new Error('NUXT_DATABASE_URL is required.')
 if (!['normal', 'grace', 'blocked', 'paid'].includes(state)) {
@@ -90,10 +91,10 @@ try {
        (id, customer_id, invoice_number, status, currency, issue_date, due_date,
         subtotal_amount, tax_amount, total_amount, amount_paid, credited_amount, balance_due,
         customer_name, customer_company_name, customer_email, seller_name, issued_at, paid_at)
-     values ($1, $2, 'INV-GATE-TEST', $3, 'IDR', current_date - interval '12 days',
+     values ($1, $2, 'INV-GATE-TEST', $3::invoice_status, 'IDR', current_date - interval '12 days',
        current_date - $4::integer, 500000, 0, 500000, $5, 0, $6,
        'OpsWiki Test Customer', 'OC Networks', 'billing-test@ocnetworks.web.id',
-       'OC Networks Billing Test', now(), case when $3 = 'paid' then now() else null end)
+       'OC Networks Billing Test', now(), case when $3::text = 'paid' then now() else null end)
      on conflict (invoice_number) do update set
        status = excluded.status, due_date = excluded.due_date, amount_paid = excluded.amount_paid,
        balance_due = excluded.balance_due, paid_at = excluded.paid_at, updated_at = now()`,
@@ -107,8 +108,12 @@ try {
      on conflict (id) do update set service_id = excluded.service_id`,
     [ids.invoiceItem, ids.invoice, ids.service],
   )
-  await client.query('commit')
-  console.log(`Billing gate test fixture is ready in ${state} state.`)
+  await client.query(rollback ? 'rollback' : 'commit')
+  console.log(
+    rollback
+      ? `Billing gate test fixture validation passed for ${state} state; transaction rolled back.`
+      : `Billing gate test fixture is ready in ${state} state.`,
+  )
 } catch (error) {
   await client.query('rollback')
   throw error
