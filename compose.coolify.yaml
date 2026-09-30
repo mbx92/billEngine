@@ -21,25 +21,16 @@ services:
       dockerfile: Dockerfile
       target: migrator
     restart: 'no'
-    environment:
-      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@postgres:5432/billing
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  fixture:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: migrator
-    restart: 'no'
-    command: ['node', 'scripts/seed-billing-gate-test.mjs']
+    command:
+      - sh
+      - -c
+      - npm run db:migrate:deploy && node scripts/seed-billing-gate-test.mjs
     environment:
       NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@postgres:5432/billing
       BILLING_GATE_TEST_STATE: ${BILLING_GATE_TEST_STATE:-grace}
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
 
   app:
     build:
@@ -78,7 +69,7 @@ services:
       retries: 10
       start_period: 30s
     depends_on:
-      fixture:
+      migrate:
         condition: service_completed_successfully
 
 volumes:
