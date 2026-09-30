@@ -141,3 +141,9 @@ non-production database. Backup creation fails rather than deleting unrelated
 files; retention only removes older `billengine-*.dump` files in `BACKUP_DIR`.
 
 Architecture and product decisions live in [`docs/`](./docs/).
+
+## Overdue access gate
+
+An opt-in Traefik ForwardAuth gate can show an overdue interstitial while a
+customer application remains online. Setup, rollout safeguards, and local test
+commands are documented in [`docs/BILLING-GATE.md`](./docs/BILLING-GATE.md).

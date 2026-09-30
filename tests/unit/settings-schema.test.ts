@@ -10,6 +10,9 @@ const validSettings = {
   billingCurrency: 'idr',
   defaultTaxRate: '0.11',
   billingAutomationEnabled: true,
+  billingAccessControlEnabled: true,
+  overdueGraceDays: 7,
+  graceNoticeIntervalHours: 24,
 }
 
 describe('billing settings schema', () => {
@@ -29,12 +32,26 @@ describe('billing settings schema', () => {
       billingCurrency: 'IDR',
       defaultTaxRate: null,
       billingAutomationEnabled: true,
+      billingAccessControlEnabled: true,
+      overdueGraceDays: 7,
+      graceNoticeIntervalHours: 24,
     })
   })
 
   it('keeps billing automation disabled for legacy settings', () => {
-    const { billingAutomationEnabled: _automation, ...legacySettings } = validSettings
-    expect(updateBillingSettingsSchema.parse(legacySettings).billingAutomationEnabled).toBe(false)
+    const {
+      billingAutomationEnabled: _automation,
+      billingAccessControlEnabled: _access,
+      overdueGraceDays: _grace,
+      graceNoticeIntervalHours: _notice,
+      ...legacySettings
+    } = validSettings
+    expect(updateBillingSettingsSchema.parse(legacySettings)).toMatchObject({
+      billingAutomationEnabled: false,
+      billingAccessControlEnabled: false,
+      overdueGraceDays: 7,
+      graceNoticeIntervalHours: 24,
+    })
   })
 
   it('accepts a valid IANA timezone and fractional tax rate', () => {
@@ -51,6 +68,15 @@ describe('billing settings schema', () => {
         billingTimezone: 'Makassar',
         defaultTaxRate: '11',
       }),
+    ).toThrow()
+  })
+
+  it('bounds access-control timing settings', () => {
+    expect(() =>
+      updateBillingSettingsSchema.parse({ ...validSettings, overdueGraceDays: 91 }),
+    ).toThrow()
+    expect(() =>
+      updateBillingSettingsSchema.parse({ ...validSettings, graceNoticeIntervalHours: 0 }),
     ).toThrow()
   })
 })

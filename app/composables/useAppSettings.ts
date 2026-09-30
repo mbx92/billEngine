@@ -12,6 +12,9 @@ export function useAppSettings() {
     billingCurrency: 'IDR',
     defaultTaxRate: null,
     billingAutomationEnabled: false,
+    billingAccessControlEnabled: false,
+    overdueGraceDays: 7,
+    graceNoticeIntervalHours: 24,
     source: 'environment',
     updatedAt: null,
   }))

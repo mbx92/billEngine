@@ -44,6 +44,9 @@ export const updateBillingSettingsSchema = z.object({
       .nullable(),
   ),
   billingAutomationEnabled: z.boolean().default(false),
+  billingAccessControlEnabled: z.boolean().default(false),
+  overdueGraceDays: z.coerce.number().int().min(0).max(90).default(7),
+  graceNoticeIntervalHours: z.coerce.number().int().min(1).max(168).default(24),
 })
 
 export type UpdateBillingSettingsInput = z.infer<typeof updateBillingSettingsSchema>

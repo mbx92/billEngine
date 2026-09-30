@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import pg from 'pg'
 import { coolifyResources, coolifyServers, customers, serviceResources, services } from './schema'
@@ -71,6 +71,7 @@ try {
           coolifyUuid: 'frontend-demo',
           resourceType: 'application',
           name: 'frontend-demo',
+          fqdn: 'http://customer-app.localhost',
           status: 'running',
           lastSeenAt: new Date(),
         },
@@ -79,13 +80,18 @@ try {
           coolifyUuid: 'backend-demo',
           resourceType: 'application',
           name: 'backend-demo',
+          fqdn: null,
           status: 'running',
           lastSeenAt: new Date(),
         },
       ])
       .onConflictDoUpdate({
         target: [coolifyResources.coolifyServerId, coolifyResources.coolifyUuid],
-        set: { lastSeenAt: new Date(), updatedAt: new Date() },
+        set: {
+          fqdn: sql`excluded.fqdn`,
+          lastSeenAt: new Date(),
+          updatedAt: new Date(),
+        },
       })
       .returning({ id: coolifyResources.id })
 

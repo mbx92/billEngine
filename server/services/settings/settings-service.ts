@@ -73,6 +73,9 @@ function environmentSettings(): ApiBillingSettings {
     billingCurrency: config.billingCurrency || 'IDR',
     defaultTaxRate: config.billingDefaultTaxRate || null,
     billingAutomationEnabled: config.billingAutomationEnabled === true,
+    billingAccessControlEnabled: config.billingAccessControlEnabled === true,
+    overdueGraceDays: Number(config.overdueGraceDays ?? 7),
+    graceNoticeIntervalHours: Number(config.graceNoticeIntervalHours ?? 24),
     source: 'environment',
     updatedAt: null,
   }

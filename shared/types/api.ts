@@ -362,6 +362,9 @@ export interface ApiBillingSettings {
   billingCurrency: string
   defaultTaxRate: string | null
   billingAutomationEnabled: boolean
+  billingAccessControlEnabled: boolean
+  overdueGraceDays: number
+  graceNoticeIntervalHours: number
   source: 'environment' | 'database'
   updatedAt: string | null
 }

@@ -15,6 +15,7 @@ ENV NODE_ENV=production
 COPY drizzle.config.ts tsconfig.json ./
 COPY drizzle ./drizzle
 COPY server/database/schema ./server/database/schema
+COPY scripts/seed-billing-gate-test.mjs ./scripts/seed-billing-gate-test.mjs
 CMD ["npm", "run", "db:migrate:deploy"]
 
 FROM node:22-alpine AS backup

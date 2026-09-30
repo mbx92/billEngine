@@ -19,6 +19,9 @@ const form = reactive({
   billingCurrency: appSettings.value.billingCurrency,
   defaultTaxRate: appSettings.value.defaultTaxRate ?? '',
   billingAutomationEnabled: appSettings.value.billingAutomationEnabled,
+  billingAccessControlEnabled: appSettings.value.billingAccessControlEnabled,
+  overdueGraceDays: String(appSettings.value.overdueGraceDays),
+  graceNoticeIntervalHours: String(appSettings.value.graceNoticeIntervalHours),
 })
 
 const { data, status, error, refresh } = await useFetch<{ data: ApiBillingSettings }>(
@@ -45,6 +48,9 @@ function applySettings(settings: ApiBillingSettings) {
     billingCurrency: settings.billingCurrency,
     defaultTaxRate: settings.defaultTaxRate ?? '',
     billingAutomationEnabled: settings.billingAutomationEnabled,
+    billingAccessControlEnabled: settings.billingAccessControlEnabled,
+    overdueGraceDays: String(settings.overdueGraceDays),
+    graceNoticeIntervalHours: String(settings.graceNoticeIntervalHours),
   })
 }
 
@@ -149,6 +155,54 @@ async function reloadSettings() {
               class="focus-ring min-h-10 w-full rounded-md border border-line-strong bg-canvas px-3 py-2 text-sm text-ink placeholder:text-muted/60"
             />
           </label>
+        </div>
+      </UiCard>
+
+      <UiCard>
+        <div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="text-sm font-semibold text-ink">Overdue access gate</h2>
+              <UiBadge :tone="form.billingAccessControlEnabled ? 'warning' : 'neutral'">
+                {{ form.billingAccessControlEnabled ? 'Enabled' : 'Disabled' }}
+              </UiBadge>
+            </div>
+            <p class="mt-1 max-w-2xl text-xs leading-5 text-muted">
+              Menampilkan interstitial selama grace period dan memblokir trafik web setelah grace
+              berakhir. Resource Coolify tetap berjalan; middleware Traefik harus dipasang terpisah.
+            </p>
+          </div>
+          <label class="inline-flex cursor-pointer items-center gap-3 self-start">
+            <input
+              v-model="form.billingAccessControlEnabled"
+              type="checkbox"
+              class="focus-ring size-4 rounded border-line-strong bg-canvas accent-brand"
+            />
+            <span class="text-sm font-semibold text-ink">Enable access gate</span>
+          </label>
+        </div>
+
+        <div class="mt-5 grid gap-4 border-t pt-5 sm:grid-cols-2">
+          <UiInput
+            v-model="form.overdueGraceDays"
+            label="Grace period (hari)"
+            type="number"
+            min="0"
+            max="90"
+            step="1"
+            hint="0 berarti akses diblokir sejak hari pertama overdue."
+            required
+          />
+          <UiInput
+            v-model="form.graceNoticeIntervalHours"
+            label="Ulangi pemberitahuan (jam)"
+            type="number"
+            min="1"
+            max="168"
+            step="1"
+            hint="Cookie acknowledgement berlaku selama interval ini."
+            required
+          />
         </div>
       </UiCard>
 

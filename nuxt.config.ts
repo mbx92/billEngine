@@ -70,6 +70,11 @@ export default defineNuxtConfig({
     // numeric(7,4) fraction, e.g. 0.11 for 11% VAT. Empty means no tax.
     billingDefaultTaxRate: developmentEnv.BILLING_DEFAULT_TAX_RATE || '',
     billingAutomationEnabled: developmentEnv.BILLING_AUTOMATION_ENABLED === 'true',
+    billingAccessControlEnabled: developmentEnv.BILLING_ACCESS_CONTROL_ENABLED === 'true',
+    overdueGraceDays: developmentEnv.OVERDUE_GRACE_DAYS || '7',
+    graceNoticeIntervalHours: developmentEnv.GRACE_NOTICE_INTERVAL_HOURS || '24',
+    billingGateSecret: developmentEnv.BILLING_GATE_SECRET || '',
+    billingGateSharedKey: developmentEnv.BILLING_GATE_SHARED_KEY || '',
     public: {
       appUrl: developmentEnv.APP_URL || 'http://localhost:3000',
       billingTimezone: developmentEnv.BILLING_TIMEZONE || 'Asia/Makassar',
