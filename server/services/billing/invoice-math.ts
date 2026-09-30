@@ -52,7 +52,9 @@ export function parseScaledDecimal(value: string, scale: bigint, decimals: numbe
 
   const [whole = '0', fraction = ''] = trimmed.split('.')
 
-  return BigInt(whole || '0') * scale + BigInt(fraction.slice(0, decimals).padEnd(decimals, '0') || '0')
+  return (
+    BigInt(whole || '0') * scale + BigInt(fraction.slice(0, decimals).padEnd(decimals, '0') || '0')
+  )
 }
 
 /** Quantity formats the result back to a PostgreSQL numeric(14,4) string. */

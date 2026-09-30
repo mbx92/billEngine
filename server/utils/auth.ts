@@ -110,3 +110,17 @@ export async function requireAdmin(event: H3Event) {
 
   return session
 }
+
+export async function requireSuperAdmin(event: H3Event) {
+  const session = await requireSession(event)
+  if (session.user.role !== 'super_admin') throw DomainError.forbidden()
+  return session
+}
+
+export async function requireCustomer(event: H3Event) {
+  const session = await requireSession(event)
+  if (session.user.role !== 'customer' || !session.user.customerId) {
+    throw DomainError.forbidden()
+  }
+  return { ...session, customerId: session.user.customerId }
+}

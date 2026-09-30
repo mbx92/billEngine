@@ -36,4 +36,6 @@ export const paymentStatus = pgEnum('payment_status', [
   'refunded',
   'cancelled',
 ])
+export const creditNoteStatus = pgEnum('credit_note_status', ['issued', 'voided'])
+export const emailDeliveryStatus = pgEnum('email_delivery_status', ['pending', 'sent', 'failed'])
 export const jobStatus = pgEnum('job_status', ['running', 'completed', 'failed'])

@@ -558,9 +558,10 @@ function getSyncErrorMessage(error: unknown) {
                     <span
                       v-for="service in resource.services"
                       :key="service.id"
-                      class="inline-flex items-center gap-1.5 rounded border bg-canvas px-2 py-0.5 font-mono text-[11px] text-muted"
+                      :title="`${service.customerName} · ${service.planName || 'Legacy'}`"
+                      class="inline-flex items-center gap-1.5 rounded border bg-canvas px-2 py-0.5 text-[11px] text-muted"
                     >
-                      {{ service.serviceNumber }}
+                      {{ service.name }} · {{ service.customerName }}
                     </span>
                   </div>
                   <UiBadge v-else-if="resource.classification === 'billable'" tone="warning">

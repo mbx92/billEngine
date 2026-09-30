@@ -5,6 +5,7 @@ export type ApiErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'STATE_INVALID'
+  | 'EXTERNAL_SERVICE_ERROR'
   | 'INTERNAL_ERROR'
 
 const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
@@ -14,6 +15,7 @@ const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
   NOT_FOUND: 'Data tidak ditemukan.',
   CONFLICT: 'Data sudah ada.',
   STATE_INVALID: 'Aksi tidak diizinkan pada status saat ini.',
+  EXTERNAL_SERVICE_ERROR: 'Layanan infrastructure tidak dapat menyelesaikan permintaan.',
   INTERNAL_ERROR: 'Terjadi kesalahan internal.',
 }
 
@@ -55,6 +57,10 @@ export class DomainError extends Error {
   static invalidState(message?: string) {
     return new DomainError('STATE_INVALID', 409, message)
   }
+
+  static external(message?: string, details?: unknown) {
+    return new DomainError('EXTERNAL_SERVICE_ERROR', 502, message, details)
+  }
 }
 
 const API_ERROR_CODES = new Set<string>([
@@ -64,6 +70,7 @@ const API_ERROR_CODES = new Set<string>([
   'NOT_FOUND',
   'CONFLICT',
   'STATE_INVALID',
+  'EXTERNAL_SERVICE_ERROR',
   'INTERNAL_ERROR',
 ])
 

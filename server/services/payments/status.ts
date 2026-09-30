@@ -14,10 +14,11 @@ export function invoiceStateFromNet(
   netPaid: bigint,
   isPastDue: boolean,
 ): InvoicePaymentState {
-  const balanceDue = totalAmount > netPaid ? totalAmount - netPaid : 0n
+  const amountPaid = netPaid > 0n ? netPaid : 0n
+  const balanceDue = totalAmount > amountPaid ? totalAmount - amountPaid : 0n
 
   return {
-    amountPaid: netPaid,
+    amountPaid,
     balanceDue,
     status: balanceDue === 0n ? 'paid' : isPastDue ? 'overdue' : 'unpaid',
   }

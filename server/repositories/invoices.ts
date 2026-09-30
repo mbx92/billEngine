@@ -8,13 +8,21 @@ import {
   ilike,
   inArray,
   lt,
+  lte,
   notExists,
   or,
   sql,
 } from 'drizzle-orm'
 import type { InvoiceStatus } from '../../shared/constants/domain'
 import { useDatabase, type Database, type Transaction } from '../database/client'
-import { invoiceItems, invoices, payments, serviceBillingRuns, services } from '../database/schema'
+import {
+  creditNotes,
+  invoiceItems,
+  invoices,
+  payments,
+  serviceBillingRuns,
+  services,
+} from '../database/schema'
 
 export type InvoiceRecord = typeof invoices.$inferSelect
 export type InvoiceItemRecord = typeof invoiceItems.$inferSelect
@@ -123,11 +131,23 @@ export class InvoiceRepository {
     return invoice ?? null
   }
 
+  /** Locks the invoice until the surrounding transaction commits. */
+  async findByIdForUpdate(id: string, transaction: Transaction) {
+    const [invoice] = await transaction
+      .select()
+      .from(invoices)
+      .where(eq(invoices.id, id))
+      .limit(1)
+      .for('update')
+
+    return invoice ?? null
+  }
+
   async findDetail(id: string) {
     const invoice = await this.findById(id)
     if (!invoice) return null
 
-    const [items, invoicePayments] = await Promise.all([
+    const [items, invoicePayments, invoiceCreditNotes] = await Promise.all([
       this.database
         .select()
         .from(invoiceItems)
@@ -138,9 +158,41 @@ export class InvoiceRepository {
         .from(payments)
         .where(eq(payments.invoiceId, id))
         .orderBy(desc(payments.paidAt)),
+      this.database
+        .select()
+        .from(creditNotes)
+        .where(eq(creditNotes.invoiceId, id))
+        .orderBy(desc(creditNotes.issuedAt)),
     ])
 
-    return { invoice, items, payments: invoicePayments }
+    return { invoice, items, payments: invoicePayments, creditNotes: invoiceCreditNotes }
+  }
+
+  async findDetailForCustomer(id: string, customerId: string) {
+    const detail = await this.findDetail(id)
+    return detail?.invoice.customerId === customerId ? detail : null
+  }
+
+  listForCustomer(customerId: string, limit = 100) {
+    return this.database
+      .select()
+      .from(invoices)
+      .where(eq(invoices.customerId, customerId))
+      .orderBy(desc(invoices.issueDate), desc(invoices.invoiceNumber))
+      .limit(limit)
+  }
+
+  balanceByCurrencyForCustomer(customerId: string) {
+    return this.database
+      .select({
+        currency: invoices.currency,
+        amount: sql<string>`coalesce(sum(${invoices.balanceDue}), 0)`,
+      })
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), inArray(invoices.status, ['unpaid', 'overdue'])),
+      )
+      .groupBy(invoices.currency)
   }
 
   async findByNumber(invoiceNumber: string) {
@@ -266,6 +318,26 @@ export class InvoiceRepository {
     return updated
   }
 
+  async applyCreditState(
+    transaction: Transaction,
+    invoiceId: string,
+    state: {
+      creditedAmount: bigint
+      amountPaid: bigint
+      balanceDue: bigint
+      status: InvoiceStatus
+    },
+  ) {
+    const [updated] = await transaction
+      .update(invoices)
+      .set({ ...state, paidAt: state.status === 'paid' ? new Date() : null, updatedAt: new Date() })
+      .where(eq(invoices.id, invoiceId))
+      .returning()
+
+    if (!updated) throw new Error('Failed to apply invoice credit.')
+    return updated
+  }
+
   /** Flags issued invoices whose due date has passed. Returns affected ids. */
   async markOverdue(today: string): Promise<string[]> {
     const rows = await this.database
@@ -339,6 +411,17 @@ export class InvoiceRepository {
         ),
       )
       .orderBy(asc(services.billingStartDate), asc(services.nextDueDate))
+  }
+
+  listReminderCandidates(throughDate: string) {
+    return this.database
+      .select({ id: invoices.id, dueDate: invoices.dueDate })
+      .from(invoices)
+      .where(
+        and(inArray(invoices.status, ['unpaid', 'overdue']), lte(invoices.dueDate, throughDate)),
+      )
+      .orderBy(asc(invoices.dueDate))
+      .limit(500)
   }
 
   async advanceNextDueDate(

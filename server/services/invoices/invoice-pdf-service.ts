@@ -223,7 +223,7 @@ function drawParties(document: PdfDocument, detail: InvoiceDetail) {
     ? document.heightOfString(customerLines, { width: innerWidth, lineGap: 1.5 })
     : 0
   const leftHeight = padding + 16 + titleHeight + (customerLines ? 6 + linesHeight : 0) + padding
-  const summaryRows = 4 + (invoice.paidAt ? 1 : 0)
+  const summaryRows = 4 + (invoice.creditedAmount > 0n ? 1 : 0) + (invoice.paidAt ? 1 : 0)
   const rightHeight = padding + 16 + summaryRows * 18 + padding
   const cardHeight = Math.max(96, leftHeight, rightHeight)
 
@@ -254,6 +254,9 @@ function drawParties(document: PdfDocument, detail: InvoiceDetail) {
   const summary = [
     ['Status', STATUS_LABELS[invoice.status] ?? invoice.status.toUpperCase()],
     ['Total', formatMoney(invoice.totalAmount, invoice.currency)],
+    invoice.creditedAmount > 0n
+      ? ['Credit note', `-${formatMoney(invoice.creditedAmount, invoice.currency)}`]
+      : null,
     ['Dibayar', formatMoney(invoice.amountPaid, invoice.currency)],
     ['Sisa tagihan', formatMoney(invoice.balanceDue, invoice.currency)],
     invoice.paidAt ? ['Dibayar pada', formatInstantDate(invoice.paidAt)] : null,

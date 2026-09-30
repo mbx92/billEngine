@@ -9,7 +9,8 @@ export function requestActor(event: H3Event, userId: string | null) {
 
   return {
     userId,
-    ipAddress: headers['cf-connecting-ip'] ?? headers['x-forwarded-for'] ?? headers['x-real-ip'] ?? null,
+    ipAddress:
+      headers['cf-connecting-ip'] ?? headers['x-forwarded-for'] ?? headers['x-real-ip'] ?? null,
     userAgent: headers['user-agent'] ?? null,
   }
 }

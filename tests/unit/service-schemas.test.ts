@@ -1,13 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import { createCustomerSchema } from '../../shared/schemas/customers'
-import { createPlanSchema } from '../../shared/schemas/plans'
-import { createServiceSchema } from '../../shared/schemas/services'
+import { createPlanSchema, updatePlanSchema } from '../../shared/schemas/plans'
+import {
+  applyInfrastructureSchema,
+  createServiceSchema,
+  transitionServiceSchema,
+  updateServiceSchema,
+} from '../../shared/schemas/services'
 
 const customerId = '11111111-1111-4111-8111-111111111111'
 const resourceId = '22222222-2222-4222-8222-222222222222'
 const planId = '33333333-3333-4333-8333-333333333333'
 
 describe('customer and service schemas', () => {
+  it('requires a preview fingerprint before applying infrastructure', () => {
+    expect(
+      applyInfrastructureSchema.parse({ fingerprint: 'a'.repeat(64), restartRunning: true }),
+    ).toEqual({ fingerprint: 'a'.repeat(64), restartRunning: true })
+    expect(() => applyInfrastructureSchema.parse({ fingerprint: 'stale' })).toThrow()
+  })
+
   it('normalizes empty optional customer fields', () => {
     const parsed = createCustomerSchema.parse({
       name: 'Acme Billing',
@@ -66,6 +78,21 @@ describe('customer and service schemas', () => {
     expect(result.success).toBe(false)
   })
 
+  it('validates service updates and requires lifecycle reasons', () => {
+    expect(
+      updateServiceSchema.parse({ planId, paymentDueDays: '14', resourceIds: [resourceId] }),
+    ).toMatchObject({ planId, paymentDueDays: 14 })
+    expect(updateServiceSchema.safeParse({}).success).toBe(false)
+    expect(transitionServiceSchema.safeParse({ status: 'suspended', reason: '' }).success).toBe(
+      false,
+    )
+
+    expect(updateServiceSchema.parse({ description: '', taxRate: '' })).toEqual({
+      description: null,
+      taxRate: null,
+    })
+  })
+
   it('normalizes plan price and requires unique inclusions', () => {
     const parsed = createPlanSchema.parse({
       name: 'Starter',
@@ -73,12 +100,59 @@ describe('customer and service schemas', () => {
       currency: 'idr',
       priceAmount: '250000',
       billingCycle: 'monthly',
+      includedResourceCount: '2',
+      includedCpuCores: '1.5',
+      includedMemoryBytes: '2147483648',
       inclusions: ['1 vCPU', 'RAM 1 GB', 'Backup harian'],
     })
 
     expect(parsed.priceAmount).toBe(250_000n)
     expect(parsed.currency).toBe('IDR')
     expect(parsed.description).toBeUndefined()
+    expect(parsed.includedResourceCount).toBe(2)
+    expect(parsed.includedCpuCores).toBe('1.5')
+    expect(parsed.includedMemoryBytes).toBe(2_147_483_648n)
+
+    const edited = createPlanSchema.parse({
+      name: 'Starter numeric input',
+      currency: 'IDR',
+      priceAmount: 250_000,
+      billingCycle: 'monthly',
+      includedResourceCount: 2,
+      includedCpuCores: 1.5,
+      includedMemoryBytes: 2_147_483_648,
+      inclusions: ['Managed infrastructure'],
+    })
+    expect(edited.includedCpuCores).toBe('1.5')
+    expect(
+      createPlanSchema.parse({
+        name: 'Free Trial',
+        currency: 'IDR',
+        priceAmount: 0,
+        billingCycle: 'one_time',
+        inclusions: ['1 CPU core', '1 GB RAM'],
+      }).priceAmount,
+    ).toBe(0n)
+    expect(
+      createPlanSchema.safeParse({
+        name: 'Missing price',
+        currency: 'IDR',
+        priceAmount: '',
+        billingCycle: 'one_time',
+        inclusions: ['Trial'],
+      }).success,
+    ).toBe(false)
+    expect(
+      updatePlanSchema.parse({
+        includedResourceCount: null,
+        includedCpuCores: 2,
+        includedMemoryBytes: null,
+      }),
+    ).toEqual({
+      includedResourceCount: null,
+      includedCpuCores: '2',
+      includedMemoryBytes: null,
+    })
 
     expect(
       createPlanSchema.safeParse({

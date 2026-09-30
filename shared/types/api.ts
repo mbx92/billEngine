@@ -1,5 +1,6 @@
 import type {
   BillingCycle,
+  CreditNoteStatus,
   CustomerStatus,
   InvoiceStatus,
   PaymentStatus,
@@ -53,6 +54,69 @@ export interface ApiServiceResourceLink {
   id: string
   name: string
   status: ResourceStatus
+  limitsCpus: string | null
+  limitsMemoryBytes: DecimalString | null
+}
+
+export type InfrastructureComplianceStatus =
+  'matched' | 'under_allocated' | 'over_allocated' | 'mixed' | 'unknown' | 'not_configured'
+
+export interface ApiInfrastructureAllocation {
+  status: InfrastructureComplianceStatus
+  expected: {
+    resourceCount: number | null
+    cpuCores: string | null
+    memoryBytes: DecimalString | null
+  }
+  actual: {
+    resourceCount: number
+    cpuCores: string | null
+    memoryBytes: DecimalString | null
+  }
+}
+
+export interface ApiInfrastructureReconciliationResource {
+  id: string
+  name: string
+  status: ResourceStatus
+  resourceType: string
+  serverName: string
+  currentCpuCores: string | null
+  desiredCpuCores: string | null
+  currentMemoryBytes: DecimalString | null
+  desiredMemoryBytes: DecimalString | null
+  changed: boolean
+}
+
+export interface ApiInfrastructureReconciliationPreview {
+  serviceId: string
+  serviceNumber: string
+  serviceName: string
+  planName: string | null
+  canApply: boolean
+  blockingReason: string | null
+  fingerprint: string
+  restartRequired: boolean
+  expectedResourceCount: number | null
+  actualResourceCount: number
+  resources: ApiInfrastructureReconciliationResource[]
+}
+
+export type InfrastructureReconciliationResultStatus = 'completed' | 'partial' | 'failed'
+
+export interface ApiInfrastructureReconciliationResult {
+  status: InfrastructureReconciliationResultStatus
+  updatedCount: number
+  restartedCount: number
+  failedCount: number
+  verificationFailed: boolean
+  resources: Array<{
+    id: string
+    name: string
+    status: 'updated' | 'restart_queued' | 'failed'
+    message: string | null
+  }>
+  preview: ApiInfrastructureReconciliationPreview
 }
 
 export interface ApiPlan {
@@ -63,6 +127,9 @@ export interface ApiPlan {
   priceAmount: DecimalString
   billingCycle: BillingCycle
   inclusions: string[]
+  includedResourceCount: number | null
+  includedCpuCores: string | null
+  includedMemoryBytes: DecimalString | null
   isActive: boolean
   serviceCount: number
   createdAt: string
@@ -77,6 +144,9 @@ export interface ApiPlanOption {
   priceAmount: DecimalString
   billingCycle: BillingCycle
   inclusions: string[]
+  includedResourceCount: number | null
+  includedCpuCores: string | null
+  includedMemoryBytes: DecimalString | null
 }
 
 export interface ApiService {
@@ -86,16 +156,28 @@ export interface ApiService {
   planId: string | null
   planName: string | null
   planInclusions: string[]
+  planResourceCount: number | null
+  planCpuCores: string | null
+  planMemoryBytes: DecimalString | null
   status: ServiceStatus
   currency: string
   priceAmount: DecimalString
   billingCycle: BillingCycle
   billingStartDate: string
   nextDueDate: string | null
+  invoiceLeadDays: number
+  paymentDueDays: number
+  taxRate: string | null
+  description: string | null
+  suspendedAt: string | null
+  suspensionReason: string | null
+  cancelledAt: string | null
+  cancellationReason: string | null
   customerId: string
   customerName: string
   customerNumber: string
   resources: ApiServiceResourceLink[]
+  infrastructure: ApiInfrastructureAllocation
 }
 
 export interface ApiServiceOptions {
@@ -114,6 +196,8 @@ export interface ApiServiceOptions {
     serverName: string
     projectName: string | null
     environmentName: string | null
+    limitsCpus: string | null
+    limitsMemoryBytes: DecimalString | null
   }>
 }
 
@@ -121,6 +205,8 @@ export interface ApiResourceServiceLink {
   id: string
   serviceNumber: string
   name: string
+  customerName: string
+  planName: string | null
 }
 
 export interface ApiResourceListItem {
@@ -358,6 +444,7 @@ export interface ApiInvoiceDetail {
   invoice: ApiInvoiceListItem & {
     subtotalAmount: DecimalString
     taxAmount: DecimalString
+    creditedAmount: DecimalString
     notes: string | null
     issuedAt: string | null
     paidAt: string | null
@@ -373,6 +460,16 @@ export interface ApiInvoiceDetail {
   }
   items: ApiInvoiceItem[]
   payments: ApiPayment[]
+  creditNotes: ApiCreditNote[]
+}
+
+export interface ApiCreditNote {
+  id: string
+  creditNoteNumber: string
+  status: CreditNoteStatus
+  amount: DecimalString
+  reason: string
+  issuedAt: string
 }
 
 export interface ApiPaymentListItem extends ApiPayment {
@@ -404,4 +501,43 @@ export interface ApiRecurringRunResult {
   created: Array<{ serviceId: string; invoiceId: string; invoiceNumber: string }>
   skipped: Array<{ serviceId: string; reason: string }>
   jobRunId: string | null
+}
+
+export interface ApiCurrentUser {
+  id: string
+  name: string
+  email: string
+  role: 'super_admin' | 'admin' | 'customer'
+  customerId: string | null
+}
+
+export interface ApiUser extends ApiCurrentUser {
+  customerName: string | null
+  createdAt: string
+}
+
+export interface ApiPortalSummary {
+  customer: {
+    id: string
+    customerNumber: string
+    name: string
+    companyName: string | null
+  }
+  services: ApiService[]
+  invoices: ApiInvoiceListItem[]
+  openBalance: Array<{ currency: string; amount: DecimalString }>
+}
+
+export interface ApiReportSummary {
+  from: string | null
+  to: string | null
+  invoiced: Array<{ currency: string; amount: DecimalString; count: number }>
+  collected: Array<{ currency: string; amount: DecimalString }>
+  outstanding: Array<{ currency: string; amount: DecimalString }>
+  monthly: Array<{
+    month: string
+    currency: string
+    invoiced: DecimalString
+    collected: DecimalString
+  }>
 }

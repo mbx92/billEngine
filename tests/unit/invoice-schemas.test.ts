@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createInvoiceSchema,
+  createCreditNoteSchema,
   invoiceListQuerySchema,
   paymentListQuerySchema,
 } from '../../shared/schemas/invoices'
@@ -90,5 +91,16 @@ describe('manual invoice schema', () => {
     })
 
     expect(result.success).toBe(false)
+  })
+})
+
+describe('credit note schema', () => {
+  it('coerces a positive credit amount and requires a reason', () => {
+    expect(createCreditNoteSchema.parse({ amount: '125000', reason: 'Service adjustment' })).toEqual(
+      { amount: 125_000n, reason: 'Service adjustment' },
+    )
+    expect(createCreditNoteSchema.safeParse({ amount: '0', reason: 'No credit' }).success).toBe(
+      false,
+    )
   })
 })

@@ -8,16 +8,19 @@ import { accounts, users } from './schema'
 const email = process.env.ADMIN_EMAIL?.trim().toLowerCase()
 const password = process.env.ADMIN_PASSWORD
 const name = process.env.ADMIN_NAME?.trim() || 'Platform Administrator'
+const databaseUrl = process.env.NUXT_DATABASE_URL || process.env.DATABASE_URL
 
-if (!process.env.DATABASE_URL || !email || !password) {
-  throw new Error('DATABASE_URL, ADMIN_EMAIL, and ADMIN_PASSWORD are required.')
+if (!databaseUrl || !email || !password) {
+  throw new Error(
+    'NUXT_DATABASE_URL (or legacy DATABASE_URL), ADMIN_EMAIL, and ADMIN_PASSWORD are required.',
+  )
 }
 
 if (password.length < 12) {
   throw new Error('ADMIN_PASSWORD must be at least 12 characters.')
 }
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+const pool = new pg.Pool({ connectionString: databaseUrl })
 const database = drizzle(pool)
 
 try {

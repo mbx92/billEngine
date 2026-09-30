@@ -2,7 +2,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { documentSequences } from '../database/schema'
 import type { Database, Transaction } from '../database/client'
 
-export type SequenceKind = 'customer' | 'service' | 'invoice' | 'payment'
+export type SequenceKind = 'customer' | 'service' | 'invoice' | 'payment' | 'credit_note'
 
 /**
  * Allocates the next document number for a type/period inside the caller's

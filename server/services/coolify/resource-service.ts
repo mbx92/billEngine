@@ -11,10 +11,11 @@ import type {
 } from '../../../shared/schemas/coolify'
 import { CoolifyResourceRepository, normalizeBaseUrl } from '../../repositories/coolify-resources'
 import { AuditLogRepository } from '../../repositories/audit'
-import { decryptCredential, encryptCredential } from '../../utils/credentials'
+import { encryptCredential } from '../../utils/credentials'
 import type { ApiResourceUsageMetric } from '../../../shared/types/api'
 import { useDatabase, type Database } from '../../database/client'
 import { DomainError } from '../../utils/errors'
+import { clientForCoolifyConnection } from '../../integrations/coolify/connection'
 
 interface ResourceActorContext {
   userId: string | null
@@ -233,20 +234,7 @@ export class CoolifyResourceService {
   }
 
   private clientForConnection(connection: { baseUrl: string; tokenEncrypted: string | null }) {
-    if (connection.tokenEncrypted) {
-      return new CoolifyClient(connection.baseUrl, decryptCredential(connection.tokenEncrypted))
-    }
-
-    const config = useRuntimeConfig()
-    if (
-      config.coolifyApiUrl &&
-      config.coolifyApiToken &&
-      normalizeBaseUrl(String(config.coolifyApiUrl)) === normalizeBaseUrl(connection.baseUrl)
-    ) {
-      return new CoolifyClient(connection.baseUrl, String(config.coolifyApiToken))
-    }
-
-    throw new Error('COOLIFY_CREDENTIALS_MISSING')
+    return clientForCoolifyConnection(connection)
   }
 }
 

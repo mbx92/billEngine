@@ -7,7 +7,12 @@ import type { ApiErrorBody } from '#shared/types/api'
  */
 export function apiErrorMessage(error: unknown, fallback: string): string {
   const body = extractErrorBody(error)
-  return body?.error?.message?.trim() || fallback
+  const message = body?.error?.message?.trim()
+  if (body?.error?.code === 'VALIDATION_ERROR') {
+    const detail = firstValidationMessage(body.error.details)
+    if (detail) return detail
+  }
+  return message || fallback
 }
 
 /** Machine-readable code, e.g. for branching on STATE_INVALID. */
@@ -34,4 +39,14 @@ function isErrorBody(value: unknown): value is ApiErrorBody {
   if (typeof value !== 'object' || value === null) return false
   const error = (value as { error?: unknown }).error
   return typeof error === 'object' && error !== null && 'message' in error
+}
+
+function firstValidationMessage(details: unknown): string | null {
+  if (!Array.isArray(details)) return null
+  for (const detail of details) {
+    if (typeof detail !== 'object' || detail === null) continue
+    const message = (detail as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim()) return message.trim()
+  }
+  return null
 }

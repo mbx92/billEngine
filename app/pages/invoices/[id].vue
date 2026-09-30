@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Ban, CreditCard, Download, LoaderCircle } from '@lucide/vue'
+import { ArrowLeft, Ban, CreditCard, Download, LoaderCircle, Mail, ReceiptText } from '@lucide/vue'
 import type { ApiInvoiceDetail } from '#shared/types/api'
 import { billingPeriodMonths, monthlyEquivalent } from '#shared/utils/billing-display'
 import { apiErrorMessage } from '~/lib/api-error'
@@ -18,14 +18,19 @@ const { data, status, error, refresh } = await useFetch<{ data: ApiInvoiceDetail
 const detail = computed(() => data.value?.data)
 const invoice = computed(() => detail.value?.invoice)
 const showCancelConfirm = ref(false)
+const showCreditForm = ref(false)
 const cancelling = ref(false)
+const sendingEmail = ref(false)
+const creatingCredit = ref(false)
+const creditForm = reactive({ amount: '', reason: '' })
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const canCancel = computed(
   () =>
     Boolean(invoice.value) &&
     ['draft', 'unpaid', 'overdue'].includes(invoice.value!.status) &&
-    invoice.value!.amountPaid === '0',
+    invoice.value!.amountPaid === '0' &&
+    invoice.value!.creditedAmount === '0',
 )
 const canRecordPayment = computed(
   () => invoice.value?.status === 'unpaid' || invoice.value?.status === 'overdue',
@@ -64,6 +69,45 @@ async function cancelInvoice() {
     actionError.value = apiErrorMessage(caught, 'Invoice tidak dapat dibatalkan.')
   } finally {
     cancelling.value = false
+  }
+}
+
+async function sendInvoiceEmail() {
+  sendingEmail.value = true
+  actionError.value = null
+  try {
+    const response = await $fetch<{ data: { status: 'sent' | 'already_sent' } }>(
+      `/api/invoices/${encodeURIComponent(invoiceId.value)}/send`,
+      { method: 'POST' },
+    )
+    actionMessage.value =
+      response.data.status === 'sent'
+        ? 'Invoice berhasil dikirim ke email customer.'
+        : 'Invoice sebelumnya sudah pernah dikirim.'
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Invoice gagal dikirim.')
+  } finally {
+    sendingEmail.value = false
+  }
+}
+
+async function createCreditNote() {
+  creatingCredit.value = true
+  actionError.value = null
+  try {
+    const amount = creditForm.amount.replace(/\D/g, '')
+    await $fetch(`/api/invoices/${encodeURIComponent(invoiceId.value)}/credit-notes`, {
+      method: 'POST',
+      body: { amount, reason: creditForm.reason },
+    })
+    actionMessage.value = 'Credit note berhasil diterbitkan.'
+    showCreditForm.value = false
+    Object.assign(creditForm, { amount: '', reason: '' })
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Credit note gagal dibuat.')
+  } finally {
+    creatingCredit.value = false
   }
 }
 </script>
@@ -127,6 +171,17 @@ async function cancelInvoice() {
           </p>
         </div>
         <div class="flex flex-wrap gap-2">
+          <UiButton variant="secondary" :disabled="sendingEmail" @click="sendInvoiceEmail">
+            <Mail :size="15" aria-hidden="true" />
+            {{ sendingEmail ? 'Mengirim…' : 'Kirim email' }}
+          </UiButton>
+          <UiButton
+            v-if="canRecordPayment && detail.invoice.balanceDue !== '0'"
+            variant="secondary"
+            @click="showCreditForm = true"
+          >
+            <ReceiptText :size="15" aria-hidden="true" /> Credit note
+          </UiButton>
           <UiButton v-if="canCancel" variant="danger" @click="showCancelConfirm = true">
             <Ban :size="15" aria-hidden="true" />
             Cancel invoice
@@ -173,6 +228,42 @@ async function cancelInvoice() {
               <LoaderCircle v-if="cancelling" class="animate-spin" :size="15" aria-hidden="true" />
               {{ cancelling ? 'Membatalkan…' : 'Ya, batalkan invoice' }}
             </UiButton>
+          </div>
+        </template>
+      </UiDialog>
+
+      <UiDialog
+        v-if="showCreditForm"
+        title="Terbitkan credit note"
+        :description="`Kurangi sisa tagihan ${detail.invoice.invoiceNumber} tanpa menghapus histori invoice.`"
+        :close-disabled="creatingCredit"
+        @close="showCreditForm = false"
+      >
+        <form id="credit-note-form" class="space-y-4" @submit.prevent="createCreditNote">
+          <UiMoneyInput
+            v-model="creditForm.amount"
+            label="Jumlah kredit"
+            :currency="detail.invoice.currency"
+            required
+          />
+          <label class="block">
+            <span class="mb-2 block text-xs font-semibold text-muted">Alasan</span>
+            <textarea
+              v-model="creditForm.reason"
+              rows="4"
+              required
+              class="focus-ring w-full rounded-md border border-line-strong bg-canvas px-3 py-2 text-sm text-ink"
+            />
+          </label>
+        </form>
+        <template #footer>
+          <div class="flex justify-end gap-2">
+            <UiButton variant="secondary" :disabled="creatingCredit" @click="showCreditForm = false"
+              >Batal</UiButton
+            >
+            <UiButton type="submit" form="credit-note-form" :disabled="creatingCredit">{{
+              creatingCredit ? 'Menerbitkan…' : 'Terbitkan'
+            }}</UiButton>
           </div>
         </template>
       </UiDialog>
@@ -290,6 +381,15 @@ async function cancelInvoice() {
                 />
               </dd>
             </div>
+            <div v-if="detail.invoice.creditedAmount !== '0'" class="flex justify-between gap-4">
+              <dt class="text-muted">Credit note</dt>
+              <dd class="font-mono text-muted">
+                -<MoneyDisplay
+                  :amount="detail.invoice.creditedAmount"
+                  :currency="detail.invoice.currency"
+                />
+              </dd>
+            </div>
             <div class="flex justify-between gap-4 font-semibold">
               <dt class="text-ink">Sisa tagihan</dt>
               <dd class="font-mono text-ink">
@@ -303,7 +403,7 @@ async function cancelInvoice() {
         </div>
       </UiCard>
 
-      <UiCard v-if="detail.invoice.notes || detail.payments.length">
+      <UiCard v-if="detail.invoice.notes || detail.payments.length || detail.creditNotes.length">
         <div v-if="detail.invoice.notes">
           <p class="text-[10px] font-semibold tracking-wider text-muted uppercase">Catatan</p>
           <p class="mt-2 whitespace-pre-line text-sm leading-6 text-ink">
@@ -327,6 +427,27 @@ async function cancelInvoice() {
               <span class="text-muted">{{ format.dateTime(payment.paidAt) }}</span>
               <MoneyDisplay :amount="payment.amount" :currency="payment.currency" />
               <BillingStatusBadge kind="payment" :status="payment.status" />
+            </div>
+          </div>
+        </div>
+        <div
+          v-if="detail.creditNotes.length"
+          :class="detail.invoice.notes || detail.payments.length ? 'mt-5 border-t pt-5' : ''"
+        >
+          <p class="mb-3 text-[10px] font-semibold tracking-wider text-muted uppercase">
+            Credit notes
+          </p>
+          <div class="space-y-2">
+            <div
+              v-for="credit in detail.creditNotes"
+              :key="credit.id"
+              class="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-canvas px-3 py-2 text-xs"
+            >
+              <span class="font-mono text-ink">{{ credit.creditNoteNumber }}</span>
+              <span class="text-muted">{{ credit.reason }}</span>
+              <span class="font-mono text-danger"
+                >-{{ format.money(credit.amount, detail.invoice.currency) }}</span
+              >
             </div>
           </div>
         </div>

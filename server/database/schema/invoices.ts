@@ -14,8 +14,9 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core'
 import { customers } from './customers'
-import { invoiceStatus } from './enums'
+import { creditNoteStatus, invoiceStatus } from './enums'
 import { services } from './services'
+import { users } from './auth'
 
 export const invoices = pgTable(
   'invoices',
@@ -35,6 +36,9 @@ export const invoices = pgTable(
       .default(sql`0`),
     totalAmount: bigint('total_amount', { mode: 'bigint' }).notNull(),
     amountPaid: bigint('amount_paid', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    creditedAmount: bigint('credited_amount', { mode: 'bigint' })
       .notNull()
       .default(sql`0`),
     balanceDue: bigint('balance_due', { mode: 'bigint' }).notNull(),
@@ -65,7 +69,32 @@ export const invoices = pgTable(
     check('invoices_tax_amount_check', sql`${table.taxAmount} >= 0`),
     check('invoices_total_amount_check', sql`${table.totalAmount} >= 0`),
     check('invoices_amount_paid_check', sql`${table.amountPaid} >= 0`),
+    check('invoices_credited_amount_check', sql`${table.creditedAmount} >= 0`),
     check('invoices_balance_due_check', sql`${table.balanceDue} >= 0`),
+  ],
+)
+
+export const creditNotes = pgTable(
+  'credit_notes',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoices.id, { onDelete: 'restrict' }),
+    creditNoteNumber: varchar('credit_note_number', { length: 48 }).notNull(),
+    status: creditNoteStatus('status').notNull().default('issued'),
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    reason: text('reason').notNull(),
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull().defaultNow(),
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('credit_notes_number_uidx').on(table.creditNoteNumber),
+    index('credit_notes_invoice_id_idx').on(table.invoiceId),
+    index('credit_notes_status_idx').on(table.status),
+    check('credit_notes_amount_check', sql`${table.amount} > 0`),
   ],
 )
 

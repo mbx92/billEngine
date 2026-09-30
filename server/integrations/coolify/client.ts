@@ -15,6 +15,11 @@ export interface CoolifyContainerUsage {
   sampledAt: Date | null
 }
 
+export interface CoolifyApplicationLimits {
+  cpuCores?: string
+  memoryBytes?: bigint
+}
+
 export class CoolifyClientError extends Error {
   constructor(
     message: string,
@@ -51,6 +56,36 @@ export class CoolifyClient {
     const payload = await this.request<unknown>('/api/v1/servers')
     const parsed = coolifyServersSchema.parse(payload)
     return Array.isArray(parsed) ? parsed : parsed.data
+  }
+
+  async updateApplicationLimits(uuid: string, limits: CoolifyApplicationLimits) {
+    const body: Record<string, string> = {}
+    if (limits.cpuCores !== undefined) body.limits_cpus = limits.cpuCores
+    if (limits.memoryBytes !== undefined) body.limits_memory = `${limits.memoryBytes}b`
+
+    return this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}`, {
+      method: 'PATCH',
+      body,
+    })
+  }
+
+  async restartApplication(uuid: string) {
+    return this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}/restart`, {
+      method: 'POST',
+    })
+  }
+
+  async startApplication(uuid: string) {
+    return this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}/start`, {
+      method: 'POST',
+    })
+  }
+
+  async stopApplication(uuid: string) {
+    return this.request<unknown>(
+      `/api/v1/applications/${encodeURIComponent(uuid)}/stop?docker_cleanup=false`,
+      { method: 'POST' },
+    )
   }
 
   async getSentinelSettings(serverUuid: string) {
@@ -123,16 +158,23 @@ export class CoolifyClient {
     return response.json()
   }
 
-  private async request<T>(path: string): Promise<T> {
+  private async request<T>(
+    path: string,
+    options: { method?: 'GET' | 'POST' | 'PATCH'; body?: Record<string, unknown> } = {},
+  ): Promise<T> {
     const url = new URL(path, this.baseUrl.endsWith('/') ? this.baseUrl : `${this.baseUrl}/`)
+    const maxAttempts = options.method === 'POST' ? 1 : 2
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const response = await fetch(url, {
+          method: options.method ?? 'GET',
           headers: {
             authorization: `Bearer ${this.token}`,
             accept: 'application/json',
+            ...(options.body ? { 'content-type': 'application/json' } : {}),
           },
+          body: options.body ? JSON.stringify(options.body) : undefined,
           signal: AbortSignal.timeout(15_000),
         })
 
@@ -146,7 +188,7 @@ export class CoolifyClient {
         ) as T
       } catch (error) {
         if (error instanceof CoolifyClientError) throw error
-        if (attempt === 1) {
+        if (attempt === maxAttempts - 1) {
           throw new CoolifyClientError('Coolify API request failed.', undefined, { cause: error })
         }
       }

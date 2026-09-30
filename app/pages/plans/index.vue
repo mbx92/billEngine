@@ -24,6 +24,9 @@ const form = reactive({
   currency: appSettings.value.billingCurrency,
   priceAmount: '',
   billingCycle: 'monthly' as BillingCycle,
+  includedResourceCount: '',
+  includedCpuCores: '',
+  includedMemoryMb: '',
   inclusions: [''],
 })
 
@@ -51,6 +54,9 @@ function resetForm() {
     currency: appSettings.value.billingCurrency,
     priceAmount: '',
     billingCycle: 'monthly',
+    includedResourceCount: '',
+    includedCpuCores: '',
+    includedMemoryMb: '',
     inclusions: [''],
   })
   actionError.value = null
@@ -69,6 +75,11 @@ function openEdit(plan: ApiPlan) {
     currency: plan.currency,
     priceAmount: plan.priceAmount,
     billingCycle: plan.billingCycle,
+    includedResourceCount: plan.includedResourceCount?.toString() ?? '',
+    includedCpuCores: plan.includedCpuCores ?? '',
+    includedMemoryMb: plan.includedMemoryBytes
+      ? (BigInt(plan.includedMemoryBytes) / (1024n * 1024n)).toString()
+      : '',
     inclusions: [...plan.inclusions],
   })
   actionError.value = null
@@ -98,12 +109,21 @@ async function savePlan() {
   actionError.value = null
   actionMessage.value = null
 
-  const body = {
-    ...form,
-    inclusions: form.inclusions.map((item) => item.trim()).filter(Boolean),
-  }
-
   try {
+    if (form.includedMemoryMb && !/^\d+$/.test(form.includedMemoryMb)) {
+      throw new Error('RAM plan harus berupa bilangan MB.')
+    }
+    const body = {
+      ...form,
+      includedResourceCount: form.includedResourceCount || null,
+      includedCpuCores: form.includedCpuCores || null,
+      includedMemoryBytes: form.includedMemoryMb
+        ? (BigInt(form.includedMemoryMb) * 1024n * 1024n).toString()
+        : null,
+      includedMemoryMb: undefined,
+      inclusions: form.inclusions.map((item) => item.trim()).filter(Boolean),
+    }
+
     if (editingId.value) {
       const response = await $fetch<{ data: { name: string } }>(`/api/plans/${editingId.value}`, {
         method: 'PATCH',
@@ -218,10 +238,42 @@ async function toggleStatus(plan: ApiPlan) {
           v-model="form.priceAmount"
           label="Harga plan"
           :currency="form.currency"
-          :hint="`Ditagihkan ${form.billingCycle === 'one_time' ? 'sekali' : `per ${billingCycleUnit(form.billingCycle)}`}.`"
+          :hint="`Gunakan 0 untuk trial; selain itu ditagihkan ${form.billingCycle === 'one_time' ? 'sekali' : `per ${billingCycleUnit(form.billingCycle)}`}.`"
           placeholder="500000"
+          required
         />
         <UiInput v-model="form.currency" label="Mata uang" maxlength="3" required />
+        <div class="rounded-md border border-line bg-canvas p-4 md:col-span-2">
+          <p class="text-sm font-semibold text-ink">Alokasi infrastructure dalam plan</p>
+          <p class="mt-1 text-xs text-muted">
+            Nilai ini dibandingkan dengan total limit resource Coolify yang terhubung ke service.
+          </p>
+          <div class="mt-4 grid gap-4 md:grid-cols-3">
+            <UiInput
+              v-model="form.includedResourceCount"
+              label="Jumlah resource"
+              type="number"
+              min="1"
+              placeholder="2"
+            />
+            <UiInput
+              v-model="form.includedCpuCores"
+              label="Total CPU core"
+              type="number"
+              min="0.001"
+              step="0.001"
+              placeholder="2"
+            />
+            <UiInput
+              v-model="form.includedMemoryMb"
+              label="Total RAM (MB)"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="2048"
+            />
+          </div>
+        </div>
         <label class="block md:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">Deskripsi</span>
           <textarea
@@ -337,6 +389,27 @@ async function toggleStatus(plan: ApiPlan) {
                   </span>
                 </td>
                 <td class="px-4 py-3">
+                  <div class="mb-2 flex flex-wrap gap-1.5">
+                    <UiBadge v-if="plan.includedResourceCount">
+                      {{ plan.includedResourceCount }} resource
+                    </UiBadge>
+                    <UiBadge v-if="plan.includedCpuCores">
+                      {{ format.cpu(plan.includedCpuCores) }}
+                    </UiBadge>
+                    <UiBadge v-if="plan.includedMemoryBytes">
+                      {{ format.bytes(plan.includedMemoryBytes) }}
+                    </UiBadge>
+                    <UiBadge
+                      v-if="
+                        !plan.includedResourceCount &&
+                        !plan.includedCpuCores &&
+                        !plan.includedMemoryBytes
+                      "
+                      tone="warning"
+                    >
+                      Quota belum diatur
+                    </UiBadge>
+                  </div>
                   <ul class="space-y-1 text-xs text-ink">
                     <li
                       v-for="item in plan.inclusions"

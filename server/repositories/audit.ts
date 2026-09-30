@@ -27,13 +27,25 @@ export class AuditLogRepository {
       action: entry.action,
       entityType: entry.entityType,
       entityId: entry.entityId,
-      beforeData: entry.beforeData ?? null,
-      afterData: entry.afterData ?? null,
-      metadata: entry.metadata ?? null,
+      beforeData: toAuditJson(entry.beforeData),
+      afterData: toAuditJson(entry.afterData),
+      metadata: toAuditJson(entry.metadata),
       ipAddress: normalizeIpAddress(entry.ipAddress),
       userAgent: entry.userAgent ?? null,
     })
   }
+}
+
+/**
+ * PostgreSQL bigint values are native BigInt objects in Drizzle, while JSONB
+ * only accepts JSON-compatible values. Audit data is a snapshot, so preserving
+ * exact integers as decimal strings is safer than coercing them to Number.
+ */
+export function toAuditJson(value: unknown): unknown {
+  if (value === undefined || value === null) return null
+  return JSON.parse(
+    JSON.stringify(value, (_key, entry) => (typeof entry === 'bigint' ? entry.toString() : entry)),
+  ) as unknown
 }
 
 /** The `inet` column rejects arbitrary strings, so drop anything unusable. */
@@ -82,7 +94,7 @@ export class JobRunRepository {
         finishedAt: new Date(),
         processedCount: result.processedCount ?? 0,
         errorMessage: result.errorMessage ?? null,
-        metadata: result.metadata ?? null,
+        metadata: toAuditJson(result.metadata),
       })
       .where(eq(jobRuns.id, id))
   }

@@ -51,7 +51,10 @@ export class PaymentService {
     const today = todayIsoDate(config.timezone)
 
     return this.database.transaction(async (transaction) => {
-      const invoice = await this.invoices.findById(input.invoiceId, transaction)
+      // Serialize balance-changing operations for this invoice. Without this
+      // lock, two simultaneous payments can both validate against the same
+      // stale balance and create an overpayment.
+      const invoice = await this.invoices.findByIdForUpdate(input.invoiceId, transaction)
       if (!invoice) throw DomainError.notFound('Invoice tidak ditemukan.')
 
       if (invoice.status === 'draft' || invoice.status === 'cancelled') {
@@ -65,6 +68,15 @@ export class PaymentService {
       if (input.status === 'completed' && input.amount > invoice.balanceDue) {
         throw DomainError.validation(
           `Jumlah pembayaran melebihi sisa tagihan (${invoice.balanceDue.toString()}).`,
+        )
+      }
+
+      const existingRows = await this.payments.listByInvoice(transaction, invoice.id)
+      const existingEffect = summarizePaymentEffect(existingRows)
+
+      if (input.status === 'refunded' && input.amount > existingEffect.net) {
+        throw DomainError.validation(
+          `Jumlah refund melebihi pembayaran bersih (${existingEffect.net.toString()}).`,
         )
       }
 
@@ -85,8 +97,9 @@ export class PaymentService {
         recordedBy: actor.userId,
       })
 
-      if (input.status !== 'completed') {
-        // Pending/failed rows are informational only; the invoice is untouched.
+      if (input.status !== 'completed' && input.status !== 'refunded') {
+        // Pending/failed/cancelled rows are informational only; the invoice is
+        // untouched because no money has been captured or returned.
         await this.audit.record(transaction, {
           actorUserId: actor.userId,
           action: 'payment.recorded',
@@ -113,12 +126,12 @@ export class PaymentService {
       const updated = await this.invoices.applyPaymentState(
         transaction,
         invoice.id,
-        invoiceStateFromNet(invoice.totalAmount, effect.net, isPastDue),
+        invoiceStateFromNet(invoice.totalAmount - invoice.creditedAmount, effect.net, isPastDue),
       )
 
       await this.audit.record(transaction, {
         actorUserId: actor.userId,
-        action: 'payment.recorded',
+        action: input.status === 'refunded' ? 'payment.refunded' : 'payment.recorded',
         entityType: 'payment',
         entityId: payment.id,
         beforeData: { invoiceStatus: previousStatus },

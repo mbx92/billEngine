@@ -1,5 +1,10 @@
 import tailwindcss from '@tailwindcss/vite'
 
+// Keep the legacy unprefixed variables convenient for local `nuxt dev`, but
+// never serialize them into a production build. Deployed Nitro applications
+// receive runtime config through matching NUXT_* variables instead.
+const developmentEnv = process.env.NODE_ENV === 'development' ? process.env : {}
+
 const themeBootstrap = `
   (() => {
     let savedTheme = null;
@@ -47,30 +52,40 @@ export default defineNuxtConfig({
     typeCheck: true,
   },
   runtimeConfig: {
-    databaseUrl: process.env.DATABASE_URL,
-    betterAuthSecret: process.env.BETTER_AUTH_SECRET,
-    betterAuthUrl: process.env.BETTER_AUTH_URL,
-    coolifyApiUrl: process.env.COOLIFY_API_URL,
-    coolifyApiToken: process.env.COOLIFY_API_TOKEN,
-    coolifyCredentialsKey: process.env.COOLIFY_CREDENTIALS_KEY,
-    companyName: process.env.COMPANY_NAME || 'Billing Infra',
-    companyEmail: process.env.COMPANY_EMAIL || '',
-    companyAddress: process.env.COMPANY_ADDRESS || '',
-    companyTaxId: process.env.COMPANY_TAX_ID || '',
-    billingTimezone: process.env.BILLING_TIMEZONE || 'Asia/Makassar',
-    billingCurrency: process.env.BILLING_CURRENCY || 'IDR',
+    databaseUrl: developmentEnv.DATABASE_URL || '',
+    betterAuthSecret: developmentEnv.BETTER_AUTH_SECRET || '',
+    betterAuthUrl: developmentEnv.BETTER_AUTH_URL || '',
+    coolifyApiUrl: developmentEnv.COOLIFY_API_URL || '',
+    coolifyApiToken: developmentEnv.COOLIFY_API_TOKEN || '',
+    coolifyCredentialsKey: developmentEnv.COOLIFY_CREDENTIALS_KEY || '',
+    resendApiKey: developmentEnv.RESEND_API_KEY || '',
+    emailFrom: developmentEnv.EMAIL_FROM || '',
+    metricsToken: developmentEnv.METRICS_TOKEN || '',
+    companyName: developmentEnv.COMPANY_NAME || 'Billing Infra',
+    companyEmail: developmentEnv.COMPANY_EMAIL || '',
+    companyAddress: developmentEnv.COMPANY_ADDRESS || '',
+    companyTaxId: developmentEnv.COMPANY_TAX_ID || '',
+    billingTimezone: developmentEnv.BILLING_TIMEZONE || 'Asia/Makassar',
+    billingCurrency: developmentEnv.BILLING_CURRENCY || 'IDR',
     // numeric(7,4) fraction, e.g. 0.11 for 11% VAT. Empty means no tax.
-    billingDefaultTaxRate: process.env.BILLING_DEFAULT_TAX_RATE || '',
-    billingAutomationEnabled: process.env.BILLING_AUTOMATION_ENABLED === 'true',
+    billingDefaultTaxRate: developmentEnv.BILLING_DEFAULT_TAX_RATE || '',
+    billingAutomationEnabled: developmentEnv.BILLING_AUTOMATION_ENABLED === 'true',
     public: {
-      appUrl: process.env.APP_URL || 'http://localhost:3000',
-      billingTimezone: process.env.BILLING_TIMEZONE || 'Asia/Makassar',
-      companyName: process.env.COMPANY_NAME || 'Billing Infra',
-      companyEmail: process.env.COMPANY_EMAIL || '',
+      appUrl: developmentEnv.APP_URL || 'http://localhost:3000',
+      billingTimezone: developmentEnv.BILLING_TIMEZONE || 'Asia/Makassar',
+      companyName: developmentEnv.COMPANY_NAME || 'Billing Infra',
+      companyEmail: developmentEnv.COMPANY_EMAIL || '',
     },
   },
   nitro: {
     preset: 'node-server',
+    // PDFKit and Better Auth currently depend on different major versions of
+    // @noble packages. Keeping both dependency trees inside the server bundle
+    // avoids Node resolving PDFKit's self-imports against Better Auth's newer
+    // top-level version in Nitro's standalone output.
+    externals: {
+      inline: ['pdfkit', '@noble/hashes', '@noble/ciphers'],
+    },
     // Nuxt hardcodes its own error handler, so the JSON API error envelope has
     // to be wired in explicitly.
     errorHandler: './server/error.ts',

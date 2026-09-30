@@ -357,6 +357,11 @@ export class InvoiceService {
           'Invoice dengan pembayaran tidak dapat dibatalkan sebelum pembayaran direfund.',
         )
       }
+      if (existing.creditedAmount > 0n) {
+        throw DomainError.invalidState(
+          'Invoice dengan credit note tidak dapat dibatalkan untuk menjaga audit finansial.',
+        )
+      }
       if (existing.status === 'cancelled') {
         throw DomainError.invalidState('Invoice sudah dibatalkan.')
       }

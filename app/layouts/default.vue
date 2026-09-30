@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   Activity as ActivityIcon,
+  BarChart3,
   Boxes,
   CreditCard,
   FileText,
@@ -11,13 +12,19 @@ import {
   Menu as MenuIcon,
   Server as ServerIcon,
   Settings as SettingsIcon,
+  ShieldCheck,
   Users,
 } from '@lucide/vue'
+import type { ApiCurrentUser } from '#shared/types/api'
 import { authClient } from '~/lib/auth-client'
 
 const route = useRoute()
 const mobileOpen = ref(false)
 const appSettings = useAppSettings()
+const { data: currentUserResponse } = await useFetch<{ data: ApiCurrentUser }>('/api/me')
+const currentUser = computed(() => currentUserResponse.value?.data)
+const isCustomer = computed(() => currentUser.value?.role === 'customer')
+const isSuperAdmin = computed(() => currentUser.value?.role === 'super_admin')
 const { data: settingsResponse } = await useFetch<{ data: typeof appSettings.value }>(
   '/api/settings',
 )
@@ -39,6 +46,11 @@ const infrastructureNavigation = [
   { label: 'Servers', to: '/servers', icon: ServerIcon },
   { label: 'Activity', to: '/activity', icon: ActivityIcon },
 ] as const
+const commercialNavigation = computed(() => [
+  ...primaryNavigation,
+  { label: 'Reports', to: '/reports', icon: BarChart3 },
+])
+const customerNavigation = [{ label: 'Portal', to: '/portal', icon: FileText }] as const
 
 function isActive(path: string) {
   return path === '/' ? route.path === '/' : route.path.startsWith(path)
@@ -82,10 +94,10 @@ async function signOut() {
 
       <nav class="flex-1 overflow-y-auto p-3">
         <p class="px-3 pb-2 pt-3 text-[10px] font-bold tracking-[0.14em] text-muted uppercase">
-          Commercial
+          {{ isCustomer ? 'Customer' : 'Commercial' }}
         </p>
         <NuxtLink
-          v-for="item in primaryNavigation"
+          v-for="item in isCustomer ? customerNavigation : commercialNavigation"
           :key="item.to"
           :to="item.to"
           class="focus-ring mb-1 flex h-9 items-center gap-3 rounded-md px-3 text-sm transition"
@@ -105,11 +117,14 @@ async function signOut() {
           {{ item.label }}
         </NuxtLink>
 
-        <p class="px-3 pb-2 pt-6 text-[10px] font-bold tracking-[0.14em] text-muted uppercase">
+        <p
+          v-if="!isCustomer"
+          class="px-3 pb-2 pt-6 text-[10px] font-bold tracking-[0.14em] text-muted uppercase"
+        >
           Infrastructure
         </p>
         <NuxtLink
-          v-for="item in infrastructureNavigation"
+          v-for="item in isCustomer ? [] : infrastructureNavigation"
           :key="item.to"
           :to="item.to"
           class="focus-ring mb-1 flex h-9 items-center gap-3 rounded-md px-3 text-sm transition"
@@ -132,6 +147,22 @@ async function signOut() {
 
       <div class="border-t p-3">
         <NuxtLink
+          v-if="isSuperAdmin"
+          to="/users"
+          class="focus-ring flex h-9 items-center gap-3 rounded-md px-3 text-sm transition"
+          :class="
+            isActive('/users')
+              ? 'bg-surface-raised text-ink'
+              : 'text-muted hover:bg-surface hover:text-ink'
+          "
+        >
+          <span class="flex size-5 shrink-0 items-center justify-center">
+            <ShieldCheck :size="17" :stroke-width="1.8" aria-hidden="true" />
+          </span>
+          Users & access
+        </NuxtLink>
+        <NuxtLink
+          v-if="!isCustomer"
           to="/settings"
           class="focus-ring flex h-9 items-center gap-3 rounded-md px-3 text-sm transition"
           :class="
@@ -184,7 +215,7 @@ async function signOut() {
           <UiThemeToggle />
           <span
             class="flex size-8 items-center justify-center rounded-full border bg-surface-raised text-xs font-semibold"
-            >AD</span
+            >{{ currentUser?.name?.slice(0, 2).toUpperCase() || 'US' }}</span
           >
         </div>
       </header>

@@ -107,6 +107,12 @@ export const markOverdueSchema = z.object({
   asOf: isoDateSchema.optional(),
 })
 
+export const createCreditNoteSchema = z.object({
+  amount: idrAmountSchema.refine((value) => value > 0n, 'Jumlah kredit harus lebih dari 0.'),
+  reason: z.string().trim().min(3).max(2_000),
+})
+
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>
 export type GenerateRecurringInvoicesInput = z.infer<typeof generateRecurringInvoicesSchema>
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>
+export type CreateCreditNoteInput = z.infer<typeof createCreditNoteSchema>

@@ -60,6 +60,70 @@ describe('Coolify client', () => {
     expect(servers).toMatchObject([{ uuid: 'node-1', name: 'localhost' }])
   })
 
+  it('updates application limits using the Coolify application API', async () => {
+    const request = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ uuid: 'app-1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', request)
+
+    const client = new CoolifyClient('https://coolify.example.test', 'secret')
+    await client.updateApplicationLimits('app-1', {
+      cpuCores: '1.5',
+      memoryBytes: 1_610_612_736n,
+    })
+
+    expect(request).toHaveBeenCalledWith(
+      new URL('https://coolify.example.test/api/v1/applications/app-1'),
+      expect.objectContaining({
+        method: 'PATCH',
+        headers: expect.objectContaining({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ limits_cpus: '1.5', limits_memory: '1610612736b' }),
+      }),
+    )
+  })
+
+  it('does not retry restart requests because they are not idempotent', async () => {
+    const request = vi.fn().mockRejectedValue(new Error('connection reset'))
+    vi.stubGlobal('fetch', request)
+
+    const restart = new CoolifyClient('https://coolify.example.test', 'secret').restartApplication(
+      'app-1',
+    )
+
+    await expect(restart).rejects.toMatchObject({ name: 'CoolifyClientError' })
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts and safely stops applications without Docker cleanup', async () => {
+    const request = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ message: 'queued' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    vi.stubGlobal('fetch', request)
+    const client = new CoolifyClient('https://coolify.example.test', 'secret')
+
+    await client.stopApplication('app-1')
+    await client.startApplication('app-1')
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      new URL('https://coolify.example.test/api/v1/applications/app-1/stop?docker_cleanup=false'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      new URL('https://coolify.example.test/api/v1/applications/app-1/start'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('returns disabled without contacting Sentinel when metrics are off', async () => {
     const request = vi.fn()
     vi.stubGlobal('fetch', request)

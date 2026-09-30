@@ -8,11 +8,13 @@ if (process.env.NODE_ENV === 'production') {
   throw new Error('Development seed is disabled in production.')
 }
 
-if (!process.env.DATABASE_URL) {
-  throw new Error('DATABASE_URL is required.')
+const databaseUrl = process.env.NUXT_DATABASE_URL || process.env.DATABASE_URL
+
+if (!databaseUrl) {
+  throw new Error('NUXT_DATABASE_URL (or legacy DATABASE_URL) is required.')
 }
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+const pool = new pg.Pool({ connectionString: databaseUrl })
 const database = drizzle(pool)
 
 try {

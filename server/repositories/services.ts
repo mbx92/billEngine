@@ -1,5 +1,5 @@
 import { and, asc, count, eq, exists, inArray, ne, notExists, sql } from 'drizzle-orm'
-import type { CreateServiceInput } from '../../shared/schemas/services'
+import type { CreateServiceInput, UpdateServiceInput } from '../../shared/schemas/services'
 import type { ApiService, ApiServiceOptions, ApiServiceResourceLink } from '../../shared/types/api'
 import { useDatabase, type Database, type Transaction } from '../database/client'
 import {
@@ -11,6 +11,7 @@ import {
   services,
 } from '../database/schema'
 import { PlanRepository, type PlanRecord } from './plans'
+import { evaluateInfrastructureAllocation } from '../services/infrastructure/allocation'
 
 type QueryExecutor = Database | Transaction
 
@@ -37,12 +38,23 @@ export class ServiceRepository {
           planId: services.planId,
           planName: services.planName,
           planInclusions: services.planInclusions,
+          planResourceCount: services.planResourceCount,
+          planCpuCores: services.planCpuCores,
+          planMemoryBytes: services.planMemoryBytes,
           status: services.status,
           currency: services.currency,
           priceAmount: services.priceAmount,
           billingCycle: services.billingCycle,
           billingStartDate: services.billingStartDate,
           nextDueDate: services.nextDueDate,
+          invoiceLeadDays: services.invoiceLeadDays,
+          paymentDueDays: services.paymentDueDays,
+          taxRate: services.taxRate,
+          description: services.description,
+          suspendedAt: services.suspendedAt,
+          suspensionReason: services.suspensionReason,
+          cancelledAt: services.cancelledAt,
+          cancellationReason: services.cancellationReason,
           hasBillingRun: exists(billingRun),
           customerId: services.customerId,
           customerName: customers.name,
@@ -59,26 +71,131 @@ export class ServiceRepository {
     const linkedResources = await this.findResourceLinks(rows.map((row) => row.id))
 
     return {
-      rows: rows.map<ApiService>((row) => ({
+      rows: rows.map<ApiService>((row) => {
+        const resources = linkedResources.get(row.id) ?? []
+        return {
+          id: row.id,
+          serviceNumber: row.serviceNumber,
+          name: row.name,
+          planId: row.planId,
+          planName: row.planName,
+          planInclusions: row.planInclusions,
+          planResourceCount: row.planResourceCount,
+          planCpuCores: row.planCpuCores,
+          planMemoryBytes: row.planMemoryBytes?.toString() ?? null,
+          status: row.status,
+          currency: row.currency,
+          priceAmount: row.priceAmount.toString(),
+          billingCycle: row.billingCycle,
+          billingStartDate: row.billingStartDate,
+          nextDueDate: row.hasBillingRun ? row.nextDueDate : row.billingStartDate,
+          invoiceLeadDays: row.invoiceLeadDays,
+          paymentDueDays: row.paymentDueDays,
+          taxRate: row.taxRate,
+          description: row.description,
+          suspendedAt: row.suspendedAt?.toISOString() ?? null,
+          suspensionReason: row.suspensionReason,
+          cancelledAt: row.cancelledAt?.toISOString() ?? null,
+          cancellationReason: row.cancellationReason,
+          customerId: row.customerId,
+          customerName: row.customerName,
+          customerNumber: row.customerNumber,
+          resources,
+          infrastructure: evaluateInfrastructureAllocation(
+            {
+              resourceCount: row.planResourceCount,
+              cpuCores: row.planCpuCores,
+              memoryBytes: row.planMemoryBytes,
+            },
+            resources,
+          ),
+        }
+      }),
+      total: totals[0]?.total ?? 0,
+    }
+  }
+
+  async listByCustomer(customerId: string) {
+    const billingRun = this.database
+      .select({ id: serviceBillingRuns.id })
+      .from(serviceBillingRuns)
+      .where(eq(serviceBillingRuns.serviceId, services.id))
+    const rows = await this.database
+      .select({
+        id: services.id,
+        serviceNumber: services.serviceNumber,
+        name: services.name,
+        planId: services.planId,
+        planName: services.planName,
+        planInclusions: services.planInclusions,
+        planResourceCount: services.planResourceCount,
+        planCpuCores: services.planCpuCores,
+        planMemoryBytes: services.planMemoryBytes,
+        status: services.status,
+        currency: services.currency,
+        priceAmount: services.priceAmount,
+        billingCycle: services.billingCycle,
+        billingStartDate: services.billingStartDate,
+        nextDueDate: services.nextDueDate,
+        hasBillingRun: exists(billingRun),
+        invoiceLeadDays: services.invoiceLeadDays,
+        paymentDueDays: services.paymentDueDays,
+        taxRate: services.taxRate,
+        description: services.description,
+        suspendedAt: services.suspendedAt,
+        suspensionReason: services.suspensionReason,
+        cancelledAt: services.cancelledAt,
+        cancellationReason: services.cancellationReason,
+        customerId: services.customerId,
+        customerName: customers.name,
+        customerNumber: customers.customerNumber,
+      })
+      .from(services)
+      .innerJoin(customers, eq(customers.id, services.customerId))
+      .where(eq(services.customerId, customerId))
+      .orderBy(asc(services.serviceNumber))
+
+    const linkedResources = await this.findResourceLinks(rows.map((row) => row.id))
+    return rows.map<ApiService>((row) => {
+      const resources = linkedResources.get(row.id) ?? []
+      return {
         id: row.id,
         serviceNumber: row.serviceNumber,
         name: row.name,
         planId: row.planId,
         planName: row.planName,
         planInclusions: row.planInclusions,
+        planResourceCount: row.planResourceCount,
+        planCpuCores: row.planCpuCores,
+        planMemoryBytes: row.planMemoryBytes?.toString() ?? null,
         status: row.status,
         currency: row.currency,
         priceAmount: row.priceAmount.toString(),
         billingCycle: row.billingCycle,
         billingStartDate: row.billingStartDate,
         nextDueDate: row.hasBillingRun ? row.nextDueDate : row.billingStartDate,
+        invoiceLeadDays: row.invoiceLeadDays,
+        paymentDueDays: row.paymentDueDays,
+        taxRate: row.taxRate,
+        description: row.description,
+        suspendedAt: row.suspendedAt?.toISOString() ?? null,
+        suspensionReason: row.suspensionReason,
+        cancelledAt: row.cancelledAt?.toISOString() ?? null,
+        cancellationReason: row.cancellationReason,
         customerId: row.customerId,
         customerName: row.customerName,
         customerNumber: row.customerNumber,
-        resources: linkedResources.get(row.id) ?? [],
-      })),
-      total: totals[0]?.total ?? 0,
-    }
+        resources,
+        infrastructure: evaluateInfrastructureAllocation(
+          {
+            resourceCount: row.planResourceCount,
+            cpuCores: row.planCpuCores,
+            memoryBytes: row.planMemoryBytes,
+          },
+          resources,
+        ),
+      }
+    })
   }
 
   async listCreateOptions(): Promise<ApiServiceOptions> {
@@ -103,6 +220,8 @@ export class ServiceRepository {
           serverName: coolifyServers.name,
           projectName: coolifyResources.projectName,
           environmentName: coolifyResources.environmentName,
+          limitsCpus: coolifyResources.limitsCpus,
+          limitsMemoryBytes: coolifyResources.limitsMemoryBytes,
         })
         .from(coolifyResources)
         .innerJoin(coolifyServers, eq(coolifyServers.id, coolifyResources.coolifyServerId))
@@ -126,7 +245,14 @@ export class ServiceRepository {
         .orderBy(asc(coolifyServers.name), asc(coolifyResources.name)),
     ])
 
-    return { plans: planRows, customers: customerRows, resources: resourceRows }
+    return {
+      plans: planRows,
+      customers: customerRows,
+      resources: resourceRows.map((resource) => ({
+        ...resource,
+        limitsMemoryBytes: resource.limitsMemoryBytes?.toString() ?? null,
+      })),
+    }
   }
 
   async findActiveCustomer(transaction: QueryExecutor, id: string) {
@@ -136,6 +262,11 @@ export class ServiceRepository {
       .where(and(eq(customers.id, id), eq(customers.status, 'active')))
       .limit(1)
     return customer ?? null
+  }
+
+  async findById(transaction: QueryExecutor, id: string) {
+    const [service] = await transaction.select().from(services).where(eq(services.id, id)).limit(1)
+    return service ?? null
   }
 
   async currentNumberFloor(transaction: QueryExecutor): Promise<bigint> {
@@ -177,13 +308,23 @@ export class ServiceRepository {
     return rows.map((row) => row.id)
   }
 
-  async findAssignedResourceIds(transaction: QueryExecutor, ids: string[]) {
+  async findAssignedResourceIds(
+    transaction: QueryExecutor,
+    ids: string[],
+    excludeServiceId?: string,
+  ) {
     if (ids.length === 0) return []
+    const assignmentConditions = [
+      inArray(serviceResources.resourceId, ids),
+      ne(services.status, 'cancelled'),
+    ]
+    if (excludeServiceId) assignmentConditions.push(ne(services.id, excludeServiceId))
+
     const rows = await transaction
       .select({ id: serviceResources.resourceId })
       .from(serviceResources)
       .innerJoin(services, eq(services.id, serviceResources.serviceId))
-      .where(and(inArray(serviceResources.resourceId, ids), ne(services.status, 'cancelled')))
+      .where(and(...assignmentConditions))
     return [...new Set(rows.map((row) => row.id))]
   }
 
@@ -202,6 +343,9 @@ export class ServiceRepository {
         planId: plan.id,
         planName: plan.name,
         planInclusions: plan.inclusions,
+        planResourceCount: plan.includedResourceCount,
+        planCpuCores: plan.includedCpuCores,
+        planMemoryBytes: plan.includedMemoryBytes,
         serviceNumber,
         name: input.name,
         description: input.description,
@@ -231,6 +375,77 @@ export class ServiceRepository {
     return created
   }
 
+  async update(
+    transaction: Transaction,
+    id: string,
+    input: UpdateServiceInput,
+    plan: PlanRecord | null,
+  ) {
+    const values: Partial<typeof services.$inferInsert> = { updatedAt: new Date() }
+    if (input.name !== undefined) values.name = input.name
+    if (input.description !== undefined) values.description = input.description
+    if (input.nextDueDate !== undefined) values.nextDueDate = input.nextDueDate
+    if (input.invoiceLeadDays !== undefined) values.invoiceLeadDays = input.invoiceLeadDays
+    if (input.paymentDueDays !== undefined) values.paymentDueDays = input.paymentDueDays
+    if (input.taxRate !== undefined) values.taxRate = input.taxRate
+    if (plan) {
+      values.planId = plan.id
+      values.planName = plan.name
+      values.planInclusions = plan.inclusions
+      values.currency = plan.currency
+      values.priceAmount = plan.priceAmount
+      values.billingCycle = plan.billingCycle
+      values.planResourceCount = plan.includedResourceCount
+      values.planCpuCores = plan.includedCpuCores
+      values.planMemoryBytes = plan.includedMemoryBytes
+    }
+
+    const [updated] = await transaction
+      .update(services)
+      .set(values)
+      .where(eq(services.id, id))
+      .returning()
+    if (!updated) throw new Error('Failed to update service.')
+
+    if (input.resourceIds !== undefined) {
+      await transaction.delete(serviceResources).where(eq(serviceResources.serviceId, id))
+      if (input.resourceIds.length > 0) {
+        await transaction.insert(serviceResources).values(
+          input.resourceIds.map((resourceId) => ({
+            serviceId: id,
+            resourceId,
+          })),
+        )
+      }
+    }
+
+    return updated
+  }
+
+  async transition(
+    transaction: Transaction,
+    id: string,
+    status: 'active' | 'suspended' | 'cancelled',
+    reason: string,
+  ) {
+    const now = new Date()
+    const [updated] = await transaction
+      .update(services)
+      .set({
+        status,
+        suspendedAt: status === 'suspended' ? now : null,
+        suspensionReason: status === 'suspended' ? reason : null,
+        cancelledAt: status === 'cancelled' ? now : null,
+        cancellationReason: status === 'cancelled' ? reason : null,
+        updatedAt: now,
+      })
+      .where(eq(services.id, id))
+      .returning()
+
+    if (!updated) throw new Error('Failed to change service status.')
+    return updated
+  }
+
   private async findResourceLinks(serviceIds: string[]) {
     const links = new Map<string, ApiServiceResourceLink[]>()
     if (serviceIds.length === 0) return links
@@ -241,6 +456,8 @@ export class ServiceRepository {
         resourceId: coolifyResources.id,
         name: coolifyResources.name,
         status: coolifyResources.status,
+        limitsCpus: coolifyResources.limitsCpus,
+        limitsMemoryBytes: coolifyResources.limitsMemoryBytes,
       })
       .from(serviceResources)
       .innerJoin(coolifyResources, eq(coolifyResources.id, serviceResources.resourceId))
@@ -248,7 +465,13 @@ export class ServiceRepository {
 
     for (const row of rows) {
       const existing = links.get(row.serviceId) ?? []
-      existing.push({ id: row.resourceId, name: row.name, status: row.status })
+      existing.push({
+        id: row.resourceId,
+        name: row.name,
+        status: row.status,
+        limitsCpus: row.limitsCpus,
+        limitsMemoryBytes: row.limitsMemoryBytes?.toString() ?? null,
+      })
       links.set(row.serviceId, existing)
     }
 

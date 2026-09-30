@@ -13,7 +13,9 @@ import { requestActor } from '../../utils/actor'
  */
 export default defineEventHandler(async (event) => {
   const session = await requireAdmin(event)
-  const input = generateRecurringInvoicesSchema.parse((await readBody(event).catch(() => ({}))) ?? {})
+  const input = generateRecurringInvoicesSchema.parse(
+    (await readBody(event).catch(() => ({}))) ?? {},
+  )
 
   const jobRuns = new JobRunRepository()
   const jobRun = await jobRuns.start('invoice.recurring')

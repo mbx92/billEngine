@@ -17,6 +17,7 @@ node_modules
 coverage
 test-results
 playwright-report
+backups
 
 # Editors / OS
 .DS_Store
@@ -27,4 +28,3 @@ playwright-report
 # Logs
 *.log
 npm-debug.log*
-

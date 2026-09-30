@@ -16,6 +16,7 @@ import {
   coolifyNodes,
   coolifyResources,
   coolifyServers,
+  customers,
   jobRuns,
   serviceResources,
   services,
@@ -580,16 +581,25 @@ export class CoolifyResourceRepository {
         serviceId: services.id,
         serviceNumber: services.serviceNumber,
         name: services.name,
+        customerName: customers.name,
+        planName: services.planName,
       })
       .from(serviceResources)
       .innerJoin(services, eq(services.id, serviceResources.serviceId))
+      .innerJoin(customers, eq(customers.id, services.customerId))
       .where(
         and(inArray(serviceResources.resourceId, resourceIds), ne(services.status, 'cancelled')),
       )
 
     for (const row of rows) {
       const existing = links.get(row.resourceId) ?? []
-      existing.push({ id: row.serviceId, serviceNumber: row.serviceNumber, name: row.name })
+      existing.push({
+        id: row.serviceId,
+        serviceNumber: row.serviceNumber,
+        name: row.name,
+        customerName: row.customerName,
+        planName: row.planName,
+      })
       links.set(row.resourceId, existing)
     }
 

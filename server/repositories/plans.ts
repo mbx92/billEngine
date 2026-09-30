@@ -23,6 +23,9 @@ export class PlanRepository {
           priceAmount: plans.priceAmount,
           billingCycle: plans.billingCycle,
           inclusions: plans.inclusions,
+          includedResourceCount: plans.includedResourceCount,
+          includedCpuCores: plans.includedCpuCores,
+          includedMemoryBytes: plans.includedMemoryBytes,
           isActive: plans.isActive,
           serviceCount: count(services.id),
           createdAt: plans.createdAt,
@@ -41,6 +44,7 @@ export class PlanRepository {
       rows: rows.map<ApiPlan>((row) => ({
         ...row,
         priceAmount: row.priceAmount.toString(),
+        includedMemoryBytes: row.includedMemoryBytes?.toString() ?? null,
         serviceCount: Number(row.serviceCount),
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
@@ -59,12 +63,19 @@ export class PlanRepository {
         priceAmount: plans.priceAmount,
         billingCycle: plans.billingCycle,
         inclusions: plans.inclusions,
+        includedResourceCount: plans.includedResourceCount,
+        includedCpuCores: plans.includedCpuCores,
+        includedMemoryBytes: plans.includedMemoryBytes,
       })
       .from(plans)
       .where(eq(plans.isActive, true))
       .orderBy(asc(plans.name))
 
-    return rows.map((row) => ({ ...row, priceAmount: row.priceAmount.toString() }))
+    return rows.map((row) => ({
+      ...row,
+      priceAmount: row.priceAmount.toString(),
+      includedMemoryBytes: row.includedMemoryBytes?.toString() ?? null,
+    }))
   }
 
   async findActiveById(transaction: QueryExecutor, id: string): Promise<PlanRecord | null> {
