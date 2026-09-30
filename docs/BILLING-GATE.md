@@ -78,8 +78,9 @@ because the certificate is issued for the public hostname rather than
 `localhost`. Keep the billing hostname pointed directly at its published app
 port (`http://localhost:8010`) so the overdue page itself is never gated.
 
-The test branches use the external `coolify` network and the
-`billengine-gate` alias for forward-auth traffic. Before changing the tunnel,
+The test deployment publishes BillEngine on host port `8010`. Traefik reaches
+the gate through `http://host.docker.internal:8010`; the Coolify proxy already
+maps `host.docker.internal` to the host gateway. Before changing the tunnel,
 verify that both applications are healthy and that the protected application's
 generated labels include the `opswiki-billing-gate` middleware chain.
 
