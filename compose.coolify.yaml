@@ -64,8 +64,10 @@ services:
     ports:
       - '127.0.0.1:${APP_PORT:-8010}:3000'
     networks:
-      - default
-      - coolify
+      default:
+      coolify:
+        aliases:
+          - billengine-gate
     healthcheck:
       test:
         - CMD
