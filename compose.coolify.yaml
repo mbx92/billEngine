@@ -61,8 +61,8 @@ services:
       NUXT_GRACE_NOTICE_INTERVAL_HOURS: '24'
       NUXT_BILLING_GATE_SECRET: ${BILLING_GATE_SECRET:?}
       NUXT_BILLING_GATE_SHARED_KEY: ${BILLING_GATE_SHARED_KEY:?}
-    expose:
-      - '3000'
+    ports:
+      - '127.0.0.1:${APP_PORT:-8010}:3000'
     networks:
       - default
       - coolify
