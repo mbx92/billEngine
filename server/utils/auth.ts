@@ -17,6 +17,25 @@ function createAuth() {
   return betterAuth({
     appName: 'Coolify Billing Platform',
     baseURL: config.betterAuthUrl,
+    // `nuxt dev --host` can be opened through any local interface, while the
+    // configured base URL usually remains localhost. Trust the actual dev
+    // server origin so Better Auth's CSRF check also works through a LAN IP.
+    // Deriving this from the request URL (not its Origin header) keeps
+    // cross-origin requests rejected. Production still only trusts configured
+    // origins/baseURL.
+    trustedOrigins:
+      process.env.NODE_ENV === 'production'
+        ? undefined
+        : (request) => {
+            if (!request) return []
+
+            try {
+              const origin = new URL(request.url).origin
+              return origin === 'null' ? [] : [origin]
+            } catch {
+              return []
+            }
+          },
     secret: config.betterAuthSecret,
     database: drizzleAdapter(useDatabase(), {
       provider: 'pg',

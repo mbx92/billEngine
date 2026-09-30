@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "nuxt build",
-    "dev": "nuxt dev",
+    "dev": "nuxt dev --host",
     "dev:db": "docker compose up -d postgres",
     "dev:db:down": "docker compose down",
     "generate": "nuxt generate",
