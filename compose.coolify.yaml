@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: billing
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
     volumes:
-      - billengine_test_postgres:/var/lib/postgresql/data
+      - billengine_test_postgres_v2:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U billing -d billing']
       interval: 5s
@@ -27,7 +27,6 @@ services:
         condition: service_healthy
 
   fixture:
-    profiles: ['fixture']
     build:
       context: .
       dockerfile: Dockerfile
@@ -78,11 +77,11 @@ services:
       retries: 10
       start_period: 30s
     depends_on:
-      migrate:
+      fixture:
         condition: service_completed_successfully
 
 volumes:
-  billengine_test_postgres:
+  billengine_test_postgres_v2:
 
 networks:
   coolify:
