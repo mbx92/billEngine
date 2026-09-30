@@ -27,6 +27,7 @@ services:
         condition: service_healthy
 
   fixture:
+    profiles: ['fixture']
     build:
       context: .
       dockerfile: Dockerfile
@@ -79,7 +80,7 @@ services:
       retries: 10
       start_period: 30s
     depends_on:
-      fixture:
+      migrate:
         condition: service_completed_successfully
 
 volumes:
