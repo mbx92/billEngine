@@ -62,6 +62,31 @@ For a standard Coolify application this currently requires editing Container
 Labels, preserving the generated labels, and redeploying once. Test on one
 non-critical application before rolling it out broadly.
 
+## Cloudflare Tunnel on the Coolify host
+
+When `cloudflared` publishes an application port directly, for example
+`http://localhost:8009`, the request bypasses Traefik and the billing middleware
+will not run. Point the protected hostname at the local Traefik HTTPS listener
+instead:
+
+```text
+https://localhost:443
+```
+
+For this test topology, enable **No TLS Verify** in the tunnel origin settings
+because the certificate is issued for the public hostname rather than
+`localhost`. Keep the billing hostname pointed directly at its published app
+port (`http://localhost:8010`) so the overdue page itself is never gated.
+
+The test branches use the external `coolify` network and the
+`billengine-gate` alias for forward-auth traffic. Before changing the tunnel,
+verify that both applications are healthy and that the protected application's
+generated labels include the `opswiki-billing-gate` middleware chain.
+
+To roll back immediately, restore the protected hostname origin to its direct
+application port (for OpsWiki, `http://localhost:8009`). Then switch the
+application back to its production branch and redeploy.
+
 ## Local development test
 
 1. Start PostgreSQL, migrate, seed, and run Nuxt as described in the README.
