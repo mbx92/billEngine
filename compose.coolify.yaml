@@ -6,8 +6,9 @@ services:
       POSTGRES_DB: billing
       POSTGRES_USER: billing
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
-      - billengine_test_postgres_v2:/var/lib/postgresql/data
+      - billengine_test_postgres_v3:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U billing -d billing']
       interval: 5s
@@ -81,7 +82,7 @@ services:
         condition: service_completed_successfully
 
 volumes:
-  billengine_test_postgres_v2:
+  billengine_test_postgres_v3:
 
 networks:
   coolify:
