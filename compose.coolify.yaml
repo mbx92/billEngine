@@ -66,20 +66,6 @@ services:
     networks:
       - default
       - coolify
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=coolify
-      - traefik.http.middlewares.billengine-test-redirect.redirectscheme.scheme=https
-      - traefik.http.routers.billengine-test-http.entrypoints=http
-      - traefik.http.routers.billengine-test-http.middlewares=billengine-test-redirect
-      - 'traefik.http.routers.billengine-test-http.rule=Host(`billengine.ocnetworks.web.id`)'
-      - traefik.http.routers.billengine-test-http.service=billengine-test
-      - traefik.http.routers.billengine-test-https.entrypoints=https
-      - 'traefik.http.routers.billengine-test-https.rule=Host(`billengine.ocnetworks.web.id`)'
-      - traefik.http.routers.billengine-test-https.service=billengine-test
-      - traefik.http.routers.billengine-test-https.tls=true
-      - traefik.http.routers.billengine-test-https.tls.certresolver=letsencrypt
-      - traefik.http.services.billengine-test.loadbalancer.server.port=3000
     healthcheck:
       test:
         - CMD
