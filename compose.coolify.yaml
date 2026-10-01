@@ -15,6 +15,18 @@ services:
       timeout: 5s
       retries: 20
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrator
+    restart: 'no'
+    environment:
+      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@billengine-postgres:5432/billing
+    depends_on:
+      billengine-postgres:
+        condition: service_healthy
+
   app:
     build:
       context: .
@@ -64,6 +76,8 @@ services:
     depends_on:
       billengine-postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   billengine_test_postgres_v3:
