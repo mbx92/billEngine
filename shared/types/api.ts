@@ -292,6 +292,43 @@ export interface ApiResourceMetricsResponse {
   data: ApiResourceUsageMetric[]
 }
 
+export type ResourceDomainType = 'platform' | 'custom'
+export type ResourceDomainStatus = 'pending' | 'configuring' | 'verifying' | 'active' | 'failed'
+
+export interface ApiResourceDomain {
+  id: string
+  resourceId: string
+  hostname: string
+  type: ResourceDomainType
+  status: ResourceDomainStatus
+  isPrimary: boolean
+  cnameTarget: string | null
+  providerHostnameStatus: string | null
+  providerSslStatus: string | null
+  verificationRecords: Array<{ type: string; name: string; value: string }>
+  composeServiceName: string | null
+  lastError: string | null
+  lastCheckedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiResourceDomainsResponse {
+  resource: {
+    id: string
+    name: string
+    coolifyUuid: string
+    resourceType: string
+    serverName: string
+  }
+  configuration: {
+    platformDomain: string
+    customDomainsEnabled: boolean
+    cnameTarget: string
+  }
+  data: ApiResourceDomain[]
+}
+
 export interface ApiCoolifySyncResult {
   serverId: string
   processedCount: number

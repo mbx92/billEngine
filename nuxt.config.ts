@@ -58,6 +58,14 @@ export default defineNuxtConfig({
     coolifyApiUrl: developmentEnv.COOLIFY_API_URL || '',
     coolifyApiToken: developmentEnv.COOLIFY_API_TOKEN || '',
     coolifyCredentialsKey: developmentEnv.COOLIFY_CREDENTIALS_KEY || '',
+    cloudflareApiToken: developmentEnv.CLOUDFLARE_API_TOKEN || '',
+    cloudflareZoneId: developmentEnv.CLOUDFLARE_ZONE_ID || '',
+    cloudflareAccountId: developmentEnv.CLOUDFLARE_ACCOUNT_ID || '',
+    cloudflareSaasCnameTarget:
+      developmentEnv.CLOUDFLARE_SAAS_CNAME_TARGET || 'cname.ocnetworks.web.id',
+    cloudflareFallbackOrigin:
+      developmentEnv.CLOUDFLARE_FALLBACK_ORIGIN || 'origin-apps.ocnetworks.web.id',
+    platformDomain: developmentEnv.PLATFORM_DOMAIN || 'ocnetworks.web.id',
     resendApiKey: developmentEnv.RESEND_API_KEY || '',
     emailFrom: developmentEnv.EMAIL_FROM || '',
     metricsToken: developmentEnv.METRICS_TOKEN || '',

@@ -55,3 +55,26 @@ export const resourceMetricsQuerySchema = z.object({
     .transform((value) => value.split(',').filter(Boolean))
     .pipe(z.array(z.uuid()).min(1).max(100)),
 })
+
+const hostnameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(253)
+  .refine((value) => {
+    if (value.includes('://') || value.includes('/') || !value.includes('.')) return false
+    return value.split('.').every((label) => {
+      return (
+        label.length >= 1 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+      )
+    })
+  }, 'Hostname tidak valid.')
+
+export const createResourceDomainSchema = z.object({
+  hostname: hostnameSchema,
+  type: z.enum(['platform', 'custom']),
+  composeServiceName: z.string().trim().min(1).max(160).optional(),
+  isPrimary: z.boolean().default(false),
+})
+
+export type CreateResourceDomainInput = z.infer<typeof createResourceDomainSchema>

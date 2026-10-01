@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LoaderCircle, RefreshCw, Search, Tags, X } from '@lucide/vue'
+import { Globe2, LoaderCircle, RefreshCw, Search, Tags, X } from '@lucide/vue'
 import type {
   ApiCoolifySyncResult,
   ApiResourceListItem,
@@ -492,6 +492,7 @@ function getSyncErrorMessage(error: unknown) {
                 <th class="px-4 py-3 text-right font-semibold">CPU limit / usage</th>
                 <th class="px-4 py-3 text-right font-semibold">RAM limit / usage</th>
                 <th class="px-4 py-3 font-semibold">Last seen</th>
+                <th class="px-4 py-3 text-right font-semibold">Domain</th>
               </tr>
             </thead>
             <tbody>
@@ -579,6 +580,15 @@ function getSyncErrorMessage(error: unknown) {
                 </td>
                 <td class="px-4 py-3 text-xs text-muted">
                   {{ format.dateTime(resource.lastSeenAt) }}
+                </td>
+                <td class="px-4 py-3 text-right">
+                  <NuxtLink
+                    :to="`/resources/${resource.id}/domains`"
+                    class="focus-ring inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong bg-canvas px-2.5 text-xs font-semibold text-ink hover:bg-surface-raised"
+                  >
+                    <Globe2 :size="14" aria-hidden="true" />
+                    Kelola
+                  </NuxtLink>
                 </td>
               </tr>
             </tbody>

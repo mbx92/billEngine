@@ -10,11 +10,11 @@ function poolWithResponses(...responses: Array<{ rows: unknown[] }>) {
 
 describe('database readiness', () => {
   it('is ready when the database, core tables, and latest migration exist', async () => {
-    const relations = Array.from({ length: 10 }, () => ({ relation_name: 'present' }))
+    const relations = Array.from({ length: 11 }, () => ({ relation_name: 'present' }))
     const pool = poolWithResponses(
       { rows: [{ '?column?': 1 }] },
       { rows: relations },
-      { rows: [{ migration_count: '6', latest_migration: '1790755287840' }] },
+      { rows: [{ migration_count: '7', latest_migration: '1790820030730' }] },
     )
 
     await expect(checkDatabaseReadiness(pool)).resolves.toEqual({

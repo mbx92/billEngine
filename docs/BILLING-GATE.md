@@ -115,3 +115,43 @@ Automated policy and token tests run with:
 ```bash
 npm test -- tests/unit/billing-access-policy.test.ts tests/unit/billing-access-control.test.ts
 ```
+
+## Managed application domains
+
+BillEngine can now register domains against a synced Coolify application from
+**Resources → Domain → Kelola**.
+
+Platform domains use a single hostname below `NUXT_PLATFORM_DOMAIN`, for
+example `customer-a.ocnetworks.web.id`. Prepare these once on Cloudflare:
+
+```text
+*.ocnetworks.web.id          -> Cloudflare Tunnel
+origin-apps.ocnetworks.web.id -> Cloudflare Tunnel (fallback origin)
+cname.ocnetworks.web.id       -> origin-apps.ocnetworks.web.id
+```
+
+The wildcard tunnel route must point at the Coolify proxy
+`https://localhost:443`, use **No TLS Verify** for this topology, and be placed
+after every exact tunnel route.
+
+Customer-owned domains require Cloudflare for SaaS. Configure:
+
+```bash
+NUXT_PLATFORM_DOMAIN=ocnetworks.web.id
+NUXT_CLOUDFLARE_API_TOKEN='<zone-scoped token>'
+NUXT_CLOUDFLARE_ZONE_ID='<zone id>'
+NUXT_CLOUDFLARE_ACCOUNT_ID='<account id>'
+NUXT_CLOUDFLARE_SAAS_CNAME_TARGET='cname.ocnetworks.web.id'
+NUXT_CLOUDFLARE_FALLBACK_ORIGIN='origin-apps.ocnetworks.web.id'
+```
+
+The token needs **SSL and Certificates: Write** for Custom Hostnames. DNS Edit
+is optional and should only be granted when BillEngine will create platform
+DNS records. BillEngine never needs a customer's DNS token: the customer adds
+one CNAME from their hostname to the configured SaaS CNAME target.
+
+For Docker Compose applications, BillEngine preserves every existing service
+domain and updates only the selected compose service. Coolify performs an
+instant deploy after a domain change. Existing middleware labels, including
+the billing gate, must be verified on the first trial application before
+rolling the feature out to other resources.

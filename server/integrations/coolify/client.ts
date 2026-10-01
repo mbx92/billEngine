@@ -20,6 +20,14 @@ export interface CoolifyApplicationLimits {
   memoryBytes?: bigint
 }
 
+export interface CoolifyApplicationRouting {
+  uuid: string
+  name: string
+  buildPack: string
+  fqdn: string | null
+  composeDomains: Record<string, { domain?: string }>
+}
+
 export class CoolifyClientError extends Error {
   constructor(
     message: string,
@@ -58,11 +66,87 @@ export class CoolifyClient {
     return Array.isArray(parsed) ? parsed : parsed.data
   }
 
+  async getApplicationRouting(uuid: string): Promise<CoolifyApplicationRouting> {
+    const payload = await this.request<Record<string, unknown>>(
+      `/api/v1/applications/${encodeURIComponent(uuid)}`,
+    )
+
+    return {
+      uuid: String(payload.uuid ?? uuid),
+      name: String(payload.name ?? uuid),
+      buildPack: String(payload.build_pack ?? ''),
+      fqdn: typeof payload.fqdn === 'string' ? payload.fqdn : null,
+      composeDomains: parseComposeDomains(payload.docker_compose_domains),
+    }
+  }
+
+  async addApplicationDomain(uuid: string, hostname: string, composeServiceName?: string) {
+    const routing = await this.getApplicationRouting(uuid)
+    const url = `https://${hostname}`
+
+    if (routing.buildPack === 'dockercompose') {
+      const serviceName = resolveComposeServiceName(routing.composeDomains, composeServiceName)
+      const domains = { ...routing.composeDomains }
+      domains[serviceName] = {
+        ...domains[serviceName],
+        domain: mergeDomainUrls(domains[serviceName]?.domain, url).join(','),
+      }
+
+      await this.updateApplication(uuid, {
+        docker_compose_domains: Object.entries(domains).map(([name, value]) => ({
+          name,
+          ...value,
+        })),
+        instant_deploy: true,
+      })
+      return { composeServiceName: serviceName }
+    }
+
+    await this.updateApplication(uuid, {
+      domains: mergeDomainUrls(routing.fqdn, url).join(','),
+      instant_deploy: true,
+    })
+    return { composeServiceName: null }
+  }
+
+  async removeApplicationDomain(uuid: string, hostname: string, composeServiceName?: string) {
+    const routing = await this.getApplicationRouting(uuid)
+
+    if (routing.buildPack === 'dockercompose') {
+      const serviceName = resolveComposeServiceName(routing.composeDomains, composeServiceName)
+      const domains = { ...routing.composeDomains }
+      domains[serviceName] = {
+        ...domains[serviceName],
+        domain: removeDomainUrl(domains[serviceName]?.domain, hostname).join(','),
+      }
+      await this.updateApplication(uuid, {
+        docker_compose_domains: Object.entries(domains).map(([name, value]) => ({
+          name,
+          ...value,
+        })),
+        instant_deploy: true,
+      })
+      return
+    }
+
+    await this.updateApplication(uuid, {
+      domains: removeDomainUrl(routing.fqdn, hostname).join(','),
+      instant_deploy: true,
+    })
+  }
+
   async updateApplicationLimits(uuid: string, limits: CoolifyApplicationLimits) {
     const body: Record<string, string> = {}
     if (limits.cpuCores !== undefined) body.limits_cpus = limits.cpuCores
     if (limits.memoryBytes !== undefined) body.limits_memory = `${limits.memoryBytes}b`
 
+    return this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}`, {
+      method: 'PATCH',
+      body,
+    })
+  }
+
+  private updateApplication(uuid: string, body: Record<string, unknown>) {
     return this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}`, {
       method: 'PATCH',
       body,
@@ -196,6 +280,73 @@ export class CoolifyClient {
 
     throw new CoolifyClientError('Coolify API request failed.')
   }
+}
+
+function parseComposeDomains(value: unknown): Record<string, { domain?: string }> {
+  let parsed = value
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      return {}
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  return Object.fromEntries(
+    Object.entries(parsed).flatMap(([name, entry]) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+      const domain = (entry as Record<string, unknown>).domain
+      return [[name, { domain: typeof domain === 'string' ? domain : undefined }]]
+    }),
+  )
+}
+
+function resolveComposeServiceName(
+  domains: Record<string, { domain?: string }>,
+  requested?: string,
+): string {
+  if (requested) {
+    if (!(requested in domains)) {
+      throw new CoolifyClientError(`Compose service ${requested} tidak ditemukan.`)
+    }
+    return requested
+  }
+
+  const names = Object.keys(domains)
+  if (names.length === 1) return names[0]!
+  if (names.includes('app')) return 'app'
+  throw new CoolifyClientError(
+    'Aplikasi Compose memiliki beberapa service. Tentukan composeServiceName.',
+  )
+}
+
+function mergeDomainUrls(current: string | null | undefined, nextUrl: string) {
+  const urls = splitDomainUrls(current)
+  const nextHostname = new URL(nextUrl).hostname.toLowerCase()
+  if (!urls.some((url) => new URL(url).hostname.toLowerCase() === nextHostname)) urls.push(nextUrl)
+  return urls
+}
+
+function removeDomainUrl(current: string | null | undefined, hostname: string) {
+  const normalized = hostname.toLowerCase()
+  return splitDomainUrls(current).filter(
+    (url) => new URL(url).hostname.toLowerCase() !== normalized,
+  )
+}
+
+function splitDomainUrls(value: string | null | undefined) {
+  if (!value) return []
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => {
+      try {
+        return ['http:', 'https:'].includes(new URL(item).protocol)
+      } catch {
+        return false
+      }
+    })
 }
 
 function ensureTrailingSlash(value: string): string {

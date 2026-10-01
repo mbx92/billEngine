@@ -93,3 +93,44 @@ export const coolifyResources = pgTable(
     index('coolify_resources_last_seen_at_idx').on(table.lastSeenAt),
   ],
 )
+
+export type ResourceDomainType = 'platform' | 'custom'
+export type ResourceDomainStatus = 'pending' | 'configuring' | 'verifying' | 'active' | 'failed'
+
+export interface DomainVerificationRecord {
+  type: string
+  name: string
+  value: string
+}
+
+export const resourceDomains = pgTable(
+  'resource_domains',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    resourceId: uuid('resource_id')
+      .notNull()
+      .references(() => coolifyResources.id, { onDelete: 'cascade' }),
+    hostname: varchar('hostname', { length: 253 }).notNull(),
+    type: varchar('type', { length: 32 }).$type<ResourceDomainType>().notNull(),
+    status: varchar('status', { length: 32 })
+      .$type<ResourceDomainStatus>()
+      .notNull()
+      .default('pending'),
+    isPrimary: boolean('is_primary').notNull().default(false),
+    cnameTarget: varchar('cname_target', { length: 253 }),
+    providerHostnameId: varchar('provider_hostname_id', { length: 160 }),
+    providerHostnameStatus: varchar('provider_hostname_status', { length: 64 }),
+    providerSslStatus: varchar('provider_ssl_status', { length: 64 }),
+    verificationRecords: jsonb('verification_records').$type<DomainVerificationRecord[]>(),
+    composeServiceName: varchar('compose_service_name', { length: 160 }),
+    lastError: text('last_error'),
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('resource_domains_hostname_uidx').on(table.hostname),
+    index('resource_domains_resource_id_idx').on(table.resourceId),
+    index('resource_domains_status_idx').on(table.status),
+  ],
+)

@@ -43,6 +43,13 @@
       "when": 1790755287840,
       "tag": "0005_dashing_ultron",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790820030730,
+      "tag": "0006_open_ultragirl",
+      "breakpoints": true
     }
   ]
 }

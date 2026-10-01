@@ -11,6 +11,7 @@ const REQUIRED_TABLES = [
   'credit_notes',
   'email_deliveries',
   'audit_logs',
+  'resource_domains',
 ] as const
 
 const EXPECTED_MIGRATION_COUNT = migrationJournal.entries.length

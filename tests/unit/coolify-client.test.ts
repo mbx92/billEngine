@@ -85,6 +85,86 @@ describe('Coolify client', () => {
     )
   })
 
+  it('adds a domain to a standard application and requests an instant deploy', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            uuid: 'app-1',
+            name: 'Website',
+            build_pack: 'dockerfile',
+            fqdn: 'https://website.example.test',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ uuid: 'app-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    vi.stubGlobal('fetch', request)
+
+    await new CoolifyClient('https://coolify.example.test', 'secret').addApplicationDomain(
+      'app-1',
+      'customer.example.test',
+    )
+
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      new URL('https://coolify.example.test/api/v1/applications/app-1'),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          domains: 'https://website.example.test,https://customer.example.test',
+          instant_deploy: true,
+        }),
+      }),
+    )
+  })
+
+  it('updates Docker Compose domains without dropping existing service routes', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            uuid: 'app-1',
+            name: 'Compose app',
+            build_pack: 'dockercompose',
+            docker_compose_domains: JSON.stringify({
+              app: { domain: 'https://old.example.test' },
+              api: { domain: 'https://api.example.test' },
+            }),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ uuid: 'app-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    vi.stubGlobal('fetch', request)
+
+    const result = await new CoolifyClient(
+      'https://coolify.example.test',
+      'secret',
+    ).addApplicationDomain('app-1', 'new.example.test', 'app')
+
+    expect(result).toEqual({ composeServiceName: 'app' })
+    expect(JSON.parse(request.mock.calls[1]![1].body)).toEqual({
+      docker_compose_domains: [
+        { name: 'app', domain: 'https://old.example.test,https://new.example.test' },
+        { name: 'api', domain: 'https://api.example.test' },
+      ],
+      instant_deploy: true,
+    })
+  })
+
   it('does not retry restart requests because they are not idempotent', async () => {
     const request = vi.fn().mockRejectedValue(new Error('connection reset'))
     vi.stubGlobal('fetch', request)
