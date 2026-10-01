@@ -1,5 +1,5 @@
 services:
-  postgres:
+  billengine-postgres:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
@@ -22,7 +22,7 @@ services:
       target: runner
     restart: unless-stopped
     environment:
-      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@postgres:5432/billing
+      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@billengine-postgres:5432/billing
       NUXT_BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
       NUXT_BETTER_AUTH_URL: https://billengine.ocnetworks.web.id
       NUXT_PUBLIC_APP_URL: https://billengine.ocnetworks.web.id
@@ -54,7 +54,7 @@ services:
       retries: 10
       start_period: 30s
     depends_on:
-      postgres:
+      billengine-postgres:
         condition: service_healthy
 
 volumes:
