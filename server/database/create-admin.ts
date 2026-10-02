@@ -22,6 +22,7 @@ if (password.length < 12) {
 
 const pool = new pg.Pool({ connectionString: databaseUrl })
 const database = drizzle(pool)
+let created = false
 
 try {
   await database.transaction(async (transaction) => {
@@ -31,7 +32,7 @@ try {
       .where(eq(users.email, email))
       .limit(1)
 
-    if (existing.length) throw new Error('A user with this email already exists.')
+    if (existing.length) return
 
     const userId = crypto.randomUUID()
     await transaction.insert(users).values({
@@ -47,8 +48,9 @@ try {
       userId,
       password: await hashPassword(password),
     })
+    created = true
   })
-  console.log(`Created super admin: ${email}`)
+  console.log(created ? `Created super admin: ${email}` : `Super admin already exists: ${email}`)
 } finally {
   await pool.end()
 }

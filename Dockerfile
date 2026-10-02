@@ -18,6 +18,14 @@ COPY server/database/schema ./server/database/schema
 COPY scripts/seed-billing-gate-test.mjs ./scripts/seed-billing-gate-test.mjs
 CMD ["npm", "run", "db:migrate:deploy"]
 
+FROM dependencies AS admin
+WORKDIR /app
+ENV NODE_ENV=production
+COPY tsconfig.json ./
+COPY server/database/create-admin.ts ./server/database/create-admin.ts
+COPY server/database/schema ./server/database/schema
+CMD ["sh", "-c", "if [ -n \"$ADMIN_EMAIL\" ] && [ -n \"$ADMIN_PASSWORD\" ]; then exec npx tsx server/database/create-admin.ts; else echo 'Admin bootstrap skipped.'; fi"]
+
 FROM node:22-alpine AS backup
 WORKDIR /app
 RUN apk add --no-cache postgresql-client

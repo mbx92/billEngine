@@ -66,6 +66,21 @@ services:
       backup:
         condition: service_completed_successfully
 
+  admin-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: admin
+    restart: 'no'
+    environment:
+      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@billengine-postgres:5432/billing
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_NAME: ${ADMIN_NAME:-Platform Administrator}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   app:
     build:
       context: .
@@ -127,6 +142,8 @@ services:
       billengine-postgres:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      admin-init:
         condition: service_completed_successfully
     stop_grace_period: 30s
 
