@@ -143,7 +143,10 @@ export class CoolifyClient {
           : {}),
         ...(input.cpuCores ? { limits_cpus: input.cpuCores } : {}),
         ...(input.memoryBytes ? { limits_memory: `${input.memoryBytes}b` } : {}),
-        ...(input.customLabels ? { custom_labels: input.customLabels } : {}),
+        // Coolify requires custom Traefik labels as base64 (plain text → 422).
+        ...(input.customLabels
+          ? { custom_labels: Buffer.from(input.customLabels, 'utf8').toString('base64') }
+          : {}),
         ...(input.tags?.length ? { tags: input.tags } : {}),
         ...(input.hostname && input.buildPack !== 'dockercompose'
           ? { domains: `https://${input.hostname}` }
@@ -463,9 +466,62 @@ function coolifyHttpErrorMessage(status: number, body: string) {
     return 'Coolify API diblokir Cloudflare (Error 1010). Pakai URL internal host Coolify, misalnya http://host.docker.internal:8000.'
   }
   if (status === 403) return 'Coolify API menolak permintaan (HTTP 403).'
-  if (status === 404) return 'Endpoint Coolify API tidak ditemukan (HTTP 404).'
+  if (status === 404) {
+    const notFound = extractCoolifyMessage(body)
+    return notFound
+      ? `Coolify: ${notFound}`
+      : 'Endpoint Coolify API tidak ditemukan (HTTP 404).'
+  }
   if (status >= 500) return `Coolify API sedang error (HTTP ${status}).`
+
+  const validation = extractCoolifyValidationSummary(body)
+  if (validation) return `Coolify API menolak permintaan (HTTP ${status}): ${validation}`
+
+  const message = extractCoolifyMessage(body)
+  if (message) return `Coolify API menolak permintaan (HTTP ${status}): ${message}`
+
   return `Coolify API request failed (HTTP ${status}).`
+}
+
+function extractCoolifyMessage(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { message?: unknown }
+    if (typeof parsed.message === 'string' && parsed.message.trim()) {
+      return sanitizeCoolifyDetail(parsed.message)
+    }
+  } catch {
+    // ignore non-JSON bodies
+  }
+  return null
+}
+
+function extractCoolifyValidationSummary(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { errors?: unknown; message?: unknown }
+    if (!parsed.errors || typeof parsed.errors !== 'object' || Array.isArray(parsed.errors)) {
+      return null
+    }
+
+    const parts = Object.entries(parsed.errors as Record<string, unknown>).flatMap(
+      ([field, value]) => {
+        const messages = Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === 'string')
+          : typeof value === 'string'
+            ? [value]
+            : []
+        return messages.map((message) => `${field}: ${sanitizeCoolifyDetail(message)}`)
+      },
+    )
+
+    if (parts.length === 0) return null
+    return parts.slice(0, 4).join('; ')
+  } catch {
+    return null
+  }
+}
+
+function sanitizeCoolifyDetail(value: string) {
+  return value.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 180)
 }
 
 function coolifyNetworkErrorMessage(baseUrl: string) {

@@ -162,6 +162,7 @@ describe('Coolify client', () => {
       dockerComposeLocation: '/docker-compose.yml',
       cpuCores: '1.5',
       memoryBytes: 1_073_741_824n,
+      customLabels: 'traefik.enable=true',
       tags: ['billengine', 'billengine-job-job-1'],
     })
 
@@ -181,12 +182,41 @@ describe('Coolify client', () => {
           docker_compose_location: '/docker-compose.yml',
           limits_cpus: '1.5',
           limits_memory: '1073741824b',
+          custom_labels: Buffer.from('traefik.enable=true', 'utf8').toString('base64'),
           tags: ['billengine', 'billengine-job-job-1'],
           autogenerate_domain: false,
           instant_deploy: false,
         }),
       }),
     )
+  })
+
+  it('surfaces Coolify validation details for HTTP 422 responses', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            message: 'Validation failed.',
+            errors: {
+              custom_labels: 'The custom_labels should be base64 encoded.',
+            },
+          }),
+          { status: 422 },
+        ),
+      ),
+    )
+
+    const request = new CoolifyClient(
+      'https://coolify.example.test',
+      'secret',
+    ).listApplications()
+
+    await expect(request).rejects.toMatchObject({
+      name: 'CoolifyClientError',
+      statusCode: 422,
+      message: expect.stringContaining('custom_labels'),
+    })
   })
 
   it('upserts application environment values in one idempotent request', async () => {

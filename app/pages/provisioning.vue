@@ -10,6 +10,8 @@ import { apiErrorMessage } from '~/lib/api-error'
 definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Provisioning · Billing Infra' })
 
+const { dateTime } = useFormat()
+
 const {
   data: response,
   status,
@@ -461,7 +463,7 @@ function resourceStatusTone(status: ApiProvisioningJob['resourceStatus']) {
               class="flex gap-3 text-xs"
             >
               <span class="shrink-0 font-mono text-[10px] text-muted">
-                {{ new Date(eventItem.createdAt).toLocaleTimeString('id-ID') }}
+                {{ dateTime(eventItem.createdAt) }}
               </span>
               <span :class="eventItem.level === 'error' ? 'text-danger' : 'text-ink'">
                 {{ eventItem.message }}
