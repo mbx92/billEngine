@@ -1,0 +1,134 @@
+services:
+  # This one-shot service upgrades databases that were originally initialized
+  # with POSTGRES_HOST_AUTH_METHOD=trust. It is also harmless on a fresh volume.
+  postgres-auth:
+    image: alpine:3.22
+    user: '0:0'
+    restart: 'no'
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        hba=/var/lib/postgresql/data/pg_hba.conf
+        if [ -s "$$hba" ]; then
+          sed -i -E 's/^(host[[:space:]].*[[:space:]])trust([[:space:]]*)$$/\1scram-sha-256\2/' "$$hba"
+          chown 70:70 "$$hba"
+          chmod 600 "$$hba"
+        fi
+    volumes:
+      - billengine_test_postgres_v3:/var/lib/postgresql/data
+
+  billengine-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: billing
+      POSTGRES_USER: billing
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - billengine_test_postgres_v3:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U billing -d billing']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      postgres-auth:
+        condition: service_completed_successfully
+
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backup
+    restart: 'no'
+    environment:
+      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@billengine-postgres:5432/billing
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_COUNT: ${BACKUP_RETENTION_COUNT:-14}
+    volumes:
+      - billengine_backups:/backups
+    depends_on:
+      billengine-postgres:
+        condition: service_healthy
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrator
+    restart: 'no'
+    environment:
+      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@billengine-postgres:5432/billing
+    depends_on:
+      backup:
+        condition: service_completed_successfully
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    init: true
+    environment:
+      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@billengine-postgres:5432/billing
+      NUXT_BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      NUXT_BETTER_AUTH_URL: ${APP_URL:-https://billengine.ocnetworks.web.id}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-https://billengine.ocnetworks.web.id}
+      NUXT_PUBLIC_APP_URL: ${APP_URL:-https://billengine.ocnetworks.web.id}
+      NUXT_PUBLIC_COMPANY_NAME: ${COMPANY_NAME:-OC Networks Billing}
+      NUXT_PUBLIC_BILLING_TIMEZONE: ${BILLING_TIMEZONE:-Asia/Makassar}
+      NUXT_COMPANY_NAME: ${COMPANY_NAME:-OC Networks Billing}
+      NUXT_BILLING_TIMEZONE: ${BILLING_TIMEZONE:-Asia/Makassar}
+      NUXT_BILLING_CURRENCY: ${BILLING_CURRENCY:-IDR}
+      NUXT_COOLIFY_API_URL: ${COOLIFY_API_URL:?COOLIFY_API_URL is required}
+      NUXT_COOLIFY_API_TOKEN: ${COOLIFY_API_TOKEN:?COOLIFY_API_TOKEN is required}
+      NUXT_PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-ocnetworks.web.id}
+      NUXT_CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      NUXT_CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+      NUXT_CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      NUXT_CLOUDFLARE_SAAS_CNAME_TARGET: ${CLOUDFLARE_SAAS_CNAME_TARGET:-cname.ocnetworks.web.id}
+      NUXT_CLOUDFLARE_FALLBACK_ORIGIN: ${CLOUDFLARE_FALLBACK_ORIGIN:-origin-apps.ocnetworks.web.id}
+      NUXT_RESEND_API_KEY: ${RESEND_API_KEY:-}
+      NUXT_EMAIL_FROM: ${EMAIL_FROM:-}
+      NUXT_OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      NUXT_BILLING_AUTOMATION_ENABLED: ${BILLING_AUTOMATION_ENABLED:-false}
+      NUXT_BILLING_ACCESS_CONTROL_ENABLED: ${BILLING_ACCESS_CONTROL_ENABLED:-false}
+      NUXT_OVERDUE_GRACE_DAYS: ${OVERDUE_GRACE_DAYS:-7}
+      NUXT_GRACE_NOTICE_INTERVAL_HOURS: ${GRACE_NOTICE_INTERVAL_HOURS:-24}
+      NUXT_BILLING_GATE_SECRET: ${BILLING_GATE_SECRET:-}
+      NUXT_BILLING_GATE_SHARED_KEY: ${BILLING_GATE_SHARED_KEY:-}
+    expose:
+      - '3000'
+    networks:
+      - default
+      - coolify
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      billengine-postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 30s
+
+volumes:
+  # The historical key must not be renamed: Coolify associates it with the
+  # existing production PostgreSQL data volume.
+  billengine_test_postgres_v3:
+  billengine_backups:
+
+networks:
+  coolify:
+    external: true
