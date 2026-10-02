@@ -39,6 +39,19 @@ npm run db:backup
 npm run test:e2e
 ```
 
+## Application provisioning
+
+The **Infrastructure → Provisioning** page creates Coolify applications from reusable deployment
+blueprints and tracks create, environment, domain, deploy, health, and SSL stages in a retryable
+background job. See [docs/PROVISIONING.md](docs/PROVISIONING.md) for prerequisites and supported
+source types.
+
+## Cloudflare Tunnel management
+
+The **Infrastructure → Tunnels** page shows tunnel health and manages public-hostname ingress rules
+for remotely managed Cloudflare Tunnels. See
+[docs/CLOUDFLARE-TUNNELS.md](docs/CLOUDFLARE-TUNNELS.md) for token permissions and routing safety.
+
 Do not use a production database for local development. Coolify tokens, auth secrets, and database credentials must remain in server-side environment variables.
 
 ## Production deployment

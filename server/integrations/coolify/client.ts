@@ -1,8 +1,10 @@
 import type { ResourceMetricsStatus } from '../../../shared/types/api'
 import {
+  coolifyApplicationSchema,
   coolifyApplicationsSchema,
   coolifyCpuMetricsSchema,
   coolifyMemoryMetricsSchema,
+  coolifyProjectsSchema,
   coolifySentinelSettingsSchema,
   coolifyServersSchema,
   type CoolifySentinelSettings,
@@ -26,6 +28,42 @@ export interface CoolifyApplicationRouting {
   buildPack: string
   fqdn: string | null
   composeDomains: Record<string, { domain?: string }>
+}
+
+export interface CoolifyCreatePublicApplicationInput {
+  projectUuid: string
+  serverUuid: string
+  environmentName: string
+  repositoryUrl: string
+  branch: string
+  buildPack: 'nixpacks' | 'railpack' | 'static' | 'dockerfile' | 'dockercompose'
+  name: string
+  description?: string
+  destinationUuid?: string
+  portsExposes?: string
+  baseDirectory?: string
+  dockerfileLocation?: string
+  dockerComposeLocation?: string
+  healthcheckPath?: string
+  healthcheckPort?: string
+  cpuCores?: string
+  memoryBytes?: bigint
+  customLabels?: string
+  tags?: string[]
+  hostname?: string
+  composeServiceName?: string
+}
+
+export interface CoolifyEnvironmentVariable {
+  key: string
+  value: string
+  isShownOnce?: boolean
+}
+
+export interface CoolifyDeployment {
+  uuid: string
+  status: string
+  createdAt: Date | null
 }
 
 export class CoolifyClientError extends Error {
@@ -54,10 +92,127 @@ export class CoolifyClient {
     return true
   }
 
-  async listApplications() {
-    const payload = await this.request<unknown>('/api/v1/applications')
+  async listApplications(tag?: string) {
+    const query = tag ? `?tag=${encodeURIComponent(tag)}` : ''
+    const payload = await this.request<unknown>(`/api/v1/applications${query}`)
     const parsed = coolifyApplicationsSchema.parse(payload)
     return Array.isArray(parsed) ? parsed : parsed.data
+  }
+
+  async listProjects() {
+    const payload = await this.request<unknown>('/api/v1/projects')
+    const parsed = coolifyProjectsSchema.parse(payload)
+    return Array.isArray(parsed) ? parsed : parsed.data
+  }
+
+  async getApplication(uuid: string) {
+    const payload = await this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}`)
+    return coolifyApplicationSchema.parse(payload)
+  }
+
+  async findApplicationByTag(tag: string) {
+    const applications = await this.listApplications(tag)
+    return applications[0] ?? null
+  }
+
+  async createPublicApplication(input: CoolifyCreatePublicApplicationInput) {
+    const payload = await this.request<{ uuid?: unknown }>('/api/v1/applications/public', {
+      method: 'POST',
+      body: {
+        project_uuid: input.projectUuid,
+        server_uuid: input.serverUuid,
+        environment_name: input.environmentName,
+        git_repository: input.repositoryUrl,
+        git_branch: input.branch,
+        build_pack: input.buildPack,
+        name: input.name,
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.destinationUuid ? { destination_uuid: input.destinationUuid } : {}),
+        ...(input.portsExposes ? { ports_exposes: input.portsExposes } : {}),
+        ...(input.baseDirectory ? { base_directory: input.baseDirectory } : {}),
+        ...(input.dockerfileLocation ? { dockerfile_location: input.dockerfileLocation } : {}),
+        ...(input.dockerComposeLocation
+          ? { docker_compose_location: input.dockerComposeLocation }
+          : {}),
+        ...(input.healthcheckPath
+          ? {
+              health_check_enabled: true,
+              health_check_path: input.healthcheckPath,
+              ...(input.healthcheckPort ? { health_check_port: input.healthcheckPort } : {}),
+            }
+          : {}),
+        ...(input.cpuCores ? { limits_cpus: input.cpuCores } : {}),
+        ...(input.memoryBytes ? { limits_memory: `${input.memoryBytes}b` } : {}),
+        ...(input.customLabels ? { custom_labels: input.customLabels } : {}),
+        ...(input.tags?.length ? { tags: input.tags } : {}),
+        ...(input.hostname && input.buildPack !== 'dockercompose'
+          ? { domains: `https://${input.hostname}` }
+          : {}),
+        ...(input.hostname && input.buildPack === 'dockercompose' && input.composeServiceName
+          ? {
+              docker_compose_domains: [
+                { name: input.composeServiceName, domain: `https://${input.hostname}` },
+              ],
+            }
+          : {}),
+        autogenerate_domain: false,
+        instant_deploy: false,
+      },
+    })
+
+    if (typeof payload.uuid !== 'string' || !payload.uuid) {
+      throw new CoolifyClientError('Coolify did not return an application UUID.')
+    }
+    return { uuid: payload.uuid }
+  }
+
+  async upsertApplicationEnvironments(uuid: string, variables: CoolifyEnvironmentVariable[]) {
+    if (variables.length === 0) return
+    await this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}/envs/bulk`, {
+      method: 'PATCH',
+      body: {
+        data: variables.map((variable) => ({
+          key: variable.key,
+          value: variable.value,
+          is_preview: false,
+          is_literal: true,
+          is_shown_once: variable.isShownOnce ?? true,
+        })),
+      },
+    })
+  }
+
+  async deployApplication(uuid: string) {
+    const payload = await this.request<{
+      deployments?: Array<{ resource_uuid?: unknown; deployment_uuid?: unknown }>
+    }>(`/api/v1/deploy?uuid=${encodeURIComponent(uuid)}`, { method: 'POST' })
+    const deployment = payload.deployments?.find((item) => item.resource_uuid === uuid)
+    if (typeof deployment?.deployment_uuid !== 'string' || !deployment.deployment_uuid) {
+      throw new CoolifyClientError('Coolify did not return a deployment UUID.')
+    }
+    return { uuid: deployment.deployment_uuid }
+  }
+
+  async getDeployment(uuid: string): Promise<CoolifyDeployment> {
+    const payload = await this.request<Record<string, unknown>>(
+      `/api/v1/deployments/${encodeURIComponent(uuid)}`,
+    )
+    return parseDeployment(payload)
+  }
+
+  async listApplicationDeployments(uuid: string, take = 5): Promise<CoolifyDeployment[]> {
+    const payload = await this.request<unknown>(
+      `/api/v1/deployments/applications/${encodeURIComponent(uuid)}?skip=0&take=${take}`,
+    )
+    if (!Array.isArray(payload)) return []
+    return payload.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+      try {
+        return [parseDeployment(entry as Record<string, unknown>)]
+      } catch {
+        return []
+      }
+    })
   }
 
   async listServers() {
@@ -80,9 +235,15 @@ export class CoolifyClient {
     }
   }
 
-  async addApplicationDomain(uuid: string, hostname: string, composeServiceName?: string) {
+  async addApplicationDomain(
+    uuid: string,
+    hostname: string,
+    composeServiceName?: string,
+    options: { instantDeploy?: boolean } = {},
+  ) {
     const routing = await this.getApplicationRouting(uuid)
     const url = `https://${hostname}`
+    const instantDeploy = options.instantDeploy ?? true
 
     if (routing.buildPack === 'dockercompose') {
       const serviceName = resolveComposeServiceName(routing.composeDomains, composeServiceName)
@@ -97,14 +258,14 @@ export class CoolifyClient {
           name,
           ...value,
         })),
-        instant_deploy: true,
+        instant_deploy: instantDeploy,
       })
       return { composeServiceName: serviceName }
     }
 
     await this.updateApplication(uuid, {
       domains: mergeDomainUrls(routing.fqdn, url).join(','),
-      instant_deploy: true,
+      instant_deploy: instantDeploy,
     })
     return { composeServiceName: null }
   }
@@ -282,6 +443,22 @@ export class CoolifyClient {
   }
 }
 
+function parseDeployment(payload: Record<string, unknown>): CoolifyDeployment {
+  const uuid = payload.deployment_uuid ?? payload.uuid
+  if (typeof uuid !== 'string' || !uuid) {
+    throw new CoolifyClientError('Coolify deployment payload is missing its UUID.')
+  }
+  const createdAt = payload.created_at
+  return {
+    uuid,
+    status: typeof payload.status === 'string' ? payload.status : 'unknown',
+    createdAt:
+      typeof createdAt === 'string' && !Number.isNaN(Date.parse(createdAt))
+        ? new Date(createdAt)
+        : null,
+  }
+}
+
 function parseComposeDomains(value: unknown): Record<string, { domain?: string }> {
   let parsed = value
   if (typeof value === 'string') {
@@ -292,7 +469,23 @@ function parseComposeDomains(value: unknown): Record<string, { domain?: string }
     }
   }
 
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  if (Array.isArray(parsed)) {
+    return Object.fromEntries(
+      parsed.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+        const candidate = entry as Record<string, unknown>
+        if (typeof candidate.name !== 'string' || !candidate.name) return []
+        return [
+          [
+            candidate.name,
+            { domain: typeof candidate.domain === 'string' ? candidate.domain : undefined },
+          ],
+        ]
+      }),
+    )
+  }
+
+  if (!parsed || typeof parsed !== 'object') return {}
   return Object.fromEntries(
     Object.entries(parsed).flatMap(([name, entry]) => {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
@@ -307,7 +500,7 @@ function resolveComposeServiceName(
   requested?: string,
 ): string {
   if (requested) {
-    if (!(requested in domains)) {
+    if (Object.keys(domains).length > 0 && !(requested in domains)) {
       throw new CoolifyClientError(`Compose service ${requested} tidak ditemukan.`)
     }
     return requested

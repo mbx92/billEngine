@@ -10,6 +10,7 @@ import type {
 } from '../constants/domain'
 
 export type { ResourceClassification, ServiceStatus }
+export type DatabaseMode = 'none' | 'shared' | 'dedicated'
 
 export interface ApiErrorBody {
   error: {
@@ -130,6 +131,7 @@ export interface ApiPlan {
   includedResourceCount: number | null
   includedCpuCores: string | null
   includedMemoryBytes: DecimalString | null
+  databaseMode: DatabaseMode
   isActive: boolean
   serviceCount: number
   createdAt: string
@@ -147,6 +149,7 @@ export interface ApiPlanOption {
   includedResourceCount: number | null
   includedCpuCores: string | null
   includedMemoryBytes: DecimalString | null
+  databaseMode: DatabaseMode
 }
 
 export interface ApiService {
@@ -159,6 +162,7 @@ export interface ApiService {
   planResourceCount: number | null
   planCpuCores: string | null
   planMemoryBytes: DecimalString | null
+  planDatabaseMode: DatabaseMode
   status: ServiceStatus
   currency: string
   priceAmount: DecimalString
@@ -177,6 +181,7 @@ export interface ApiService {
   customerName: string
   customerNumber: string
   resources: ApiServiceResourceLink[]
+  database: ApiServiceDatabase | null
   infrastructure: ApiInfrastructureAllocation
 }
 
@@ -334,6 +339,162 @@ export interface ApiCoolifySyncResult {
   processedCount: number
   nodeCount: number
   syncedAt: string
+}
+
+export type ProvisioningStatus =
+  | 'queued'
+  | 'provisioning_database'
+  | 'importing_database'
+  | 'creating_application'
+  | 'configuring_environment'
+  | 'configuring_domain'
+  | 'deploying'
+  | 'verifying_health'
+  | 'verifying_ssl'
+  | 'active'
+  | 'failed'
+
+export interface ApiDeploymentBlueprint {
+  id: string
+  coolifyServerId: string
+  coolifyServerName: string
+  name: string
+  slug: string
+  description: string | null
+  repositoryUrl: string
+  branch: string
+  buildPack: 'nixpacks' | 'railpack' | 'static' | 'dockerfile' | 'dockercompose'
+  projectUuid: string
+  targetServerUuid: string
+  environmentName: string
+  destinationUuid: string | null
+  baseDirectory: string | null
+  dockerfileLocation: string | null
+  dockerComposeLocation: string | null
+  composeServiceName: string | null
+  portsExposes: string | null
+  healthcheckPath: string | null
+  healthcheckPort: string | null
+  environmentKeys: string[]
+  customLabels: string | null
+  billingGateEnabled: boolean
+  databaseClusterId: string | null
+  databaseEnvironmentKey: string
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiBlueprintCatalog {
+  blueprints: ApiDeploymentBlueprint[]
+  servers: ApiResourceServer[]
+  databaseClusters: Array<{ id: string; name: string }>
+}
+
+export interface ApiProvisioningJobEvent {
+  id: string
+  stage: ProvisioningStatus
+  level: string
+  message: string
+  createdAt: string
+}
+
+export interface ApiProvisioningJob {
+  id: string
+  blueprintId: string
+  blueprintName: string
+  serviceId: string
+  serviceNumber: string
+  serviceName: string
+  customerName: string
+  status: ProvisioningStatus
+  failedStage: ProvisioningStatus | null
+  applicationName: string
+  hostname: string | null
+  domainType: 'platform' | 'custom' | null
+  coolifyApplicationUuid: string | null
+  coolifyDeploymentUuid: string | null
+  resourceId: string | null
+  domainId: string | null
+  serviceDatabaseId: string | null
+  databaseClusterName: string | null
+  databaseName: string | null
+  databaseRoleName: string | null
+  databaseStatus: ApiServiceDatabase['status'] | null
+  resourceStatus: ResourceStatus | null
+  resourceLastSyncedAt: string | null
+  sqlImportFilename: string | null
+  sqlImportedAt: string | null
+  attemptCount: number
+  maxAttempts: number
+  lastError: string | null
+  nextRunAt: string
+  startedAt: string
+  completedAt: string | null
+  events: ApiProvisioningJobEvent[]
+}
+
+export interface ApiProvisioningOverview {
+  blueprints: ApiDeploymentBlueprint[]
+  jobs: ApiProvisioningJob[]
+  services: Array<{
+    id: string
+    serviceNumber: string
+    name: string
+    customerName: string
+    planName: string | null
+    resourceCount: number
+    databaseMode: DatabaseMode
+  }>
+  servers: ApiResourceServer[]
+  databaseClusters: Array<{ id: string; name: string }>
+}
+
+export interface ApiDatabaseCluster {
+  id: string
+  coolifyServerId: string
+  coolifyServerName: string
+  name: string
+  engine: 'postgresql'
+  host: string
+  port: number
+  adminDatabase: string
+  provisionerUsername: string
+  sslMode: 'disable' | 'prefer' | 'require'
+  defaultConnectionLimit: number
+  isActive: boolean
+  hasCredential: boolean
+  activeDatabaseCount: number
+  totalDatabaseCount: number | null
+  connectionStatus: 'connected' | 'unreachable' | 'unchecked'
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiServiceDatabase {
+  id: string
+  serviceId: string
+  databaseClusterId: string
+  clusterName: string
+  databaseName: string
+  roleName: string
+  status: 'provisioning' | 'active' | 'failed' | 'pending_deletion' | 'deleted'
+  lastError: string | null
+  sqlImportedAt: string | null
+  retentionUntil: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiDatabaseClusterOverview {
+  clusters: ApiDatabaseCluster[]
+  servers: ApiResourceServer[]
+}
+
+export interface ApiCoolifyProjectOption {
+  uuid: string
+  name: string
+  description: string | null
 }
 
 export interface ApiActivityListResponse {
@@ -580,4 +741,42 @@ export interface ApiReportSummary {
     invoiced: DecimalString
     collected: DecimalString
   }>
+}
+
+export type CloudflareTunnelStatus = 'inactive' | 'degraded' | 'healthy' | 'down'
+
+export interface ApiCloudflareTunnel {
+  id: string
+  name: string
+  status: CloudflareTunnelStatus
+  configSource: 'local' | 'cloudflare'
+  createdAt: string | null
+  connectionsActiveAt: string | null
+  connectionsInactiveAt: string | null
+  expectedDnsTarget: string
+}
+
+export interface ApiCloudflareTunnelOverview {
+  configured: boolean
+  tunnels: ApiCloudflareTunnel[]
+}
+
+export interface ApiCloudflareTunnelRoute {
+  hostname: string | null
+  path: string | null
+  service: string
+  noTlsVerify: boolean
+  httpHostHeader: string | null
+  originServerName: string | null
+  catchAll: boolean
+}
+
+export interface ApiCloudflareTunnelDetail {
+  tunnel: ApiCloudflareTunnel
+  editable: boolean
+  configuration: {
+    version: number | null
+    updatedAt: string | null
+    routes: ApiCloudflareTunnelRoute[]
+  } | null
 }

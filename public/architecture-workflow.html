@@ -1,0 +1,1486 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Workflow arsitektur BillEngine, Coolify, shared PostgreSQL, domain, dan billing."
+    />
+    <title>BillEngine — Workflow Arsitektur Sistem</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --canvas: #080c12;
+        --surface: #0e151f;
+        --surface-2: #121c28;
+        --line: #263446;
+        --line-soft: #1b2838;
+        --ink: #edf4fb;
+        --muted: #91a1b5;
+        --brand: #64dda1;
+        --brand-soft: rgba(100, 221, 161, 0.1);
+        --blue: #69adff;
+        --blue-soft: rgba(105, 173, 255, 0.1);
+        --amber: #f3bd65;
+        --amber-soft: rgba(243, 189, 101, 0.1);
+        --violet: #b89cff;
+        --violet-soft: rgba(184, 156, 255, 0.1);
+        --danger: #ff8585;
+        --shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px), var(--canvas);
+        background-size: 32px 32px;
+        color: var(--ink);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        line-height: 1.55;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1240px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        z-index: 20;
+        top: 0;
+        border-bottom: 1px solid rgba(38, 52, 70, 0.8);
+        background: rgba(8, 12, 18, 0.88);
+        backdrop-filter: blur(14px);
+      }
+
+      .topbar-inner {
+        display: flex;
+        min-height: 62px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        place-items: center;
+        border: 1px solid rgba(100, 221, 161, 0.4);
+        border-radius: 8px;
+        background: var(--brand-soft);
+        color: var(--brand);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .brand-name {
+        font-size: 14px;
+        font-weight: 750;
+        letter-spacing: -0.01em;
+      }
+
+      .brand-subtitle {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .nav a {
+        border-radius: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+        padding: 7px 10px;
+        text-decoration: none;
+      }
+
+      .nav a:hover {
+        background: var(--surface-2);
+        color: var(--ink);
+      }
+
+      main {
+        padding: 72px 0 80px;
+      }
+
+      .hero {
+        display: grid;
+        align-items: end;
+        gap: 48px;
+        grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.7fr);
+        margin-bottom: 76px;
+      }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 18px;
+        color: var(--brand);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow::before {
+        width: 22px;
+        height: 1px;
+        background: var(--brand);
+        content: '';
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 840px;
+        margin-bottom: 20px;
+        font-size: clamp(42px, 6vw, 76px);
+        font-weight: 760;
+        letter-spacing: -0.055em;
+        line-height: 0.98;
+      }
+
+      .hero-copy {
+        max-width: 760px;
+        margin-bottom: 0;
+        color: #a9b7c8;
+        font-size: clamp(15px, 2vw, 18px);
+        line-height: 1.75;
+      }
+
+      .hero-summary {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(14, 21, 31, 0.86);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .summary-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid var(--line-soft);
+        padding: 14px 16px;
+      }
+
+      .summary-row:last-child {
+        border-bottom: 0;
+      }
+
+      .summary-label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .summary-value {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        font-weight: 700;
+        text-align: right;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .status::before {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--brand);
+        box-shadow: 0 0 12px rgba(100, 221, 161, 0.65);
+        content: '';
+      }
+
+      section {
+        margin-top: 78px;
+        scroll-margin-top: 84px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 32px;
+        margin-bottom: 26px;
+      }
+
+      .section-number {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--brand);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+      }
+
+      h2 {
+        margin-bottom: 0;
+        font-size: clamp(27px, 4vw, 40px);
+        letter-spacing: -0.035em;
+        line-height: 1.08;
+      }
+
+      .section-description {
+        max-width: 500px;
+        margin-bottom: 2px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(14, 21, 31, 0.9);
+        box-shadow: var(--shadow);
+      }
+
+      .panel-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid var(--line-soft);
+        padding: 13px 17px;
+      }
+
+      .panel-title strong {
+        font-size: 12px;
+        letter-spacing: 0.02em;
+      }
+
+      .panel-title code,
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--canvas);
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 10px;
+        padding: 4px 8px;
+      }
+
+      .architecture {
+        padding: 32px;
+      }
+
+      .architecture-flow {
+        display: grid;
+        align-items: stretch;
+        gap: 12px;
+        grid-template-columns: 0.85fr 32px 0.9fr 32px 1.35fr 32px 1.15fr;
+      }
+
+      .flow-node {
+        position: relative;
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface-2);
+        padding: 17px;
+      }
+
+      .flow-node.primary {
+        border-color: rgba(100, 221, 161, 0.42);
+        background: var(--brand-soft);
+      }
+
+      .flow-node.external {
+        border-color: rgba(105, 173, 255, 0.34);
+        background: var(--blue-soft);
+      }
+
+      .flow-node.data {
+        border-color: rgba(184, 156, 255, 0.34);
+        background: var(--violet-soft);
+      }
+
+      .node-type {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .flow-node h3 {
+        margin-bottom: 7px;
+        font-size: 15px;
+        line-height: 1.25;
+      }
+
+      .flow-node p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .arrow {
+        display: grid;
+        place-items: center;
+        color: #53677f;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 20px;
+      }
+
+      .billengine-layers {
+        display: grid;
+        gap: 7px;
+        margin-top: 13px;
+      }
+
+      .layer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid rgba(100, 221, 161, 0.17);
+        border-radius: 7px;
+        background: rgba(8, 12, 18, 0.48);
+        color: #cfe0dc;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        padding: 7px 9px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 8px;
+      }
+
+      .mini-node {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        background: rgba(8, 12, 18, 0.5);
+        padding: 9px 10px;
+      }
+
+      .mini-node strong {
+        display: block;
+        margin-bottom: 2px;
+        font-size: 11px;
+      }
+
+      .mini-node span {
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .truth-grid {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(3, 1fr);
+        margin-top: 14px;
+      }
+
+      .truth-card {
+        border: 1px solid var(--line-soft);
+        border-radius: 12px;
+        background: rgba(8, 12, 18, 0.42);
+        padding: 17px;
+      }
+
+      .truth-card h3 {
+        margin-bottom: 8px;
+        font-size: 13px;
+      }
+
+      .truth-card p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .truth-card.billing {
+        border-top-color: var(--brand);
+      }
+
+      .truth-card.coolify {
+        border-top-color: var(--blue);
+      }
+
+      .truth-card.shared-db {
+        border-top-color: var(--violet);
+      }
+
+      .provisioning {
+        padding: 24px;
+      }
+
+      .stage-row {
+        display: grid;
+        align-items: stretch;
+        gap: 8px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+
+      .stage-row + .stage-row {
+        margin-top: 8px;
+      }
+
+      .stage {
+        position: relative;
+        min-height: 124px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--surface-2);
+        padding: 14px;
+      }
+
+      .stage:not(:last-child)::after {
+        position: absolute;
+        z-index: 2;
+        top: 50%;
+        right: -9px;
+        width: 9px;
+        border-top: 1px solid #506279;
+        content: '';
+      }
+
+      .stage-no {
+        display: grid;
+        width: 24px;
+        height: 24px;
+        margin-bottom: 13px;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--brand);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        font-weight: 800;
+      }
+
+      .stage strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 12px;
+      }
+
+      .stage p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .stage.database-stage {
+        border-color: rgba(184, 156, 255, 0.32);
+        background: var(--violet-soft);
+      }
+
+      .stage.coolify-stage {
+        border-color: rgba(105, 173, 255, 0.3);
+        background: var(--blue-soft);
+      }
+
+      .stage.success-stage {
+        border-color: rgba(100, 221, 161, 0.38);
+        background: var(--brand-soft);
+      }
+
+      .turn {
+        display: flex;
+        height: 42px;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: calc(10% - 5px);
+        color: #53677f;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 18px;
+      }
+
+      .turn span {
+        display: inline-block;
+        transform: rotate(90deg);
+      }
+
+      .status-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 20px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line-soft);
+      }
+
+      .status-line code {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--canvas);
+        color: #afbdcc;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        padding: 5px 7px;
+      }
+
+      .status-line .active {
+        border-color: rgba(100, 221, 161, 0.32);
+        color: var(--brand);
+      }
+
+      .database-map {
+        display: grid;
+        gap: 20px;
+        grid-template-columns: 0.9fr 1.35fr 0.95fr;
+        padding: 26px;
+      }
+
+      .db-column {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .column-label {
+        margin-bottom: 10px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .control-card,
+      .app-card {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--surface-2);
+        padding: 16px;
+      }
+
+      .control-card + .control-card,
+      .app-card + .app-card {
+        margin-top: 9px;
+      }
+
+      .control-card strong,
+      .app-card strong {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 12px;
+      }
+
+      .control-card p,
+      .app-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .postgres {
+        border: 1px solid rgba(184, 156, 255, 0.36);
+        border-radius: 14px;
+        background: var(--violet-soft);
+        padding: 19px;
+      }
+
+      .postgres-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 15px;
+      }
+
+      .postgres-head h3 {
+        margin-bottom: 4px;
+        font-size: 15px;
+      }
+
+      .postgres-head p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .db-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .logical-db {
+        display: grid;
+        align-items: center;
+        gap: 10px;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        border: 1px solid rgba(184, 156, 255, 0.18);
+        border-radius: 8px;
+        background: rgba(8, 12, 18, 0.52);
+        padding: 9px;
+      }
+
+      .db-icon {
+        display: grid;
+        width: 26px;
+        height: 26px;
+        place-items: center;
+        border-radius: 6px;
+        background: rgba(184, 156, 255, 0.14);
+        color: var(--violet);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        font-weight: 800;
+      }
+
+      .logical-db strong {
+        display: block;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .logical-db small {
+        display: block;
+        overflow: hidden;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 8px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .limit {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 8px;
+        padding: 3px 6px;
+      }
+
+      .db-note {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, 1fr);
+        margin-top: 14px;
+      }
+
+      .note-card {
+        border-left: 2px solid var(--violet);
+        background: rgba(8, 12, 18, 0.35);
+        padding: 9px 11px;
+      }
+
+      .note-card strong {
+        display: block;
+        margin-bottom: 2px;
+        font-size: 10px;
+      }
+
+      .note-card span {
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .billing-grid {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(4, 1fr);
+      }
+
+      .billing-card {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(14, 21, 31, 0.9);
+        padding: 18px;
+      }
+
+      .billing-card:not(:last-child)::after {
+        position: absolute;
+        top: 30px;
+        right: -15px;
+        width: 15px;
+        border-top: 1px solid #506279;
+        content: '';
+      }
+
+      .billing-card .stage-no {
+        margin-bottom: 11px;
+      }
+
+      .billing-card h3 {
+        margin-bottom: 7px;
+        font-size: 13px;
+      }
+
+      .billing-card p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .gate {
+        margin-top: 14px;
+        border: 1px solid rgba(243, 189, 101, 0.3);
+        border-radius: 12px;
+        background: var(--amber-soft);
+        padding: 17px;
+      }
+
+      .gate-flow {
+        display: grid;
+        align-items: center;
+        gap: 10px;
+        grid-template-columns: 1fr 28px 1.1fr 28px 1fr;
+      }
+
+      .gate-node {
+        border: 1px solid rgba(243, 189, 101, 0.2);
+        border-radius: 8px;
+        background: rgba(8, 12, 18, 0.48);
+        padding: 12px;
+      }
+
+      .gate-node strong {
+        display: block;
+        margin-bottom: 3px;
+        font-size: 11px;
+      }
+
+      .gate-node span {
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .operations-grid {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .checklist {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .checklist li {
+        position: relative;
+        border-bottom: 1px solid var(--line-soft);
+        color: #bdc9d7;
+        font-size: 12px;
+        padding: 12px 16px 12px 42px;
+      }
+
+      .checklist li:last-child {
+        border-bottom: 0;
+      }
+
+      .checklist li::before {
+        position: absolute;
+        top: 13px;
+        left: 17px;
+        display: grid;
+        width: 16px;
+        height: 16px;
+        place-items: center;
+        border: 1px solid rgba(100, 221, 161, 0.38);
+        border-radius: 999px;
+        color: var(--brand);
+        content: '✓';
+        font-size: 9px;
+        font-weight: 900;
+      }
+
+      .callout {
+        margin-top: 14px;
+        border: 1px solid rgba(243, 189, 101, 0.3);
+        border-radius: 12px;
+        background: var(--amber-soft);
+        color: #d6c4a4;
+        font-size: 11px;
+        padding: 14px 16px;
+      }
+
+      .callout strong {
+        color: var(--amber);
+      }
+
+      footer {
+        border-top: 1px solid var(--line-soft);
+        color: var(--muted);
+        font-size: 11px;
+        padding: 24px 0 40px;
+      }
+
+      .footer-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      @media (max-width: 980px) {
+        .hero {
+          align-items: start;
+          grid-template-columns: 1fr;
+        }
+
+        .hero-summary {
+          max-width: 520px;
+        }
+
+        .architecture-flow {
+          grid-template-columns: 1fr;
+        }
+
+        .architecture-flow > .arrow {
+          min-height: 26px;
+          transform: rotate(90deg);
+        }
+
+        .stage-row {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .stage:not(:last-child)::after,
+        .billing-card:not(:last-child)::after {
+          display: none;
+        }
+
+        .turn {
+          display: none;
+        }
+
+        .database-map {
+          grid-template-columns: 1fr;
+        }
+
+        .billing-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+
+      @media (max-width: 700px) {
+        .shell {
+          width: min(100% - 22px, 1240px);
+        }
+
+        .topbar-inner {
+          min-height: 56px;
+        }
+
+        .brand-subtitle,
+        .nav {
+          display: none;
+        }
+
+        main {
+          padding-top: 48px;
+        }
+
+        .hero {
+          gap: 30px;
+          margin-bottom: 60px;
+        }
+
+        .section-head {
+          align-items: start;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .architecture,
+        .provisioning,
+        .database-map {
+          padding: 16px;
+        }
+
+        .truth-grid,
+        .stage-row,
+        .billing-grid,
+        .operations-grid,
+        .db-note,
+        .gate-flow {
+          grid-template-columns: 1fr;
+        }
+
+        .stage {
+          min-height: auto;
+        }
+
+        .gate-flow > .arrow {
+          min-height: 20px;
+          transform: rotate(90deg);
+        }
+
+        .footer-inner {
+          align-items: start;
+          flex-direction: column;
+        }
+      }
+
+      @media print {
+        :root {
+          color-scheme: light;
+          --canvas: #ffffff;
+          --surface: #ffffff;
+          --surface-2: #f6f8fa;
+          --line: #cdd5df;
+          --line-soft: #e5e9ef;
+          --ink: #15202b;
+          --muted: #566575;
+          --shadow: none;
+        }
+
+        body {
+          background: white;
+        }
+
+        .topbar {
+          position: static;
+          background: white;
+        }
+
+        .nav {
+          display: none;
+        }
+
+        main {
+          padding-top: 36px;
+        }
+
+        section,
+        .panel,
+        .billing-card {
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <a class="brand" href="/" aria-label="Kembali ke BillEngine">
+          <span class="brand-mark">BE</span>
+          <span>
+            <span class="brand-name">BillEngine</span>
+            <span class="brand-subtitle"> / Architecture Workflow</span>
+          </span>
+        </a>
+        <nav class="nav" aria-label="Navigasi halaman">
+          <a href="#architecture">Arsitektur</a>
+          <a href="#provisioning">Provisioning</a>
+          <a href="#database">Database</a>
+          <a href="#billing">Billing</a>
+          <a href="#operations">Operasional</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="shell">
+      <div class="hero">
+        <div>
+          <div class="eyebrow">System map · single-server baseline</div>
+          <h1>Workflow arsitektur BillEngine.</h1>
+          <p class="hero-copy">
+            BillEngine menjadi control plane komersial di atas Coolify: menghubungkan customer,
+            plan, service, provisioning aplikasi, shared PostgreSQL, domain, invoice, dan kontrol
+            akses billing dalam satu alur yang dapat diaudit.
+          </p>
+        </div>
+        <aside class="hero-summary" aria-label="Ringkasan arsitektur">
+          <div class="summary-row">
+            <span class="summary-label">Topology</span>
+            <span class="summary-value status">Single Coolify Server</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Application</span>
+            <span class="summary-value">Nuxt 4 + Nitro</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Business data</span>
+            <span class="summary-value">PostgreSQL Core</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Infrastructure</span>
+            <span class="summary-value">Coolify REST API</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Database mode</span>
+            <span class="summary-value">Shared / service isolation</span>
+          </div>
+        </aside>
+      </div>
+
+      <section id="architecture">
+        <div class="section-head">
+          <div>
+            <span class="section-number">01 / SYSTEM CONTEXT</span>
+            <h2>Peta komponen dan batas tanggung jawab</h2>
+          </div>
+          <p class="section-description">
+            Browser hanya berbicara dengan BillEngine. Token Coolify dan kredensial database tidak
+            pernah dikirim ke client.
+          </p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">
+            <strong>High-level request flow</strong>
+            <code>HTTPS / private network</code>
+          </div>
+          <div class="architecture">
+            <div class="architecture-flow">
+              <article class="flow-node">
+                <span class="node-type">Actors</span>
+                <h3>Admin & Customer</h3>
+                <p>Dashboard admin, customer portal, invoice, pembayaran, dan status service.</p>
+              </article>
+              <div class="arrow" aria-hidden="true">→</div>
+              <article class="flow-node external">
+                <span class="node-type">Public ingress</span>
+                <h3>Cloudflare</h3>
+                <p>DNS, Tunnel, TLS publik, dan hostname menuju proxy pada server Coolify.</p>
+              </article>
+              <div class="arrow" aria-hidden="true">→</div>
+              <article class="flow-node primary">
+                <span class="node-type">Commercial control plane</span>
+                <h3>BillEngine</h3>
+                <p>Nuxt UI dan Nitro API menjalankan autentikasi, aturan bisnis, serta worker.</p>
+                <div class="billengine-layers">
+                  <div class="layer"><span>UI</span><span>Vue Pages</span></div>
+                  <div class="layer"><span>API</span><span>Auth + Validation</span></div>
+                  <div class="layer"><span>Services</span><span>Business Rules</span></div>
+                  <div class="layer"><span>Workers</span><span>Jobs + Retry</span></div>
+                </div>
+              </article>
+              <div class="arrow" aria-hidden="true">→</div>
+              <article class="flow-node data">
+                <span class="node-type">Server-side boundaries</span>
+                <div class="stack">
+                  <div class="mini-node">
+                    <strong>PostgreSQL Core</strong>
+                    <span>Customer, service, invoice, payment, job, audit</span>
+                  </div>
+                  <div class="mini-node">
+                    <strong>Coolify API</strong>
+                    <span>App, deploy, resource limit, health, domain</span>
+                  </div>
+                  <div class="mini-node">
+                    <strong>Shared PostgreSQL</strong>
+                    <span>Database dan role terisolasi per service</span>
+                  </div>
+                  <div class="mini-node">
+                    <strong>Resend / Cloudflare API</strong>
+                    <span>Email invoice dan otomasi public hostname</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="truth-grid">
+              <article class="truth-card billing">
+                <h3>BillEngine = Commercial truth</h3>
+                <p>Ownership, plan, harga, siklus tagihan, invoice, payment, dan audit history.</p>
+              </article>
+              <article class="truth-card coolify">
+                <h3>Coolify = Infrastructure truth</h3>
+                <p>Container, deployment, runtime status, domain, CPU, RAM, dan network.</p>
+              </article>
+              <article class="truth-card shared-db">
+                <h3>PostgreSQL = Persistent truth</h3>
+                <p>
+                  Core database menyimpan bisnis; shared cluster menyimpan data aplikasi customer.
+                </p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="provisioning">
+        <div class="section-head">
+          <div>
+            <span class="section-number">02 / PROVISIONING WORKFLOW</span>
+            <h2>Dari service hingga aplikasi aktif</h2>
+          </div>
+          <p class="section-description">
+            Setiap tahap disimpan sebagai event. Kegagalan dapat dilanjutkan dengan retry tanpa
+            membuat aplikasi atau database kedua.
+          </p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">
+            <strong>End-to-end provisioning pipeline</strong>
+            <span class="chip">Idempotent · auditable · retryable</span>
+          </div>
+          <div class="provisioning">
+            <div class="stage-row">
+              <article class="stage">
+                <span class="stage-no">01</span>
+                <strong>Customer + Plan</strong>
+                <p>Admin memilih customer dan plan berisi harga, CPU, RAM, serta database mode.</p>
+              </article>
+              <article class="stage">
+                <span class="stage-no">02</span>
+                <strong>Create Service</strong>
+                <p>
+                  Entitlement plan disalin sebagai snapshot agar perubahan plan tidak diam-diam
+                  mengubah service.
+                </p>
+              </article>
+              <article class="stage">
+                <span class="stage-no">03</span>
+                <strong>Select Blueprint</strong>
+                <p>
+                  Repository, branch, build pack, target Coolify, env key, routing, dan cluster
+                  dipilih.
+                </p>
+              </article>
+              <article class="stage">
+                <span class="stage-no">04</span>
+                <strong>Queue Job</strong>
+                <p>Input divalidasi, secret dienkripsi, SQL opsional dibatasi maksimal 10 MB.</p>
+              </article>
+              <article class="stage database-stage">
+                <span class="stage-no">05</span>
+                <strong>Shared DB?</strong>
+                <p>
+                  Jika plan menggunakan shared database, worker menyiapkan database dan role
+                  service.
+                </p>
+              </article>
+            </div>
+
+            <div class="turn" aria-hidden="true"><span>→</span></div>
+
+            <div class="stage-row">
+              <article class="stage database-stage">
+                <span class="stage-no">06</span>
+                <strong>Provision + Import</strong>
+                <p>
+                  Buat role, database, permission, connection limit, lalu impor SQL secara
+                  transaksional.
+                </p>
+              </article>
+              <article class="stage coolify-stage">
+                <span class="stage-no">07</span>
+                <strong>Create Coolify App</strong>
+                <p>
+                  Worker memanggil API Coolify dengan recovery tag unik untuk mencegah duplikasi.
+                </p>
+              </article>
+              <article class="stage coolify-stage">
+                <span class="stage-no">08</span>
+                <strong>Configure Runtime</strong>
+                <p>
+                  Environment dikirim; DATABASE_URL dikelola sistem dan tidak dapat ditimpa manual.
+                </p>
+              </article>
+              <article class="stage coolify-stage">
+                <span class="stage-no">09</span>
+                <strong>Domain + Deploy</strong>
+                <p>Hostname diterapkan, aplikasi dideploy, lalu status deployment dipantau.</p>
+              </article>
+              <article class="stage success-stage">
+                <span class="stage-no">10</span>
+                <strong>Verify → Active</strong>
+                <p>Health check dan SSL harus valid sebelum job serta service dinyatakan aktif.</p>
+              </article>
+            </div>
+
+            <div class="status-line" aria-label="Status job provisioning">
+              <code>queued</code>
+              <code>provisioning_database</code>
+              <code>importing_database</code>
+              <code>creating_application</code>
+              <code>configuring_environment</code>
+              <code>configuring_domain</code>
+              <code>deploying</code>
+              <code>verifying_health</code>
+              <code>verifying_ssl</code>
+              <code class="active">active</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="database">
+        <div class="section-head">
+          <div>
+            <span class="section-number">03 / SHARED DATABASE</span>
+            <h2>Satu cluster, isolasi per service</h2>
+          </div>
+          <p class="section-description">
+            Shared berarti berbagi proses PostgreSQL dan resource server, bukan berbagi kredensial
+            atau database antarcustomer.
+          </p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">
+            <strong>Database control & runtime paths</strong>
+            <span class="chip">Private network only</span>
+          </div>
+          <div class="database-map">
+            <div class="db-column">
+              <span class="column-label">Control path</span>
+              <article class="control-card">
+                <strong>BillEngine Worker</strong>
+                <p>Menggunakan kredensial provisioner terenkripsi.</p>
+              </article>
+              <article class="control-card">
+                <strong>Provisioning actions</strong>
+                <p>CREATE ROLE, CREATE DATABASE, GRANT, import SQL, dan retry.</p>
+              </article>
+            </div>
+
+            <div class="db-column">
+              <span class="column-label">Shared PostgreSQL resource</span>
+              <article class="postgres">
+                <div class="postgres-head">
+                  <div>
+                    <h3>customer-postgres-shared</h3>
+                    <p>Persistent volume · scheduled backup · private network</p>
+                  </div>
+                  <span class="chip">:5432</span>
+                </div>
+                <div class="db-list">
+                  <div class="logical-db">
+                    <span class="db-icon">DB</span>
+                    <span>
+                      <strong>be_svc_000001</strong>
+                      <small>role: be_svc_000001_app</small>
+                    </span>
+                    <span class="limit">20 conn</span>
+                  </div>
+                  <div class="logical-db">
+                    <span class="db-icon">DB</span>
+                    <span>
+                      <strong>be_svc_000002</strong>
+                      <small>role: be_svc_000002_app</small>
+                    </span>
+                    <span class="limit">20 conn</span>
+                  </div>
+                  <div class="logical-db">
+                    <span class="db-icon">DB</span>
+                    <span>
+                      <strong>be_svc_000003</strong>
+                      <small>role: be_svc_000003_app</small>
+                    </span>
+                    <span class="limit">40 conn</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="db-column">
+              <span class="column-label">Application path</span>
+              <article class="app-card">
+                <strong>Customer App A</strong>
+                <p>DATABASE_URL → database dan role service A saja.</p>
+              </article>
+              <article class="app-card">
+                <strong>Customer App B</strong>
+                <p>DATABASE_URL → database dan role service B saja.</p>
+              </article>
+              <article class="app-card">
+                <strong>Customer App C</strong>
+                <p>DATABASE_URL → database dan role service C saja.</p>
+              </article>
+            </div>
+          </div>
+          <div class="db-note">
+            <div class="note-card">
+              <strong>Credential isolation</strong>
+              <span>Password aplikasi berbeda untuk setiap service.</span>
+            </div>
+            <div class="note-card">
+              <strong>Access isolation</strong>
+              <span>Role tidak diberi akses ke database service lain.</span>
+            </div>
+            <div class="note-card">
+              <strong>Lifecycle isolation</strong>
+              <span>Alokasi, retry, retention, dan audit dicatat per service.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="billing">
+        <div class="section-head">
+          <div>
+            <span class="section-number">04 / BILLING & ACCESS</span>
+            <h2>Resource menjadi layanan yang dapat ditagih</h2>
+          </div>
+          <p class="section-description">
+            Sinkronisasi membaca kondisi aktual dari Coolify, sedangkan BillEngine menjaga relasi
+            customer, kontrak plan, invoice, dan payment.
+          </p>
+        </div>
+
+        <div class="billing-grid">
+          <article class="billing-card">
+            <span class="stage-no">01</span>
+            <h3>Coolify Resource Sync</h3>
+            <p>
+              Aplikasi, status container, CPU, RAM, node, project, dan domain disalin sebagai
+              snapshot.
+            </p>
+          </article>
+          <article class="billing-card">
+            <span class="stage-no">02</span>
+            <h3>Resource ↔ Service</h3>
+            <p>Resource ditautkan ke service customer dan diperiksa terhadap entitlement plan.</p>
+          </article>
+          <article class="billing-card">
+            <span class="stage-no">03</span>
+            <h3>Recurring Invoice</h3>
+            <p>Scheduler membuat invoice periodik secara idempotent dan mencatat delivery email.</p>
+          </article>
+          <article class="billing-card">
+            <span class="stage-no">04</span>
+            <h3>Payment & Audit</h3>
+            <p>
+              Pembayaran dialokasikan, status invoice diperbarui, dan seluruh aksi penting diaudit.
+            </p>
+          </article>
+        </div>
+
+        <div class="gate">
+          <div class="gate-flow">
+            <div class="gate-node">
+              <strong>Request customer</strong>
+              <span>Browser, API, asset, atau webhook menuju aplikasi.</span>
+            </div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="gate-node">
+              <strong>Traefik billing-gate@file</strong>
+              <span>ForwardAuth memeriksa status akses service pada BillEngine.</span>
+            </div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="gate-node">
+              <strong>Allow / Notice / 402</strong>
+              <span
+                >Aplikasi tetap hidup; hanya akses yang dikendalikan sesuai status billing.</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="operations">
+        <div class="section-head">
+          <div>
+            <span class="section-number">05 / OPERATING BASELINE</span>
+            <h2>Checklist aman untuk satu server</h2>
+          </div>
+          <p class="section-description">
+            Baseline ini membuat model satu server sederhana: seluruh komponen berbagi jalur privat
+            yang dapat diprediksi.
+          </p>
+        </div>
+
+        <div class="operations-grid">
+          <div class="panel">
+            <div class="panel-title"><strong>Network & security</strong><code>required</code></div>
+            <ul class="checklist">
+              <li>
+                BillEngine, aplikasi customer, dan PostgreSQL berada pada network yang saling
+                terhubung.
+              </li>
+              <li>Port PostgreSQL tidak dipublikasikan ke internet.</li>
+              <li>Coolify token dan credential provisioner hanya tersedia pada server side.</li>
+              <li>
+                Dynamic middleware billing gate tidak dipasang pada domain BillEngine sendiri.
+              </li>
+            </ul>
+          </div>
+          <div class="panel">
+            <div class="panel-title">
+              <strong>Reliability & validation</strong><code>required</code>
+            </div>
+            <ul class="checklist">
+              <li>Persistent volume serta backup PostgreSQL terjadwal dan pernah diuji restore.</li>
+              <li>Cluster test membuktikan BillEngine dapat mengakses PostgreSQL.</li>
+              <li>Aplikasi uji membuktikan DATABASE_URL dapat dipakai dari container customer.</li>
+              <li>
+                Health check, SSL, job events, failed jobs, disk, dan koneksi database dipantau.
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>Catatan penting:</strong> test koneksi cluster hanya menguji jalur BillEngine →
+          PostgreSQL. Sebelum produksi, tetap lakukan provisioning aplikasi uji untuk memastikan
+          jalur Container Aplikasi → PostgreSQL juga berhasil.
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell footer-inner">
+        <span>BillEngine · Coolify Billing Control Plane</span>
+        <span class="mono">Architecture workflow / single-server baseline</span>
+      </div>
+    </footer>
+  </body>
+</html>

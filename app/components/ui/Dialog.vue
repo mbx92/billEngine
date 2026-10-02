@@ -7,8 +7,9 @@ const props = withDefaults(
     description?: string
     size?: 'md' | 'lg' | 'xl'
     closeDisabled?: boolean
+    fixedHeight?: boolean
   }>(),
-  { description: undefined, size: 'lg', closeDisabled: false },
+  { description: undefined, size: 'lg', closeDisabled: false, fixedHeight: false },
 )
 
 const emit = defineEmits<{ close: [] }>()
@@ -85,7 +86,10 @@ onBeforeUnmount(() => {
         :aria-describedby="description ? descriptionId : undefined"
         tabindex="-1"
         class="flex max-h-[calc(100dvh-1rem)] w-full flex-col rounded-t-xl border border-line-strong bg-surface shadow-2xl shadow-black/40 outline-none sm:max-h-[calc(100dvh-2rem)] sm:rounded-xl"
-        :class="sizeClass"
+        :class="[
+          sizeClass,
+          fixedHeight ? 'h-[calc(100dvh-1rem)] sm:h-[46rem]' : undefined,
+        ]"
       >
         <header class="flex shrink-0 items-start justify-between gap-4 border-b px-5 py-4">
           <div>

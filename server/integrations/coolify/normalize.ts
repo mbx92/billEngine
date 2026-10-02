@@ -33,10 +33,10 @@ export interface NormalizedCoolifyNode {
 
 export function normalizeCoolifyStatus(value: string | null | undefined): ResourceStatus {
   const status = value?.toLowerCase() ?? ''
-  if (status.includes('running')) return 'running'
   if (status.includes('restart')) return 'restarting'
   if (status.includes('degraded') || status.includes('unhealthy')) return 'degraded'
   if (status.includes('stop') || status.includes('exit')) return 'stopped'
+  if (status.includes('running') && status.includes('healthy')) return 'running'
   return 'unknown'
 }
 

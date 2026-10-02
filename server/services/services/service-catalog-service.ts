@@ -1,10 +1,11 @@
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import type {
   CreateServiceInput,
   TransitionServiceInput,
   UpdateServiceInput,
 } from '../../../shared/schemas/services'
 import { useDatabase, type Database } from '../../database/client'
+import { serviceDatabases } from '../../database/schema'
 import { AuditLogRepository } from '../../repositories/audit'
 import {
   allocateDocumentNumber,
@@ -178,10 +179,11 @@ export class ServiceCatalogService {
       if (!existing) throw DomainError.notFound('Service tidak ditemukan.')
       validateTransition(existing.status, input.status)
 
-      const infrastructureOperation =
-        input.status === 'active' || input.status === 'suspended'
-          ? await this.infrastructureLifecycle.apply(id, input.status)
-          : null
+      const infrastructureTarget = input.status === 'cancelled' ? 'suspended' : input.status
+      const infrastructureOperation = await this.infrastructureLifecycle.apply(
+        id,
+        infrastructureTarget,
+      )
 
       try {
         return await this.database.transaction(async (transaction) => {
@@ -195,6 +197,14 @@ export class ServiceCatalogService {
             input.status,
             input.reason,
           )
+          if (input.status === 'cancelled') {
+            const retentionUntil = new Date()
+            retentionUntil.setUTCDate(retentionUntil.getUTCDate() + 30)
+            await transaction
+              .update(serviceDatabases)
+              .set({ status: 'pending_deletion', retentionUntil, updatedAt: new Date() })
+              .where(eq(serviceDatabases.serviceId, id))
+          }
           await this.audit.record(transaction, {
             actorUserId: actor.userId,
             action: `service.${input.status}`,

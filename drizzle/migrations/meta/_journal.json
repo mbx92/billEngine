@@ -50,6 +50,20 @@
       "when": 1790820030730,
       "tag": "0006_open_ultragirl",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790837025608,
+      "tag": "0007_sudden_bloodscream",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790859227315,
+      "tag": "0008_powerful_snowbird",
+      "breakpoints": true
     }
   ]
 }

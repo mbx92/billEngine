@@ -356,6 +356,69 @@ export class CoolifyResourceRepository {
     return rows[0] ?? null
   }
 
+  async upsertProvisionedResource(
+    serverId: string,
+    serviceId: string,
+    actorUserId: string | null,
+    resource: NormalizedCoolifyResource,
+  ) {
+    const now = new Date()
+    return this.database.transaction(async (transaction) => {
+      const [saved] = await transaction
+        .insert(coolifyResources)
+        .values({
+          coolifyServerId: serverId,
+          ...resource,
+          lastSeenAt: now,
+          lastSyncedAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [coolifyResources.coolifyServerId, coolifyResources.coolifyUuid],
+          set: {
+            name: resource.name,
+            status: resource.status,
+            fqdn: resource.fqdn,
+            projectName: resource.projectName,
+            environmentName: resource.environmentName,
+            coolifyNodeUuid: resource.coolifyNodeUuid,
+            limitsCpus: resource.limitsCpus,
+            limitsCpuset: resource.limitsCpuset,
+            limitsCpuShares: resource.limitsCpuShares,
+            limitsMemoryBytes: resource.limitsMemoryBytes,
+            memoryReservationBytes: resource.memoryReservationBytes,
+            memorySwapBytes: resource.memorySwapBytes,
+            rawMetadata: resource.rawMetadata,
+            lastSeenAt: now,
+            lastSyncedAt: now,
+            updatedAt: now,
+          },
+        })
+        .returning({ id: coolifyResources.id })
+      if (!saved) throw new Error('Failed to persist provisioned resource.')
+
+      await transaction
+        .insert(serviceResources)
+        .values({ serviceId, resourceId: saved.id, createdBy: actorUserId })
+        .onConflictDoNothing({
+          target: [serviceResources.serviceId, serviceResources.resourceId],
+        })
+
+      await transaction.insert(auditLogs).values({
+        actorUserId,
+        action: 'coolify.application.provisioned',
+        entityType: 'coolify_resource',
+        entityId: saved.id,
+        metadata: {
+          serviceId,
+          coolifyServerId: serverId,
+          coolifyUuid: resource.coolifyUuid,
+        },
+      })
+      return saved.id
+    })
+  }
+
   async createServerConnection(name: string, baseUrl: string, tokenEncrypted: string) {
     const configuredUrl = normalizeBaseUrl(baseUrl)
     const existing = (await this.listActiveServerConnections()).find(

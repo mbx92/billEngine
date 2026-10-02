@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { BILLING_CYCLES } from '../constants/domain'
+import { DATABASE_MODES } from './database-provisioning'
 
 const optionalText = (max: number) =>
   z.preprocess(
@@ -72,6 +73,7 @@ export const createPlanSchema = z.object({
   includedResourceCount: optionalPositiveInteger,
   includedCpuCores: optionalPositiveDecimal,
   includedMemoryBytes: optionalPositiveBigInt,
+  databaseMode: z.enum(DATABASE_MODES).default('none'),
 })
 
 export const updatePlanSchema = createPlanSchema
@@ -82,6 +84,7 @@ export const updatePlanSchema = createPlanSchema
     includedResourceCount: nullablePositiveInteger,
     includedCpuCores: nullablePositiveDecimal,
     includedMemoryBytes: nullablePositiveBigInt,
+    databaseMode: z.enum(DATABASE_MODES).optional(),
   })
   .refine((input) => Object.keys(input).length > 0, 'Tidak ada perubahan plan.')
 

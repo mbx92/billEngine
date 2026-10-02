@@ -105,7 +105,7 @@ const filteredResources = computed(() => {
 const wizardSteps = [
   { number: 1, label: 'Service' },
   { number: 2, label: 'Billing' },
-  { number: 3, label: 'Resources' },
+  { number: 3, label: 'App yang sudah ada' },
   { number: 4, label: 'Konfirmasi' },
 ]
 
@@ -539,6 +539,14 @@ async function applyInfrastructure() {
               </li>
             </ul>
           </div>
+          <p class="text-xs leading-5 text-muted md:col-span-2">
+            Service adalah langganan milik customer dan dapat dibuat sebelum aplikasinya ada. Untuk
+            aplikasi baru, buat service ini tanpa resource lalu lanjutkan dari halaman
+            <NuxtLink class="font-semibold text-brand underline" to="/provisioning">
+              Provisioning
+            </NuxtLink>
+            .
+          </p>
         </div>
 
         <div v-else-if="wizardStep === 2" class="grid gap-4 md:grid-cols-2">
@@ -593,11 +601,21 @@ async function applyInfrastructure() {
         </div>
 
         <div v-else-if="wizardStep === 3">
+          <div class="mb-4 rounded-md border border-info/30 bg-info/10 px-4 py-3">
+            <p class="text-sm font-semibold text-ink">Langkah ini khusus aplikasi yang sudah ada</p>
+            <p class="mt-1 text-xs leading-5 text-muted">
+              Kosongkan pilihan jika aplikasi akan dibuat oleh Provisioning. Resource Coolify yang
+              baru akan dihubungkan ke service ini secara otomatis setelah dibuat.
+            </p>
+          </div>
           <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h3 class="text-sm font-semibold text-ink">Hubungkan resource Coolify</h3>
+              <h3 class="text-sm font-semibold text-ink">
+                Hubungkan aplikasi Coolify yang sudah ada
+              </h3>
               <p class="mt-1 text-xs text-muted">
-                Opsional. Hanya resource billable yang belum dipakai service lain yang ditampilkan.
+                Opsional, untuk adopsi atau migrasi. Hanya resource billable yang belum dipakai
+                service lain yang ditampilkan.
               </p>
             </div>
             <UiInput
@@ -725,7 +743,9 @@ async function applyInfrastructure() {
                 {{ resource.name }} · {{ resource.serverName }}
               </UiBadge>
             </div>
-            <p v-else class="text-xs text-muted">Service akan dibuat tanpa resource Coolify.</p>
+            <p v-else class="text-xs text-muted">
+              Belum ada aplikasi yang dihubungkan. Service siap dipilih sebagai target Provisioning.
+            </p>
           </div>
         </div>
       </form>
@@ -1024,7 +1044,8 @@ async function applyInfrastructure() {
           </template>
           <template v-else>
             Service tidak akan menghasilkan recurring invoice baru. Cancellation bersifat permanen
-            dan tidak menghapus resource Coolify.
+            dan aplikasi Coolify akan dihentikan tanpa menghapus resource. Database masuk masa
+            retensi 30 hari dan tidak langsung dihapus.
           </template>
         </p>
       </form>
@@ -1109,6 +1130,16 @@ async function applyInfrastructure() {
                   <span class="mt-1 block text-xs text-brand">{{
                     service.planName || 'Legacy'
                   }}</span>
+                  <span
+                    v-if="service.database"
+                    class="mt-1 block max-w-52 truncate font-mono text-[10px] text-muted"
+                  >
+                    {{ service.database.clusterName }} · {{ service.database.databaseName }} ·
+                    {{ service.database.status }}
+                  </span>
+                  <UiBadge v-else-if="service.planDatabaseMode === 'shared'" tone="warning">
+                    Database belum diprovision
+                  </UiBadge>
                 </td>
                 <td class="px-4 py-3">
                   <span class="block text-ink">{{ service.customerName }}</span>

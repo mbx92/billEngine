@@ -9,7 +9,10 @@ import {
 describe('Coolify normalization', () => {
   it('normalizes provider status variants', () => {
     expect(normalizeCoolifyStatus('running:healthy')).toBe('running')
+    expect(normalizeCoolifyStatus('running:unhealthy')).toBe('degraded')
+    expect(normalizeCoolifyStatus('restarting:unknown')).toBe('restarting')
     expect(normalizeCoolifyStatus('exited')).toBe('stopped')
+    expect(normalizeCoolifyStatus('running:unknown')).toBe('unknown')
     expect(normalizeCoolifyStatus('unhealthy')).toBe('degraded')
     expect(normalizeCoolifyStatus(undefined)).toBe('unknown')
   })

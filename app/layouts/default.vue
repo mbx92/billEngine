@@ -4,12 +4,16 @@ import {
   BarChart3,
   Boxes,
   CreditCard,
+  Database,
+  FileCode2,
   FileText,
   GalleryVerticalEnd,
   Layers3,
   LayoutDashboard,
   LogOut,
   Menu as MenuIcon,
+  Network,
+  Rocket,
   Server as ServerIcon,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -43,6 +47,10 @@ const primaryNavigation = [
 ] as const
 const infrastructureNavigation = [
   { label: 'Resources', to: '/resources', icon: Boxes },
+  { label: 'Blueprints', to: '/blueprints', icon: FileCode2 },
+  { label: 'Provisioning', to: '/provisioning', icon: Rocket },
+  { label: 'Database Clusters', to: '/database-clusters', icon: Database },
+  { label: 'Tunnels', to: '/tunnels', icon: Network },
   { label: 'Servers', to: '/servers', icon: ServerIcon },
   { label: 'Activity', to: '/activity', icon: ActivityIcon },
 ] as const

@@ -26,6 +26,7 @@ export class PlanRepository {
           includedResourceCount: plans.includedResourceCount,
           includedCpuCores: plans.includedCpuCores,
           includedMemoryBytes: plans.includedMemoryBytes,
+          databaseMode: plans.databaseMode,
           isActive: plans.isActive,
           serviceCount: count(services.id),
           createdAt: plans.createdAt,
@@ -66,6 +67,7 @@ export class PlanRepository {
         includedResourceCount: plans.includedResourceCount,
         includedCpuCores: plans.includedCpuCores,
         includedMemoryBytes: plans.includedMemoryBytes,
+        databaseMode: plans.databaseMode,
       })
       .from(plans)
       .where(eq(plans.isActive, true))

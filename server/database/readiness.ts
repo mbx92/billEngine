@@ -12,6 +12,11 @@ const REQUIRED_TABLES = [
   'email_deliveries',
   'audit_logs',
   'resource_domains',
+  'deployment_blueprints',
+  'provisioning_jobs',
+  'provisioning_job_events',
+  'database_clusters',
+  'service_databases',
 ] as const
 
 const EXPECTED_MIGRATION_COUNT = migrationJournal.entries.length

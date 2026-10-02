@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Check, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import type { BillingCycle } from '#shared/constants/domain'
-import type { ApiPlan, Paginated } from '#shared/types/api'
+import type { ApiPlan, DatabaseMode, Paginated } from '#shared/types/api'
 import { billingCycleUnit } from '#shared/utils/billing-display'
 import { apiErrorMessage } from '~/lib/api-error'
 
@@ -27,6 +27,7 @@ const form = reactive({
   includedResourceCount: '',
   includedCpuCores: '',
   includedMemoryMb: '',
+  databaseMode: 'none' as DatabaseMode,
   inclusions: [''],
 })
 
@@ -57,6 +58,7 @@ function resetForm() {
     includedResourceCount: '',
     includedCpuCores: '',
     includedMemoryMb: '',
+    databaseMode: 'none',
     inclusions: [''],
   })
   actionError.value = null
@@ -80,6 +82,7 @@ function openEdit(plan: ApiPlan) {
     includedMemoryMb: plan.includedMemoryBytes
       ? (BigInt(plan.includedMemoryBytes) / (1024n * 1024n)).toString()
       : '',
+    databaseMode: plan.databaseMode,
     inclusions: [...plan.inclusions],
   })
   actionError.value = null
@@ -273,6 +276,17 @@ async function toggleStatus(plan: ApiPlan) {
               placeholder="2048"
             />
           </div>
+          <label class="mt-4 block">
+            <span class="mb-2 block text-xs font-semibold text-muted">Mode database</span>
+            <select
+              v-model="form.databaseMode"
+              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            >
+              <option value="none">Tanpa database</option>
+              <option value="shared">PostgreSQL shared</option>
+              <option value="dedicated" disabled>PostgreSQL dedicated (fase lanjutan)</option>
+            </select>
+          </label>
         </div>
         <label class="block md:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">Deskripsi</span>
@@ -398,6 +412,9 @@ async function toggleStatus(plan: ApiPlan) {
                     </UiBadge>
                     <UiBadge v-if="plan.includedMemoryBytes">
                       {{ format.bytes(plan.includedMemoryBytes) }}
+                    </UiBadge>
+                    <UiBadge :tone="plan.databaseMode === 'shared' ? 'info' : 'neutral'">
+                      DB {{ plan.databaseMode }}
                     </UiBadge>
                     <UiBadge
                       v-if="

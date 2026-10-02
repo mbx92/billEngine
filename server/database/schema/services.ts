@@ -19,6 +19,7 @@ import { users } from './auth'
 import { coolifyResources } from './coolify'
 import { customers } from './customers'
 import { billingCycle, serviceStatus } from './enums'
+import type { DatabaseMode } from './provisioning'
 
 export const plans = pgTable(
   'plans',
@@ -33,6 +34,10 @@ export const plans = pgTable(
     includedResourceCount: integer('included_resource_count'),
     includedCpuCores: numeric('included_cpu_cores', { precision: 10, scale: 3 }),
     includedMemoryBytes: bigint('included_memory_bytes', { mode: 'bigint' }),
+    databaseMode: varchar('database_mode', { length: 32 })
+      .$type<DatabaseMode>()
+      .notNull()
+      .default('none'),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -76,6 +81,10 @@ export const services = pgTable(
     planResourceCount: integer('plan_resource_count'),
     planCpuCores: numeric('plan_cpu_cores', { precision: 10, scale: 3 }),
     planMemoryBytes: bigint('plan_memory_bytes', { mode: 'bigint' }),
+    planDatabaseMode: varchar('plan_database_mode', { length: 32 })
+      .$type<DatabaseMode>()
+      .notNull()
+      .default('none'),
     billingStartDate: date('billing_start_date').notNull(),
     nextDueDate: date('next_due_date'),
     invoiceLeadDays: integer('invoice_lead_days').notNull().default(0),

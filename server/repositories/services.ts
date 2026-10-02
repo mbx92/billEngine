@@ -1,4 +1,4 @@
-import { and, asc, count, eq, exists, inArray, ne, notExists, sql } from 'drizzle-orm'
+import { and, asc, count, eq, exists, inArray, isNull, ne, notExists, sql } from 'drizzle-orm'
 import type { CreateServiceInput, UpdateServiceInput } from '../../shared/schemas/services'
 import type { ApiService, ApiServiceOptions, ApiServiceResourceLink } from '../../shared/types/api'
 import { useDatabase, type Database, type Transaction } from '../database/client'
@@ -6,8 +6,10 @@ import {
   coolifyResources,
   coolifyServers,
   customers,
+  databaseClusters,
   serviceBillingRuns,
   serviceResources,
+  serviceDatabases,
   services,
 } from '../database/schema'
 import { PlanRepository, type PlanRecord } from './plans'
@@ -41,6 +43,7 @@ export class ServiceRepository {
           planResourceCount: services.planResourceCount,
           planCpuCores: services.planCpuCores,
           planMemoryBytes: services.planMemoryBytes,
+          planDatabaseMode: services.planDatabaseMode,
           status: services.status,
           currency: services.currency,
           priceAmount: services.priceAmount,
@@ -68,7 +71,10 @@ export class ServiceRepository {
       this.database.select({ total: count() }).from(services),
     ])
 
-    const linkedResources = await this.findResourceLinks(rows.map((row) => row.id))
+    const [linkedResources, linkedDatabases] = await Promise.all([
+      this.findResourceLinks(rows.map((row) => row.id)),
+      this.findDatabaseLinks(rows.map((row) => row.id)),
+    ])
 
     return {
       rows: rows.map<ApiService>((row) => {
@@ -83,6 +89,7 @@ export class ServiceRepository {
           planResourceCount: row.planResourceCount,
           planCpuCores: row.planCpuCores,
           planMemoryBytes: row.planMemoryBytes?.toString() ?? null,
+          planDatabaseMode: row.planDatabaseMode,
           status: row.status,
           currency: row.currency,
           priceAmount: row.priceAmount.toString(),
@@ -101,6 +108,7 @@ export class ServiceRepository {
           customerName: row.customerName,
           customerNumber: row.customerNumber,
           resources,
+          database: linkedDatabases.get(row.id) ?? null,
           infrastructure: evaluateInfrastructureAllocation(
             {
               resourceCount: row.planResourceCount,
@@ -131,6 +139,7 @@ export class ServiceRepository {
         planResourceCount: services.planResourceCount,
         planCpuCores: services.planCpuCores,
         planMemoryBytes: services.planMemoryBytes,
+        planDatabaseMode: services.planDatabaseMode,
         status: services.status,
         currency: services.currency,
         priceAmount: services.priceAmount,
@@ -155,7 +164,10 @@ export class ServiceRepository {
       .where(eq(services.customerId, customerId))
       .orderBy(asc(services.serviceNumber))
 
-    const linkedResources = await this.findResourceLinks(rows.map((row) => row.id))
+    const [linkedResources, linkedDatabases] = await Promise.all([
+      this.findResourceLinks(rows.map((row) => row.id)),
+      this.findDatabaseLinks(rows.map((row) => row.id)),
+    ])
     return rows.map<ApiService>((row) => {
       const resources = linkedResources.get(row.id) ?? []
       return {
@@ -168,6 +180,7 @@ export class ServiceRepository {
         planResourceCount: row.planResourceCount,
         planCpuCores: row.planCpuCores,
         planMemoryBytes: row.planMemoryBytes?.toString() ?? null,
+        planDatabaseMode: row.planDatabaseMode,
         status: row.status,
         currency: row.currency,
         priceAmount: row.priceAmount.toString(),
@@ -186,6 +199,7 @@ export class ServiceRepository {
         customerName: row.customerName,
         customerNumber: row.customerNumber,
         resources,
+        database: linkedDatabases.get(row.id) ?? null,
         infrastructure: evaluateInfrastructureAllocation(
           {
             resourceCount: row.planResourceCount,
@@ -346,6 +360,7 @@ export class ServiceRepository {
         planResourceCount: plan.includedResourceCount,
         planCpuCores: plan.includedCpuCores,
         planMemoryBytes: plan.includedMemoryBytes,
+        planDatabaseMode: plan.databaseMode,
         serviceNumber,
         name: input.name,
         description: input.description,
@@ -398,6 +413,7 @@ export class ServiceRepository {
       values.planResourceCount = plan.includedResourceCount
       values.planCpuCores = plan.includedCpuCores
       values.planMemoryBytes = plan.includedMemoryBytes
+      values.planDatabaseMode = plan.databaseMode
     }
 
     const [updated] = await transaction
@@ -475,6 +491,37 @@ export class ServiceRepository {
       links.set(row.serviceId, existing)
     }
 
+    return links
+  }
+
+  private async findDatabaseLinks(serviceIds: string[]) {
+    const links = new Map<string, ApiService['database']>()
+    if (serviceIds.length === 0) return links
+
+    const rows = await this.database
+      .select({ allocation: serviceDatabases, clusterName: databaseClusters.name })
+      .from(serviceDatabases)
+      .innerJoin(databaseClusters, eq(databaseClusters.id, serviceDatabases.databaseClusterId))
+      .where(
+        and(inArray(serviceDatabases.serviceId, serviceIds), isNull(serviceDatabases.deletedAt)),
+      )
+
+    for (const { allocation, clusterName } of rows) {
+      links.set(allocation.serviceId, {
+        id: allocation.id,
+        serviceId: allocation.serviceId,
+        databaseClusterId: allocation.databaseClusterId,
+        clusterName,
+        databaseName: allocation.databaseName,
+        roleName: allocation.roleName,
+        status: allocation.status,
+        lastError: allocation.lastError,
+        sqlImportedAt: allocation.sqlImportedAt?.toISOString() ?? null,
+        retentionUntil: allocation.retentionUntil?.toISOString() ?? null,
+        createdAt: allocation.createdAt.toISOString(),
+        updatedAt: allocation.updatedAt.toISOString(),
+      })
+    }
     return links
   }
 }

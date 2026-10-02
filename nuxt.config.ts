@@ -58,6 +58,7 @@ export default defineNuxtConfig({
     coolifyApiUrl: developmentEnv.COOLIFY_API_URL || '',
     coolifyApiToken: developmentEnv.COOLIFY_API_TOKEN || '',
     coolifyCredentialsKey: developmentEnv.COOLIFY_CREDENTIALS_KEY || '',
+    infraCredentialsKey: developmentEnv.INFRA_CREDENTIALS_KEY || '',
     cloudflareApiToken: developmentEnv.CLOUDFLARE_API_TOKEN || '',
     cloudflareZoneId: developmentEnv.CLOUDFLARE_ZONE_ID || '',
     cloudflareAccountId: developmentEnv.CLOUDFLARE_ACCOUNT_ID || '',

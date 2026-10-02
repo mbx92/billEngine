@@ -34,6 +34,21 @@ export const coolifyApplicationsSchema = z.union([
 
 export type CoolifyApplication = z.infer<typeof coolifyApplicationSchema>
 
+export const coolifyProjectSchema = z
+  .object({
+    uuid: z.string().min(1),
+    name: z.string().min(1),
+    description: z.string().nullish(),
+  })
+  .passthrough()
+
+export const coolifyProjectsSchema = z.union([
+  z.array(coolifyProjectSchema),
+  z.object({ data: z.array(coolifyProjectSchema) }).passthrough(),
+])
+
+export type CoolifyProject = z.infer<typeof coolifyProjectSchema>
+
 export const coolifyServerSchema = z
   .object({
     uuid: z.string().min(1),

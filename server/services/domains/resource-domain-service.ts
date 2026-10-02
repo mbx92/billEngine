@@ -37,7 +37,11 @@ export class ResourceDomainService {
     }
   }
 
-  async create(resourceId: string, input: CreateResourceDomainInput) {
+  async create(
+    resourceId: string,
+    input: CreateResourceDomainInput,
+    options: { instantDeploy?: boolean; configureCoolify?: boolean } = {},
+  ) {
     const target = await this.requireTarget(resourceId)
     const config = domainConfig()
     validateHostnameType(input.hostname, input.type, config.platformDomain)
@@ -61,7 +65,7 @@ export class ResourceDomainService {
     })
 
     let providerHostnameId: string | null = null
-    let coolifyConfigured = false
+    let coolifyConfigured = options.configureCoolify === false
     try {
       if (input.type === 'custom') {
         const provider = await cloudflareClient(config).createCustomHostname(input.hostname)
@@ -74,13 +78,16 @@ export class ResourceDomainService {
         })
       }
 
-      const routing = await clientForCoolifyConnection(target).addApplicationDomain(
-        target.coolifyUuid,
-        input.hostname,
-        input.composeServiceName,
-      )
-      coolifyConfigured = true
-      await this.repository.updateComposeServiceName(row.id, routing.composeServiceName)
+      if (options.configureCoolify !== false) {
+        const routing = await clientForCoolifyConnection(target).addApplicationDomain(
+          target.coolifyUuid,
+          input.hostname,
+          input.composeServiceName,
+          { instantDeploy: options.instantDeploy },
+        )
+        coolifyConfigured = true
+        await this.repository.updateComposeServiceName(row.id, routing.composeServiceName)
+      }
 
       if (input.type === 'platform') {
         await this.repository.updateStatus(row.id, 'verifying')
