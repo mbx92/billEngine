@@ -85,4 +85,29 @@ export class UserRepository {
     await transaction.delete(sessions).where(eq(sessions.userId, id))
     return updated
   }
+
+  async updatePassword(transaction: Transaction, userId: string, password: string) {
+    const hashed = await hashPassword(password)
+    const [account] = await transaction
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(and(eq(accounts.userId, userId), eq(accounts.providerId, 'credential')))
+      .limit(1)
+
+    if (account) {
+      await transaction
+        .update(accounts)
+        .set({ password: hashed, updatedAt: new Date() })
+        .where(eq(accounts.id, account.id))
+    } else {
+      await transaction.insert(accounts).values({
+        accountId: userId,
+        providerId: 'credential',
+        userId,
+        password: hashed,
+      })
+    }
+
+    await transaction.delete(sessions).where(eq(sessions.userId, userId))
+  }
 }

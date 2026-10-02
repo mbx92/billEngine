@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Plus, RefreshCw, Save } from '@lucide/vue'
+import { KeyRound, Plus, RefreshCw, Save } from '@lucide/vue'
 import type { ApiCustomer, ApiUser, Paginated } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
 
@@ -9,9 +9,13 @@ useHead({ title: 'Users & access · Billing Infra' })
 const showForm = ref(false)
 const saving = ref(false)
 const savingAccess = ref<string | null>(null)
+const savingPassword = ref(false)
+const passwordUser = ref<ApiUser | null>(null)
+const passwordError = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const form = reactive({ name: '', email: '', password: '', role: 'customer', customerId: '' })
+const passwordForm = reactive({ password: '', confirmPassword: '' })
 const { data, status, refresh } = await useFetch<{ data: ApiUser[] }>('/api/users')
 const { data: customersResponse } = await useFetch<Paginated<ApiCustomer>>('/api/customers', {
   query: { page: 1, perPage: 100 },
@@ -75,6 +79,42 @@ async function updateAccess(user: ApiUser) {
     actionError.value = apiErrorMessage(caught, 'Gagal memperbarui akses.')
   } finally {
     savingAccess.value = null
+  }
+}
+
+function openPasswordDialog(user: ApiUser) {
+  passwordUser.value = user
+  Object.assign(passwordForm, { password: '', confirmPassword: '' })
+  passwordError.value = null
+}
+
+function closePasswordDialog() {
+  passwordUser.value = null
+  passwordError.value = null
+  Object.assign(passwordForm, { password: '', confirmPassword: '' })
+}
+
+async function updatePassword() {
+  const user = passwordUser.value
+  if (!user) return
+  if (passwordForm.password !== passwordForm.confirmPassword) {
+    passwordError.value = 'Konfirmasi password tidak sama.'
+    return
+  }
+
+  savingPassword.value = true
+  passwordError.value = null
+  try {
+    await $fetch(`/api/users/${user.id}/password`, {
+      method: 'PATCH',
+      body: { password: passwordForm.password },
+    })
+    actionMessage.value = `Password ${user.email} diperbarui. Semua sesi user tersebut telah dicabut.`
+    closePasswordDialog()
+  } catch (caught) {
+    passwordError.value = apiErrorMessage(caught, 'Gagal memperbarui password.')
+  } finally {
+    savingPassword.value = false
   }
 }
 </script>
@@ -154,6 +194,50 @@ async function updateAccess(user: ApiUser) {
       </template>
     </UiDialog>
 
+    <UiDialog
+      v-if="passwordUser"
+      size="md"
+      title="Ubah password"
+      :description="`Password baru untuk ${passwordUser.email}. Minimal 12 karakter. Semua sesi user ini akan dicabut.`"
+      :close-disabled="savingPassword"
+      @close="closePasswordDialog"
+    >
+      <form id="update-password-form" class="grid gap-4" @submit.prevent="updatePassword">
+        <p
+          v-if="passwordError"
+          class="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+        >
+          {{ passwordError }}
+        </p>
+        <UiInput
+          v-model="passwordForm.password"
+          label="Password baru"
+          type="password"
+          autocomplete="new-password"
+          required
+          minlength="12"
+        />
+        <UiInput
+          v-model="passwordForm.confirmPassword"
+          label="Konfirmasi password"
+          type="password"
+          autocomplete="new-password"
+          required
+          minlength="12"
+        />
+      </form>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UiButton variant="secondary" :disabled="savingPassword" @click="closePasswordDialog"
+            >Batal</UiButton
+          >
+          <UiButton type="submit" form="update-password-form" :disabled="savingPassword">{{
+            savingPassword ? 'Menyimpan…' : 'Simpan password'
+          }}</UiButton>
+        </div>
+      </template>
+    </UiDialog>
+
     <UiCard :padded="false">
       <div v-if="status === 'pending'" class="space-y-3 p-4">
         <UiSkeleton v-for="n in 4" :key="n" height="2.5rem" />
@@ -202,15 +286,21 @@ async function updateAccess(user: ApiUser) {
                 {{ new Date(user.createdAt).toLocaleDateString('id-ID') }}
               </td>
               <td class="px-4 py-3 text-right">
-                <UiButton
-                  variant="secondary"
-                  size="sm"
-                  :disabled="savingAccess === user.id || !accessDrafts[user.id]"
-                  @click="updateAccess(user)"
-                >
-                  <Save :size="14" />
-                  {{ savingAccess === user.id ? 'Menyimpan…' : 'Simpan' }}
-                </UiButton>
+                <div class="flex flex-wrap justify-end gap-2">
+                  <UiButton variant="secondary" size="sm" @click="openPasswordDialog(user)">
+                    <KeyRound :size="14" />
+                    Password
+                  </UiButton>
+                  <UiButton
+                    variant="secondary"
+                    size="sm"
+                    :disabled="savingAccess === user.id || !accessDrafts[user.id]"
+                    @click="updateAccess(user)"
+                  >
+                    <Save :size="14" />
+                    {{ savingAccess === user.id ? 'Menyimpan…' : 'Simpan' }}
+                  </UiButton>
+                </div>
               </td>
             </tr>
           </tbody>

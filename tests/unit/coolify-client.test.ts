@@ -23,7 +23,10 @@ describe('Coolify client', () => {
     expect(request).toHaveBeenCalledWith(
       new URL('https://coolify.example.test/api/v1/applications'),
       expect.objectContaining({
-        headers: expect.objectContaining({ authorization: 'Bearer secret' }),
+        headers: expect.objectContaining({
+          authorization: 'Bearer secret',
+          'user-agent': expect.stringContaining('BillEngine/'),
+        }),
       }),
     )
   })
@@ -65,6 +68,31 @@ describe('Coolify client', () => {
     await expect(request).rejects.toMatchObject<Partial<CoolifyClientError>>({
       name: 'CoolifyClientError',
       statusCode: 401,
+      message: expect.stringContaining('token ditolak'),
+    })
+  })
+
+  it('detects Cloudflare Error 1010 blocks on the Coolify API hostname', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            title: 'Error 1010: Access denied',
+            error_code: 1010,
+            cloudflare_error: true,
+          }),
+          { status: 403 },
+        ),
+      ),
+    )
+
+    const request = new CoolifyClient('https://coolify.example.test', 'secret').listApplications()
+
+    await expect(request).rejects.toMatchObject({
+      name: 'CoolifyClientError',
+      statusCode: 403,
+      message: expect.stringContaining('Cloudflare'),
     })
   })
 

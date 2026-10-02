@@ -417,14 +417,20 @@ export class CoolifyClient {
           headers: {
             authorization: `Bearer ${this.token}`,
             accept: 'application/json',
+            // Cloudflare Bot Fight Mode blocks some default/empty signatures with Error 1010.
+            'user-agent': 'BillEngine/1.0 (+https://billengine.ocnetworks.web.id)',
             ...(options.body ? { 'content-type': 'application/json' } : {}),
           },
           body: options.body ? JSON.stringify(options.body) : undefined,
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(30_000),
         })
 
         if (!response.ok) {
-          throw new CoolifyClientError('Coolify API request failed.', response.status)
+          const body = await response.text().catch(() => '')
+          throw new CoolifyClientError(
+            coolifyHttpErrorMessage(response.status, body),
+            response.status,
+          )
         }
 
         const contentType = response.headers.get('content-type') ?? ''
@@ -434,13 +440,43 @@ export class CoolifyClient {
       } catch (error) {
         if (error instanceof CoolifyClientError) throw error
         if (attempt === maxAttempts - 1) {
-          throw new CoolifyClientError('Coolify API request failed.', undefined, { cause: error })
+          throw new CoolifyClientError(coolifyNetworkErrorMessage(this.baseUrl), undefined, {
+            cause: error,
+          })
         }
       }
     }
 
-    throw new CoolifyClientError('Coolify API request failed.')
+    throw new CoolifyClientError(coolifyNetworkErrorMessage(this.baseUrl))
   }
+}
+
+function coolifyHttpErrorMessage(status: number, body: string) {
+  const snippet = body.slice(0, 300).toLowerCase()
+  if (status === 401) return 'Coolify API token ditolak. Periksa NUXT_COOLIFY_API_TOKEN.'
+  if (
+    status === 403 &&
+    (snippet.includes('error-1010') ||
+      snippet.includes('browser_signature_banned') ||
+      snippet.includes('cloudflare'))
+  ) {
+    return 'Coolify API diblokir Cloudflare (Error 1010). Pakai URL internal host Coolify, misalnya http://host.docker.internal:8000.'
+  }
+  if (status === 403) return 'Coolify API menolak permintaan (HTTP 403).'
+  if (status === 404) return 'Endpoint Coolify API tidak ditemukan (HTTP 404).'
+  if (status >= 500) return `Coolify API sedang error (HTTP ${status}).`
+  return `Coolify API request failed (HTTP ${status}).`
+}
+
+function coolifyNetworkErrorMessage(baseUrl: string) {
+  const host = (() => {
+    try {
+      return new URL(baseUrl).host
+    } catch {
+      return baseUrl
+    }
+  })()
+  return `Coolify API tidak dapat dijangkau (${host}). Jika BillEngine berjalan di host Coolify yang sama, set NUXT_COOLIFY_API_URL ke http://host.docker.internal:8000.`
 }
 
 function parseDeployment(payload: Record<string, unknown>): CoolifyDeployment {

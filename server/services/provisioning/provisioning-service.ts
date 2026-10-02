@@ -8,6 +8,7 @@ import type { ProvisioningStatus } from '../../../shared/types/api'
 import { withPostgresAdvisoryLock } from '../../database/advisory-lock'
 import { useDatabase, type Database } from '../../database/client'
 import { clientForCoolifyConnection } from '../../integrations/coolify/connection'
+import { CoolifyClientError } from '../../integrations/coolify/client'
 import { normalizeCoolifyApplication } from '../../integrations/coolify/normalize'
 import {
   buildDatabaseUrl,
@@ -667,6 +668,7 @@ function ensureWithinStageTimeout(startedAt: Date, message: string) {
 
 function provisioningErrorMessage(error: unknown) {
   if (error instanceof ProvisioningStageError) return redactProvisioningError(error.message)
+  if (error instanceof CoolifyClientError) return redactProvisioningError(error.message)
   if (error instanceof Error) return redactProvisioningError(error.message)
   return 'Provisioning gagal karena error yang tidak dikenal.'
 }

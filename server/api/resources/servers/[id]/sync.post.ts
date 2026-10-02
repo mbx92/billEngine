@@ -17,10 +17,9 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 409, statusMessage: 'Token koneksi Coolify belum tersedia.' })
     }
 
-    const statusMessage =
-      error instanceof CoolifyClientError && error.statusCode === 401
-        ? 'Token ditolak oleh Coolify.'
-        : 'Sinkronisasi Coolify gagal.'
-    throw createError({ statusCode: 502, statusMessage })
+    if (error instanceof CoolifyClientError) {
+      throw createError({ statusCode: 502, statusMessage: error.message.slice(0, 300) })
+    }
+    throw createError({ statusCode: 502, statusMessage: 'Sinkronisasi Coolify gagal.' })
   }
 })

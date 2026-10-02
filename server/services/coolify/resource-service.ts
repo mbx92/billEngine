@@ -253,9 +253,7 @@ function emptyApiMetric(
 
 function syncErrorMessage(error: unknown) {
   if (error instanceof CoolifyClientError) {
-    return error.statusCode
-      ? `Coolify API request failed (HTTP ${error.statusCode}).`
-      : 'Coolify API could not be reached.'
+    return error.message.slice(0, 500)
   }
 
   return error instanceof Error ? error.message.slice(0, 500) : 'Coolify sync failed.'

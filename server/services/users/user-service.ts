@@ -1,4 +1,8 @@
-import type { CreateUserInput, UpdateUserAccessInput } from '../../../shared/schemas/users'
+import type {
+  CreateUserInput,
+  UpdateUserAccessInput,
+  UpdateUserPasswordInput,
+} from '../../../shared/schemas/users'
 import { useDatabase, type Database } from '../../database/client'
 import { AuditLogRepository } from '../../repositories/audit'
 import { CustomerRepository } from '../../repositories/customers'
@@ -69,6 +73,23 @@ export class UserService {
         afterData: { role: updated.role, customerId: updated.customerId },
       })
       return updated
+    })
+  }
+
+  async updatePassword(id: string, input: UpdateUserPasswordInput, actorUserId: string) {
+    return this.database.transaction(async (transaction) => {
+      const existing = await this.users.findById(id, transaction)
+      if (!existing) throw DomainError.notFound('User tidak ditemukan.')
+
+      await this.users.updatePassword(transaction, id, input.password)
+      await this.audit.record(transaction, {
+        actorUserId,
+        action: 'user.password_updated',
+        entityType: 'user',
+        entityId: id,
+        afterData: { email: existing.email },
+      })
+      return { id: existing.id, email: existing.email }
     })
   }
 

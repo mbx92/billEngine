@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+export const userPasswordSchema = z.string().min(12).max(200)
+
 export const createUserSchema = z
   .object({
     name: z.string().trim().min(2).max(160),
@@ -7,7 +9,7 @@ export const createUserSchema = z
       .email()
       .max(320)
       .transform((value) => value.toLowerCase()),
-    password: z.string().min(12).max(200),
+    password: userPasswordSchema,
     role: z.enum(['admin', 'customer']),
     customerId: z.uuid().nullable().optional(),
   })
@@ -28,5 +30,10 @@ export const updateUserAccessSchema = z
   })
   .refine((input) => Object.keys(input).length > 0, 'Tidak ada perubahan akses.')
 
+export const updateUserPasswordSchema = z.object({
+  password: userPasswordSchema,
+})
+
 export type CreateUserInput = z.infer<typeof createUserSchema>
 export type UpdateUserAccessInput = z.infer<typeof updateUserAccessSchema>
+export type UpdateUserPasswordInput = z.infer<typeof updateUserPasswordSchema>
