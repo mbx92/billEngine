@@ -78,6 +78,58 @@ export class CloudflareClient {
     )
   }
 
+  /**
+   * Returns the proxied CNAME target used by `*.{platformDomain}` (usually
+   * `<tunnel-id>.cfargotunnel.com`). Platform app hostnames must use the same target
+   * so they hit the Coolify Traefik wildcard tunnel route.
+   */
+  async resolveWildcardTunnelTarget(platformDomain: string): Promise<string | null> {
+    const wildcard = `*.${platformDomain.trim().toLowerCase()}`
+    const records = await this.listDnsRecords(wildcard)
+    const cname = records.find(
+      (record) => record.type === 'CNAME' && record.proxied && record.content,
+    )
+    return cname?.content?.replace(/\.$/, '').toLowerCase() ?? null
+  }
+
+  async upsertProxiedCname(hostname: string, target: string) {
+    const name = hostname.trim().toLowerCase()
+    const content = target.trim().toLowerCase().replace(/\.$/, '')
+    const existing = (await this.listDnsRecords(name)).find((record) => record.type === 'CNAME')
+
+    if (existing) {
+      if (existing.content.replace(/\.$/, '').toLowerCase() === content && existing.proxied) {
+        return { id: existing.id, name, content, changed: false as const }
+      }
+      const updated = await this.rawRequest(
+        `/zones/${encodeURIComponent(this.zoneId)}/dns_records/${encodeURIComponent(existing.id)}`,
+        {
+          method: 'PATCH',
+          body: { type: 'CNAME', name, content, proxied: true, ttl: 1 },
+        },
+      )
+      const parsed = apiEnvelopeSchema(dnsRecordSchema).parse(updated).result
+      return { id: parsed.id, name: parsed.name, content: parsed.content, changed: true as const }
+    }
+
+    const created = await this.rawRequest(
+      `/zones/${encodeURIComponent(this.zoneId)}/dns_records`,
+      {
+        method: 'POST',
+        body: { type: 'CNAME', name, content, proxied: true, ttl: 1 },
+      },
+    )
+    const parsed = apiEnvelopeSchema(dnsRecordSchema).parse(created).result
+    return { id: parsed.id, name: parsed.name, content: parsed.content, changed: true as const }
+  }
+
+  private async listDnsRecords(name: string) {
+    const payload = await this.rawRequest(
+      `/zones/${encodeURIComponent(this.zoneId)}/dns_records?name=${encodeURIComponent(name)}&per_page=100`,
+    )
+    return apiEnvelopeSchema(z.array(dnsRecordSchema)).parse(payload).result
+  }
+
   private async request(
     path: string,
     options: { method?: 'GET' | 'POST'; body?: Record<string, unknown> } = {},
@@ -88,7 +140,7 @@ export class CloudflareClient {
 
   private async rawRequest(
     path: string,
-    options: { method?: 'GET' | 'POST' | 'DELETE'; body?: Record<string, unknown> } = {},
+    options: { method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> } = {},
   ): Promise<unknown> {
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
@@ -120,6 +172,16 @@ export class CloudflareClient {
     }
   }
 }
+
+const dnsRecordSchema = z
+  .object({
+    id: z.string(),
+    type: z.string(),
+    name: z.string(),
+    content: z.string(),
+    proxied: z.boolean().optional().default(false),
+  })
+  .passthrough()
 
 export function useCloudflareClient() {
   const config = useRuntimeConfig()

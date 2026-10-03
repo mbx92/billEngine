@@ -81,6 +81,10 @@ export class ResourceDomainService {
         })
       }
 
+      if (input.type === 'platform') {
+        await ensurePlatformDns(input.hostname, config)
+      }
+
       if (options.configureCoolify !== false) {
         const routing = await clientForCoolifyConnection(target).addApplicationDomain(
           target.coolifyUuid,
@@ -185,11 +189,19 @@ export class ResourceDomainService {
       }
     }
 
-    const reachable = await hostnameIsReachable(domain.hostname)
+    try {
+      await ensurePlatformDns(domain.hostname, domainConfig())
+    } catch (error) {
+      // DNS edit is optional; keep polling reachability and surface the reason.
+      const message = externalErrorMessage(error)
+      await this.repository.updateStatus(domain.id, 'verifying', message)
+    }
+
+    const probe = await probeHostname(domain.hostname)
     const updated = await this.repository.updateStatus(
       domain.id,
-      reachable ? 'active' : 'verifying',
-      reachable ? null : domain.lastError,
+      probe.ok ? 'active' : 'verifying',
+      probe.ok ? null : probe.detail,
     )
     return serializeDomain(updated)
   }
@@ -296,8 +308,28 @@ function routingHasHostname(
   return urlsContainHost(routing.fqdn)
 }
 
-async function hostnameIsReachable(hostname: string) {
+async function ensurePlatformDns(
+  hostname: string,
+  config: ReturnType<typeof domainConfig>,
+) {
+  if (!config.cloudflareApiToken || !config.cloudflareZoneId) {
+    throw DomainError.invalidState(
+      'Cloudflare API token dan zone ID belum dikonfigurasi untuk DNS platform.',
+    )
+  }
+  const client = cloudflareClient(config)
+  const target = await client.resolveWildcardTunnelTarget(config.platformDomain)
+  if (!target) {
+    throw DomainError.invalidState(
+      `DNS wildcard *.${config.platformDomain} belum ada. Arahkan wildcard ke tunnel Coolify (Traefik :443).`,
+    )
+  }
+  return client.upsertProxiedCname(hostname, target)
+}
+
+async function probeHostname(hostname: string): Promise<{ ok: boolean; detail: string | null }> {
   const url = `https://${hostname}`
+  let lastDetail: string | null = null
   for (const method of ['HEAD', 'GET'] as const) {
     try {
       const response = await fetch(url, {
@@ -305,13 +337,20 @@ async function hostnameIsReachable(hostname: string) {
         redirect: 'manual',
         signal: AbortSignal.timeout(10_000),
       })
-      // Cloudflare 5xx usually means the origin/Traefik route is not ready yet.
-      if (response.status < 500) return true
-    } catch {
-      // TLS/DNS/timeouts are treated as not ready; try GET after HEAD failures.
+      // Cloudflare 5xx usually means DNS/tunnel points at a dead host port, or Traefik has no route.
+      if (response.status < 500) return { ok: true, detail: null }
+      lastDetail =
+        response.status === 502
+          ? `HTTP 502 dari Cloudflare. Pastikan DNS hostname mengarah ke tunnel wildcard Coolify (bukan port host lama), dan domain sudah terpasang di Traefik.`
+          : `HTTP ${response.status} saat probe publik.`
+    } catch (error) {
+      lastDetail =
+        error instanceof Error
+          ? `Probe HTTPS gagal: ${error.name}`
+          : 'Probe HTTPS gagal.'
     }
   }
-  return false
+  return { ok: false, detail: lastDetail }
 }
 
 function externalErrorMessage(error: unknown) {
