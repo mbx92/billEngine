@@ -601,13 +601,29 @@ export class ProvisioningService {
       }
 
       case 'verifying_ssl': {
-        ensureWithinStageTimeout(job.stageStartedAt, 'Verifikasi domain/SSL timeout.')
         if (job.domainId && job.resourceId) {
-          const domain = await new ResourceDomainService(this.domains).refresh(
+          const domainService = new ResourceDomainService(this.domains)
+          const attachment = await domainService.ensureAttachedToCoolify(
             job.resourceId,
             job.domainId,
+            { instantDeploy: true },
           )
+          if (attachment.newlyAttached) {
+            await this.repository.reschedule(
+              job.id,
+              job.status,
+              new Date(Date.now() + POLL_INTERVAL_MS),
+              `Domain ${attachment.domain.hostname} dipasang ke Coolify; menunggu SSL/route siap.`,
+            )
+            return
+          }
+
+          const domain = await domainService.refresh(job.resourceId, job.domainId)
           if (domain.status !== 'active') {
+            ensureWithinStageTimeout(
+              job.stageStartedAt,
+              domainSslTimeoutMessage(domain.hostname, domain),
+            )
             await this.repository.reschedule(
               job.id,
               job.status,
@@ -664,6 +680,26 @@ function requireValue(value: string | null, label: string) {
 
 function ensureWithinStageTimeout(startedAt: Date, message: string) {
   if (Date.now() - startedAt.getTime() > STAGE_TIMEOUT_MS) throw new Error(message)
+}
+
+function domainSslTimeoutMessage(
+  hostname: string,
+  domain: {
+    status: string
+    providerHostnameStatus: string | null
+    providerSslStatus: string | null
+    lastError: string | null
+  },
+) {
+  const details = [
+    `status=${domain.status}`,
+    domain.providerHostnameStatus ? `cf_host=${domain.providerHostnameStatus}` : null,
+    domain.providerSslStatus ? `cf_ssl=${domain.providerSslStatus}` : null,
+    domain.lastError ? `error=${domain.lastError}` : null,
+  ]
+    .filter(Boolean)
+    .join(', ')
+  return `Verifikasi domain/SSL timeout (${hostname}: ${details}). Pastikan domain terpasang di Coolify dan DNS/tunnel mengarah ke Traefik.`
 }
 
 function provisioningErrorMessage(error: unknown) {

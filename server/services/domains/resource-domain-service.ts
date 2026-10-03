@@ -5,7 +5,10 @@ import {
   CloudflareClientError,
   customHostnameVerificationRecords,
 } from '../../integrations/cloudflare/client'
-import { CoolifyClientError } from '../../integrations/coolify/client'
+import {
+  CoolifyClientError,
+  type CoolifyApplicationRouting,
+} from '../../integrations/coolify/client'
 import { clientForCoolifyConnection } from '../../integrations/coolify/connection'
 import { ResourceDomainRepository, serializeDomain } from '../../repositories/resource-domains'
 import { DomainError } from '../../utils/errors'
@@ -87,14 +90,15 @@ export class ResourceDomainService {
         )
         coolifyConfigured = true
         await this.repository.updateComposeServiceName(row.id, routing.composeServiceName)
-      }
-
-      if (input.type === 'platform') {
         await this.repository.updateStatus(row.id, 'verifying')
         return this.refresh(resourceId, row.id)
       }
 
-      return this.refresh(resourceId, row.id)
+      // Provisioning defers Coolify attachment until after the first successful deploy
+      // (Compose domains are only reliable once Coolify has loaded the compose file).
+      const current = await this.repository.findById(resourceId, row.id)
+      if (!current) throw DomainError.notFound('Domain resource tidak ditemukan.')
+      return serializeDomain(current)
     } catch (error) {
       if (providerHostnameId && !coolifyConfigured) {
         await cloudflareClient(config)
@@ -102,6 +106,52 @@ export class ResourceDomainService {
           .catch(() => undefined)
       }
       await this.repository.updateStatus(row.id, 'failed', externalErrorMessage(error))
+      throw externalDomainError(error)
+    }
+  }
+
+  /**
+   * Ensures the hostname is attached to the Coolify application. Safe to call repeatedly:
+   * only the first attachment triggers an optional instant deploy.
+   */
+  async ensureAttachedToCoolify(
+    resourceId: string,
+    domainId: string,
+    options: { instantDeploy?: boolean } = {},
+  ) {
+    const target = await this.requireTarget(resourceId)
+    const domain = await this.repository.findById(resourceId, domainId)
+    if (!domain) throw DomainError.notFound('Domain resource tidak ditemukan.')
+
+    const client = clientForCoolifyConnection(target)
+    const routing = await client.getApplicationRouting(target.coolifyUuid)
+    const alreadyRouted = routingHasHostname(routing, domain.hostname, domain.composeServiceName)
+    // Domains set at application-create time for dockercompose can appear in the API
+    // before Traefik has applied them. Re-apply once while status is still configuring.
+    if (alreadyRouted && domain.status !== 'configuring') {
+      return {
+        attached: true as const,
+        newlyAttached: false as const,
+        domain: serializeDomain(domain),
+      }
+    }
+
+    try {
+      const attached = await client.addApplicationDomain(
+        target.coolifyUuid,
+        domain.hostname,
+        domain.composeServiceName ?? undefined,
+        { instantDeploy: options.instantDeploy ?? true },
+      )
+      await this.repository.updateComposeServiceName(domain.id, attached.composeServiceName)
+      const updated = await this.repository.updateStatus(domain.id, 'verifying')
+      return {
+        attached: true as const,
+        newlyAttached: true as const,
+        domain: serializeDomain(updated),
+      }
+    } catch (error) {
+      await this.repository.updateStatus(domain.id, 'failed', externalErrorMessage(error))
       throw externalDomainError(error)
     }
   }
@@ -139,6 +189,7 @@ export class ResourceDomainService {
     const updated = await this.repository.updateStatus(
       domain.id,
       reachable ? 'active' : 'verifying',
+      reachable ? null : domain.lastError,
     )
     return serializeDomain(updated)
   }
@@ -217,17 +268,50 @@ function validateHostnameType(
   }
 }
 
-async function hostnameIsReachable(hostname: string) {
-  try {
-    const response = await fetch(`https://${hostname}`, {
-      method: 'HEAD',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(10_000),
-    })
-    return response.status < 500
-  } catch {
-    return false
+function routingHasHostname(
+  routing: CoolifyApplicationRouting,
+  hostname: string,
+  composeServiceName?: string | null,
+) {
+  const needle = hostname.toLowerCase()
+  const urlsContainHost = (value: string | null | undefined) =>
+    (value ?? '')
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .some((item) => {
+        try {
+          return new URL(item).hostname === needle
+        } catch {
+          return item.includes(needle)
+        }
+      })
+
+  if (routing.buildPack === 'dockercompose') {
+    if (composeServiceName && routing.composeDomains[composeServiceName]) {
+      return urlsContainHost(routing.composeDomains[composeServiceName]?.domain)
+    }
+    return Object.values(routing.composeDomains).some((entry) => urlsContainHost(entry.domain))
   }
+
+  return urlsContainHost(routing.fqdn)
+}
+
+async function hostnameIsReachable(hostname: string) {
+  const url = `https://${hostname}`
+  for (const method of ['HEAD', 'GET'] as const) {
+    try {
+      const response = await fetch(url, {
+        method,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10_000),
+      })
+      // Cloudflare 5xx usually means the origin/Traefik route is not ready yet.
+      if (response.status < 500) return true
+    } catch {
+      // TLS/DNS/timeouts are treated as not ready; try GET after HEAD failures.
+    }
+  }
+  return false
 }
 
 function externalErrorMessage(error: unknown) {
