@@ -30,6 +30,14 @@ export class SettingsService {
 
     return {
       ...parsed.data,
+      // A true deployment flag is an operational safety override. It lets an
+      // operator recover automation/gating even when an older database row
+      // still contains false; the UI can only disable the feature after the
+      // deployment override is removed.
+      billingAutomationEnabled:
+        fallback.billingAutomationEnabled || parsed.data.billingAutomationEnabled,
+      billingAccessControlEnabled:
+        fallback.billingAccessControlEnabled || parsed.data.billingAccessControlEnabled,
       source: 'database',
       updatedAt: row.updatedAt.toISOString(),
     }
