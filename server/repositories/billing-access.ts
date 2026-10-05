@@ -4,10 +4,14 @@ import {
   coolifyResources,
   invoiceItems,
   invoices,
+  resourceDomains,
   serviceResources,
   services,
 } from '../database/schema'
-import { hostsFromCoolifyFqdn } from '../services/billing/access-policy'
+import {
+  hostsFromCoolifyFqdn,
+  normalizeRequestHost,
+} from '../services/billing/access-policy'
 
 export class BillingAccessRepository {
   constructor(private readonly database: Database = useDatabase()) {}
@@ -20,17 +24,25 @@ export class BillingAccessRepository {
         serviceNumber: services.serviceNumber,
         status: services.status,
         fqdn: coolifyResources.fqdn,
+        managedHostname: resourceDomains.hostname,
+        managedDomainStatus: resourceDomains.status,
       })
       .from(serviceResources)
       .innerJoin(services, eq(services.id, serviceResources.serviceId))
       .innerJoin(coolifyResources, eq(coolifyResources.id, serviceResources.resourceId))
+      .leftJoin(resourceDomains, eq(resourceDomains.resourceId, coolifyResources.id))
       .where(
         and(ne(services.status, 'cancelled'), eq(coolifyResources.resourceType, 'application')),
       )
 
-    const matches = candidates.filter((candidate) =>
-      hostsFromCoolifyFqdn(candidate.fqdn).includes(host),
-    )
+    const matches = candidates.filter((candidate) => {
+      if (hostsFromCoolifyFqdn(candidate.fqdn).includes(host)) return true
+
+      return (
+        candidate.managedDomainStatus === 'active' &&
+        normalizeRequestHost(candidate.managedHostname) === host
+      )
+    })
     const serviceIds = new Set(matches.map((match) => match.id))
 
     // Ambiguous host ownership must fail open instead of blocking the wrong customer.

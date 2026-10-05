@@ -214,7 +214,15 @@ export class InvoiceService {
       }
 
       if (await this.invoices.findBillingRun(service.id, period.start, period.end)) {
-        result.skipped.push({ serviceId: service.id, reason: 'invoice periode ini sudah ada' })
+        // Older/imported data can contain a completed billing run while the
+        // service schedule still points at that same period. Repair the
+        // cursor so every hourly pass does not keep selecting and skipping it.
+        const advanced = nextBillingDate(billingDate, service.billingCycle)
+        await this.invoices.advanceNextDueDate(this.database, service.id, advanced)
+        result.skipped.push({
+          serviceId: service.id,
+          reason: 'invoice periode ini sudah ada; jadwal billing diperbaiki',
+        })
         result.processed += 1
         continue
       }

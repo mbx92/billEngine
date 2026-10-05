@@ -10,6 +10,7 @@ import { AuditLogRepository } from '../../server/repositories/audit'
 import { CreditNoteRepository } from '../../server/repositories/credit-notes'
 import { CustomerRepository } from '../../server/repositories/customers'
 import { InvoiceRepository } from '../../server/repositories/invoices'
+import { BillingAccessRepository } from '../../server/repositories/billing-access'
 import { PaymentRepository } from '../../server/repositories/payments'
 import { PlanRepository } from '../../server/repositories/plans'
 import { ServiceRepository } from '../../server/repositories/services'
@@ -333,6 +334,66 @@ describeWithDatabase('billing flow integration', () => {
     expect(results.flatMap((result) => result.created)).toHaveLength(1)
     expect(runCount?.total).toBe(1)
     expect(invoiceCount?.total).toBe(1)
+  })
+
+  it('repairs a stale recurring schedule when that service period is already invoiced', async () => {
+    const { service } = await createCustomerPlanAndService('2026-01-01')
+
+    await invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor)
+    await database
+      .update(schema.services)
+      .set({ nextDueDate: '2026-01-01' })
+      .where(eq(schema.services.id, service.id))
+
+    const repaired = await invoiceService.generateRecurring(
+      { asOf: '2026-01-01', limit: 100 },
+      actor,
+    )
+    const [storedService] = await database
+      .select({ nextDueDate: schema.services.nextDueDate })
+      .from(schema.services)
+      .where(eq(schema.services.id, service.id))
+
+    expect(repaired.created).toHaveLength(0)
+    expect(repaired.skipped).toEqual([
+      {
+        serviceId: service.id,
+        reason: 'invoice periode ini sudah ada; jadwal billing diperbaiki',
+      },
+    ])
+    expect(storedService?.nextDueDate).toBe('2026-02-01')
+  })
+
+  it('resolves a service through an active managed resource domain', async () => {
+    const { service } = await createCustomerPlanAndService('2026-01-01')
+    const [server] = await database
+      .insert(schema.coolifyServers)
+      .values({ name: 'Domain Coolify', baseUrl: 'https://coolify.domain.test' })
+      .returning()
+    const [resource] = await database
+      .insert(schema.coolifyResources)
+      .values({
+        coolifyServerId: server!.id,
+        coolifyUuid: 'managed-domain-resource',
+        resourceType: 'application',
+        name: 'Managed domain resource',
+        fqdn: null,
+      })
+      .returning()
+    await database.insert(schema.serviceResources).values({
+      serviceId: service.id,
+      resourceId: resource!.id,
+    })
+    await database.insert(schema.resourceDomains).values({
+      resourceId: resource!.id,
+      hostname: 'customer.ocnetworks.web.id',
+      type: 'platform',
+      status: 'active',
+    })
+
+    await expect(
+      new BillingAccessRepository(database).findServiceByHost('customer.ocnetworks.web.id'),
+    ).resolves.toMatchObject({ id: service.id, serviceNumber: service.serviceNumber })
   })
 
   it('stops recurring billing while suspended and resumes without losing the schedule', async () => {

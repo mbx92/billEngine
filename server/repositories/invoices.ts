@@ -425,7 +425,7 @@ export class InvoiceRepository {
   }
 
   async advanceNextDueDate(
-    transaction: Transaction,
+    transaction: Transaction | Database,
     serviceId: string,
     nextDueDate: string | null,
   ) {
