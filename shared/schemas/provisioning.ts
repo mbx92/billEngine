@@ -112,13 +112,6 @@ function validateDeploymentBlueprint(
       message: 'Lokasi Dockerfile wajib untuk build pack dockerfile.',
     })
   }
-  if (input.billingGateEnabled && !input.customLabels) {
-    context.addIssue({
-      code: 'custom',
-      path: ['customLabels'],
-      message: 'Custom label middleware wajib ketika billing gate diaktifkan.',
-    })
-  }
 }
 
 export const createDeploymentBlueprintSchema = deploymentBlueprintSchema.superRefine(

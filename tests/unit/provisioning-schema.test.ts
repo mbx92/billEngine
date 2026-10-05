@@ -42,10 +42,10 @@ describe('provisioning schemas', () => {
     expect(parsed.environmentKeys).toEqual(['JWT_SECRET', 'JWT_EXPIRES_IN', 'NODE_ENV', 'BASE_URL'])
   })
 
-  it('requires labels when a blueprint enables the billing gate', () => {
-    expect(() =>
+  it('allows the server to generate labels when a blueprint enables the billing gate', () => {
+    expect(
       createDeploymentBlueprintSchema.parse({ ...blueprint, billingGateEnabled: true }),
-    ).toThrow(/Custom label middleware/)
+    ).toMatchObject({ billingGateEnabled: true })
   })
 
   it('validates a complete editable blueprint', () => {

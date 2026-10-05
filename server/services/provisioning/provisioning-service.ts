@@ -26,6 +26,7 @@ import {
   encryptInfrastructureCredential,
 } from '../../utils/credentials'
 import { DomainError } from '../../utils/errors'
+import { buildProvisioningBillingGateLabels } from '../../utils/provisioning-billing-gate'
 import { CoolifyResourceService } from '../coolify/resource-service'
 import { clientForCluster } from '../database/database-cluster-service'
 import { ResourceDomainService } from '../domains/resource-domain-service'
@@ -405,6 +406,7 @@ export class ProvisioningService {
           applicationUuid = recovered?.uuid ?? null
         }
         if (!applicationUuid) {
+          const customLabels = provisioningCustomLabels(job.id, blueprint)
           const created = await client.createPublicApplication({
             projectUuid: blueprint.projectUuid,
             serverUuid: blueprint.targetServerUuid,
@@ -423,7 +425,7 @@ export class ProvisioningService {
             healthcheckPort: blueprint.healthcheckPort ?? undefined,
             cpuCores: context.planCpuCores ?? undefined,
             memoryBytes: context.planMemoryBytes ?? undefined,
-            customLabels: blueprint.customLabels ?? undefined,
+            customLabels,
             tags: ['billengine', recoveryTag, `service-${context.serviceNumber.toLowerCase()}`],
             hostname: job.hostname ?? undefined,
             composeServiceName: blueprint.composeServiceName ?? undefined,
@@ -649,6 +651,28 @@ export class ProvisioningService {
       case 'failed':
         return
     }
+  }
+}
+
+function provisioningCustomLabels(
+  jobId: string,
+  blueprint: { billingGateEnabled: boolean; customLabels: string | null },
+) {
+  if (!blueprint.billingGateEnabled) return blueprint.customLabels ?? undefined
+
+  const config = useRuntimeConfig()
+  try {
+    return buildProvisioningBillingGateLabels({
+      existingLabels: blueprint.customLabels,
+      namespace: `billengine-${jobId.replaceAll('-', '').slice(0, 16)}`,
+      sharedKey: String(config.billingGateSharedKey || ''),
+      forwardAuthAddress: String(config.billingGateInternalUrl || ''),
+    })
+  } catch {
+    throw new ProvisioningStageError(
+      'creating_application',
+      'Konfigurasi internal billing gate belum lengkap atau tidak valid.',
+    )
   }
 }
 

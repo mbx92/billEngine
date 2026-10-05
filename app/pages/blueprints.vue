@@ -5,11 +5,6 @@ import type {
   ApiCoolifyProjectOption,
   ApiDeploymentBlueprint,
 } from '#shared/types/api'
-import {
-  addBillingGateTraefikLabel,
-  BILLING_GATE_TRAEFIK_MIDDLEWARE,
-  removeBillingGateTraefikLabel,
-} from '#shared/utils/provisioning-labels'
 import { apiErrorMessage } from '~/lib/api-error'
 
 definePageMeta({ middleware: 'auth' })
@@ -79,15 +74,6 @@ watch(
   () => form.name,
   (name) => {
     if (!editingId.value) form.slug = slugify(name)
-  },
-)
-
-watch(
-  () => form.billingGateEnabled,
-  (enabled) => {
-    form.customLabels = enabled
-      ? addBillingGateTraefikLabel(form.customLabels)
-      : removeBillingGateTraefikLabel(form.customLabels)
   },
 )
 
@@ -637,7 +623,7 @@ function clearFeedback() {
               rows="12"
               spellcheck="false"
               class="focus-ring w-full resize-y rounded-md border border-line-strong bg-[#080d13] px-4 py-3 font-mono text-[13px] leading-6 text-ink placeholder:text-muted/50"
-              :placeholder="`coolify.traefik.middlewares=${BILLING_GATE_TRAEFIK_MIDDLEWARE}`"
+              placeholder="traefik.http.middlewares.custom.compress=true"
             />
           </label>
           <label
@@ -651,9 +637,8 @@ function clearFeedback() {
             <span>
               <span class="block font-semibold">Aktifkan billing gate</span>
               <span class="mt-1 block text-xs leading-5 text-muted">
-                Middleware {{ BILLING_GATE_TRAEFIK_MIDDLEWARE }} otomatis ditambahkan tanpa menimpa
-                label lain. Request aplikasi akan melewati billing gate sebelum diteruskan ke
-                container.
+                Middleware billing gate dibuat otomatis saat provisioning tanpa menimpa label
+                lain. Request aplikasi akan melewati billing gate sebelum diteruskan ke container.
               </span>
             </span>
           </label>

@@ -39,11 +39,10 @@ For a plan with database mode `shared`, the blueprint must select an active Post
 an environment key (default `DATABASE_URL`). BillEngine owns that key; operators cannot override it
 through manual environment values.
 
-When **billing gate** is enabled, the Blueprint editor automatically adds
-`coolify.traefik.middlewares=billing-gate@file` to the custom labels. Existing middleware entries and
-unrelated labels are preserved; disabling the toggle removes only `billing-gate@file`. The matching
-dynamic middleware must already exist on the target Coolify server. Test a blueprint on a
-non-critical application before using it for customer workloads.
+When **billing gate** is enabled, BillEngine generates an application-specific Docker middleware
+chain during provisioning. Existing middleware entries and unrelated labels are preserved, and an
+older `billing-gate@file` entry is replaced automatically. Configure `NUXT_BILLING_GATE_SHARED_KEY`
+and `NUXT_BILLING_GATE_INTERNAL_URL`; the latter must be reachable from the Coolify proxy.
 
 ## Job lifecycle
 

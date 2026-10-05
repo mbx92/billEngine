@@ -121,6 +121,7 @@ services:
       NUXT_GRACE_NOTICE_INTERVAL_HOURS: ${GRACE_NOTICE_INTERVAL_HOURS:-24}
       NUXT_BILLING_GATE_SECRET: ${BILLING_GATE_SECRET:-}
       NUXT_BILLING_GATE_SHARED_KEY: ${BILLING_GATE_SHARED_KEY:-}
+      NUXT_BILLING_GATE_INTERNAL_URL: ${BILLING_GATE_INTERNAL_URL:-http://host.docker.internal:8010/api/billing-gate/check}
     expose:
       - '3000'
     # Keep the existing Cloudflare Tunnel origin reachable. Public HTTP traffic

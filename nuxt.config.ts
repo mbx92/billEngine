@@ -89,6 +89,9 @@ export default defineNuxtConfig({
     graceNoticeIntervalHours: developmentEnv.GRACE_NOTICE_INTERVAL_HOURS || '24',
     billingGateSecret: developmentEnv.BILLING_GATE_SECRET || '',
     billingGateSharedKey: developmentEnv.BILLING_GATE_SHARED_KEY || '',
+    billingGateInternalUrl:
+      developmentEnv.BILLING_GATE_INTERNAL_URL ||
+      'http://host.docker.internal:8010/api/billing-gate/check',
     public: {
       appUrl: developmentEnv.APP_URL || 'http://localhost:3000',
       billingTimezone: developmentEnv.BILLING_TIMEZONE || 'Asia/Makassar',

@@ -18,6 +18,7 @@ Generate two independent random values and configure them on the billing app:
 NUXT_BILLING_GATE_SECRET='<random value>'
 NUXT_BILLING_GATE_SHARED_KEY='<different random value>'
 NUXT_PUBLIC_APP_URL='https://billing.example.com'
+NUXT_BILLING_GATE_INTERNAL_URL='http://host.docker.internal:8010/api/billing-gate/check'
 ```
 
 Enable **Overdue access gate** from Settings only after the middleware below is
@@ -61,6 +62,10 @@ the request reaches the customer application.
 For a standard Coolify application this currently requires editing Container
 Labels, preserving the generated labels, and redeploying once. Test on one
 non-critical application before rolling it out broadly.
+
+New applications provisioned from a blueprint with **billing gate** enabled do not need this host
+file. BillEngine generates an isolated `@docker` middleware chain and injects the shared key at
+creation time. The host file remains supported for applications managed outside provisioning.
 
 ## Cloudflare Tunnel on the Coolify host
 
