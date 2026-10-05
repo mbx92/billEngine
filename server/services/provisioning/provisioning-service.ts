@@ -406,7 +406,10 @@ export class ProvisioningService {
           applicationUuid = recovered?.uuid ?? null
         }
         if (!applicationUuid) {
-          const customLabels = provisioningCustomLabels(job.id, blueprint)
+          const customLabels =
+            blueprint.buildPack === 'dockercompose'
+              ? (blueprint.customLabels ?? undefined)
+              : provisioningCustomLabels(job.id, blueprint)
           const created = await client.createPublicApplication({
             projectUuid: blueprint.projectUuid,
             serverUuid: blueprint.targetServerUuid,
@@ -452,6 +455,11 @@ export class ProvisioningService {
       case 'configuring_environment': {
         const applicationUuid = requireValue(job.coolifyApplicationUuid, 'UUID aplikasi Coolify')
         const variables = decryptEnvironment(job.environmentEncrypted)
+        if (blueprint.billingGateEnabled) {
+          const billingGate = provisioningBillingGateRuntime()
+          variables.BILLING_GATE_SHARED_KEY = billingGate.sharedKey
+          variables.BILLING_GATE_INTERNAL_URL = billingGate.forwardAuthAddress
+        }
         if (context.planDatabaseMode === 'shared') {
           const allocation = context.serviceDatabase
           const cluster = context.databaseCluster
@@ -660,13 +668,12 @@ function provisioningCustomLabels(
 ) {
   if (!blueprint.billingGateEnabled) return blueprint.customLabels ?? undefined
 
-  const config = useRuntimeConfig()
   try {
+    const billingGate = provisioningBillingGateRuntime()
     return buildProvisioningBillingGateLabels({
       existingLabels: blueprint.customLabels,
       namespace: `billengine-${jobId.replaceAll('-', '').slice(0, 16)}`,
-      sharedKey: String(config.billingGateSharedKey || ''),
-      forwardAuthAddress: String(config.billingGateInternalUrl || ''),
+      ...billingGate,
     })
   } catch {
     throw new ProvisioningStageError(
@@ -674,6 +681,19 @@ function provisioningCustomLabels(
       'Konfigurasi internal billing gate belum lengkap atau tidak valid.',
     )
   }
+}
+
+function provisioningBillingGateRuntime() {
+  const config = useRuntimeConfig()
+  const sharedKey = String(config.billingGateSharedKey || '').trim()
+  const forwardAuthAddress = String(config.billingGateInternalUrl || '').trim()
+  if (!sharedKey || !forwardAuthAddress || /[\r\n]/.test(sharedKey + forwardAuthAddress)) {
+    throw new ProvisioningStageError(
+      'configuring_environment',
+      'Konfigurasi internal billing gate belum lengkap atau tidak valid.',
+    )
+  }
+  return { sharedKey, forwardAuthAddress }
 }
 
 class ProvisioningStageError extends Error {

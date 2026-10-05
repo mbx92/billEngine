@@ -64,8 +64,11 @@ Labels, preserving the generated labels, and redeploying once. Test on one
 non-critical application before rolling it out broadly.
 
 New applications provisioned from a blueprint with **billing gate** enabled do not need this host
-file. BillEngine generates an isolated `@docker` middleware chain and injects the shared key at
-creation time. The host file remains supported for applications managed outside provisioning.
+file. BillEngine generates an isolated `@docker` middleware chain for standard build packs. For a
+Docker Compose build, define the chain on the public service in the source Compose file and use
+`COOLIFY_RESOURCE_UUID` in its middleware names; BillEngine injects the key and internal URL as
+application variables. The host file remains supported for applications managed outside
+provisioning.
 
 ## Cloudflare Tunnel on the Coolify host
 
