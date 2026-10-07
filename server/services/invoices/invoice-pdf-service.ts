@@ -1,6 +1,9 @@
 import PDFDocument from 'pdfkit'
 import * as pdfkit from 'pdfkit'
+// PDFKit ships these metric modules without TypeScript declarations.
+// @ts-expect-error -- no types for pdfkit/standard-fonts/*
 import Helvetica from 'pdfkit/standard-fonts/Helvetica'
+// @ts-expect-error -- no types for pdfkit/standard-fonts/*
 import HelveticaBold from 'pdfkit/standard-fonts/HelveticaBold'
 import { billingPeriodMonths, monthlyEquivalent } from '../../../shared/utils/billing-display'
 import type { InvoiceRepository } from '../../repositories/invoices'
