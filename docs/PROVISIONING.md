@@ -39,13 +39,14 @@ For a plan with database mode `shared`, the blueprint must select an active Post
 an environment key (default `DATABASE_URL`). BillEngine owns that key; operators cannot override it
 through manual environment values.
 
-When **billing gate** is enabled, BillEngine supplies `BILLING_GATE_SHARED_KEY` and
-`BILLING_GATE_INTERNAL_URL` to the provisioned application automatically. Standard build packs get
-an application-specific Docker middleware chain through generated labels. A Docker Compose source
-must define the middleware labels on its public service because Coolify reads Compose labels from
-the repository; use `COOLIFY_RESOURCE_UUID` in middleware names so every deployment is isolated.
-Configure `NUXT_BILLING_GATE_SHARED_KEY` and `NUXT_BILLING_GATE_INTERNAL_URL` on BillEngine; the
-latter must be reachable from the Coolify proxy.
+When **billing gate** is enabled (the default for new blueprints), BillEngine injects Traefik
+middleware at provision time. Standard build packs receive
+`coolify.traefik.middlewares=billing-gate@file` through Coolify custom labels. Docker Compose apps
+get the same reserved label written onto the public service in stored compose. Coolify reloads
+compose from Git on each deploy, so keep that one label in the repository compose file as well. Do
+not define `traefik.http.middlewares.*` billing chains in Compose; Coolify expands those onto the
+router and returns HTTP 500. Configure `NUXT_BILLING_GATE_SHARED_KEY` and
+`NUXT_BILLING_GATE_INTERNAL_URL` on BillEngine; the latter must be reachable from the Coolify proxy.
 
 ## Job lifecycle
 

@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { ArrowLeft, Ban, CreditCard, Download, LoaderCircle, Mail, ReceiptText } from '@lucide/vue'
+import {
+  ArrowLeft,
+  Ban,
+  CreditCard,
+  Download,
+  LoaderCircle,
+  Mail,
+  ReceiptText,
+  Trash2,
+} from '@lucide/vue'
 import type { ApiInvoiceDetail } from '#shared/types/api'
 import { billingPeriodMonths, monthlyEquivalent } from '#shared/utils/billing-display'
 import { apiErrorMessage } from '~/lib/api-error'
@@ -18,8 +27,10 @@ const { data, status, error, refresh } = await useFetch<{ data: ApiInvoiceDetail
 const detail = computed(() => data.value?.data)
 const invoice = computed(() => detail.value?.invoice)
 const showCancelConfirm = ref(false)
+const showDeleteConfirm = ref(false)
 const showCreditForm = ref(false)
 const cancelling = ref(false)
+const deleting = ref(false)
 const sendingEmail = ref(false)
 const creatingCredit = ref(false)
 const creditForm = reactive({ amount: '', reason: '' })
@@ -35,6 +46,7 @@ const canCancel = computed(
 const canRecordPayment = computed(
   () => invoice.value?.status === 'unpaid' || invoice.value?.status === 'overdue',
 )
+const canDelete = computed(() => invoice.value?.status === 'cancelled')
 
 useHead(() => ({
   title: invoice.value
@@ -69,6 +81,23 @@ async function cancelInvoice() {
     actionError.value = apiErrorMessage(caught, 'Invoice tidak dapat dibatalkan.')
   } finally {
     cancelling.value = false
+  }
+}
+
+async function deleteInvoice() {
+  deleting.value = true
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    await $fetch(`/api/invoices/${encodeURIComponent(invoiceId.value)}`, {
+      method: 'DELETE',
+    })
+    showDeleteConfirm.value = false
+    await navigateTo('/invoices')
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Invoice tidak dapat dihapus.')
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -186,6 +215,10 @@ async function createCreditNote() {
             <Ban :size="15" aria-hidden="true" />
             Cancel invoice
           </UiButton>
+          <UiButton v-if="canDelete" variant="danger" @click="showDeleteConfirm = true">
+            <Trash2 :size="15" aria-hidden="true" />
+            Hapus invoice
+          </UiButton>
           <NuxtLink
             v-if="canRecordPayment"
             :to="{ path: '/payments', query: { invoiceId: detail.invoice.id } }"
@@ -227,6 +260,33 @@ async function createCreditNote() {
             <UiButton variant="danger" :disabled="cancelling" @click="cancelInvoice">
               <LoaderCircle v-if="cancelling" class="animate-spin" :size="15" aria-hidden="true" />
               {{ cancelling ? 'Membatalkan…' : 'Ya, batalkan invoice' }}
+            </UiButton>
+          </div>
+        </template>
+      </UiDialog>
+
+      <UiDialog
+        v-if="showDeleteConfirm"
+        title="Hapus invoice?"
+        :description="`${detail.invoice.invoiceNumber} akan dihapus permanen dari daftar invoice.`"
+        size="md"
+        :close-disabled="deleting"
+        @close="showDeleteConfirm = false"
+      >
+        <div
+          class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
+        >
+          Hanya invoice berstatus cancelled yang dapat dihapus. Riwayat pembayaran dan credit note
+          tidak boleh ada. Tindakan ini tidak dapat dibatalkan.
+        </div>
+        <template #footer>
+          <div class="flex justify-end gap-2">
+            <UiButton variant="secondary" :disabled="deleting" @click="showDeleteConfirm = false">
+              Kembali
+            </UiButton>
+            <UiButton variant="danger" :disabled="deleting" @click="deleteInvoice">
+              <LoaderCircle v-if="deleting" class="animate-spin" :size="15" aria-hidden="true" />
+              {{ deleting ? 'Menghapus…' : 'Ya, hapus invoice' }}
             </UiButton>
           </div>
         </template>

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildProvisioningBillingGateLabels,
+  injectComposeBillingGateLabel,
+  publicGitComposeUrl,
   withGateKeyQuery,
 } from '../../server/utils/provisioning-billing-gate'
 
@@ -46,5 +48,60 @@ describe('provisioning billing gate labels', () => {
     expect(withGateKeyQuery('http://gate/check?x=1', 'secret')).toBe(
       'http://gate/check?x=1&gate_key=secret',
     )
+  })
+})
+
+describe('compose billing gate injection', () => {
+  it('adds a labels list when the public service has none', () => {
+    const injected = injectComposeBillingGateLabel(
+      `services:
+  app:
+    image: example
+    ports:
+      - "3000:3000"
+`,
+      'app',
+    )
+
+    expect(injected).toContain('coolify.traefik.middlewares=billing-gate@file')
+    expect(injected).toContain('image: example')
+  })
+
+  it('appends the reserved label to an existing labels list', () => {
+    const injected = injectComposeBillingGateLabel(
+      `services:
+  app:
+    labels:
+      - "traefik.enable=true"
+`,
+      'app',
+    )
+
+    expect(injected).toContain('traefik.enable=true')
+    expect(injected).toContain('coolify.traefik.middlewares=billing-gate@file')
+    expect(injected).not.toContain('forwardauth')
+  })
+
+  it('merges into an existing coolify.traefik.middlewares assignment', () => {
+    const injected = injectComposeBillingGateLabel(
+      `services:
+  app:
+    labels:
+      - "coolify.traefik.middlewares=gzip@file"
+`,
+      'app',
+    )
+
+    expect(injected).toContain('coolify.traefik.middlewares=gzip@file,billing-gate@file')
+  })
+
+  it('builds a GitHub raw compose URL', () => {
+    expect(
+      publicGitComposeUrl(
+        'https://github.com/mbx92/hdSales.git',
+        'main',
+        '/docker-compose.yml',
+      ),
+    ).toBe('https://raw.githubusercontent.com/mbx92/hdSales/main/docker-compose.yml')
   })
 })

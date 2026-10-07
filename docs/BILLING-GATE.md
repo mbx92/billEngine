@@ -63,12 +63,12 @@ For a standard Coolify application this currently requires editing Container
 Labels, preserving the generated labels, and redeploying once. Test on one
 non-critical application before rolling it out broadly.
 
-New applications provisioned from a blueprint with **billing gate** enabled do not need this host
-file. BillEngine generates an isolated `@docker` middleware chain for standard build packs. For a
-Docker Compose build, define the chain on the public service in the source Compose file and use
-`COOLIFY_RESOURCE_UUID` in its middleware names; BillEngine injects the key and internal URL as
-application variables. The host file remains supported for applications managed outside
-provisioning.
+New applications provisioned from a blueprint with **billing gate** enabled attach
+`billing-gate@file` automatically. Standard build packs use Coolify custom labels. Docker Compose
+builds receive `coolify.traefik.middlewares=billing-gate@file` on the public service at provision
+time. The host file (`billing-gate.yaml`) still has to exist on the Coolify proxy so Traefik can
+resolve `@file`; BillEngine writes that file from its own production compose. The source Git
+Compose file does not need billing middleware definitions.
 
 ## Cloudflare Tunnel on the Coolify host
 

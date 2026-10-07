@@ -42,6 +42,12 @@ describe('provisioning schemas', () => {
     expect(parsed.environmentKeys).toEqual(['JWT_SECRET', 'JWT_EXPIRES_IN', 'NODE_ENV', 'BASE_URL'])
   })
 
+  it('enables the billing gate by default on new blueprints', () => {
+    expect(
+      createDeploymentBlueprintSchema.parse({ ...blueprint, billingGateEnabled: undefined }),
+    ).toMatchObject({ billingGateEnabled: true })
+  })
+
   it('allows the server to generate labels when a blueprint enables the billing gate', () => {
     expect(
       createDeploymentBlueprintSchema.parse({ ...blueprint, billingGateEnabled: true }),

@@ -5,7 +5,14 @@ import type {
   GenerateRecurringInvoicesInput,
 } from '../../../shared/schemas/invoices'
 import { useDatabase, type Database } from '../../database/client'
-import { serviceBillingRuns } from '../../database/schema'
+import {
+  creditNotes,
+  emailDeliveries,
+  invoiceItems,
+  invoices,
+  payments,
+  serviceBillingRuns,
+} from '../../database/schema'
 import { AuditLogRepository } from '../../repositories/audit'
 import { CustomerRepository } from '../../repositories/customers'
 import { allocateDocumentNumber } from '../../repositories/document-sequences'
@@ -407,6 +414,61 @@ export class InvoiceService {
       })
 
       return cancelled
+    })
+  }
+
+  /** Permanently removes a cancelled invoice that has no payment or credit-note history. */
+  async removeCancelled(id: string, actor: ActorContext) {
+    return this.database.transaction(async (transaction) => {
+      const existing = await this.invoices.findById(id, transaction)
+      if (!existing) throw DomainError.notFound('Invoice tidak ditemukan.')
+      if (existing.status !== 'cancelled') {
+        throw DomainError.invalidState('Hanya invoice yang sudah dibatalkan yang dapat dihapus.')
+      }
+      if (existing.amountPaid > 0n) {
+        throw DomainError.invalidState('Invoice dengan pembayaran tidak dapat dihapus.')
+      }
+      if (existing.creditedAmount > 0n) {
+        throw DomainError.invalidState('Invoice dengan credit note tidak dapat dihapus.')
+      }
+
+      const [payment] = await transaction
+        .select({ id: payments.id })
+        .from(payments)
+        .where(eq(payments.invoiceId, id))
+        .limit(1)
+      if (payment) {
+        throw DomainError.invalidState('Invoice dengan riwayat pembayaran tidak dapat dihapus.')
+      }
+
+      const [credit] = await transaction
+        .select({ id: creditNotes.id })
+        .from(creditNotes)
+        .where(eq(creditNotes.invoiceId, id))
+        .limit(1)
+      if (credit) {
+        throw DomainError.invalidState('Invoice dengan credit note tidak dapat dihapus.')
+      }
+
+      await transaction.delete(emailDeliveries).where(eq(emailDeliveries.invoiceId, id))
+      await transaction.delete(invoiceItems).where(eq(invoiceItems.invoiceId, id))
+      await transaction.delete(serviceBillingRuns).where(eq(serviceBillingRuns.invoiceId, id))
+      await transaction.delete(invoices).where(eq(invoices.id, id))
+
+      await this.audit.record(transaction, {
+        actorUserId: actor.userId,
+        action: 'invoice.deleted',
+        entityType: 'invoice',
+        entityId: id,
+        beforeData: {
+          invoiceNumber: existing.invoiceNumber,
+          status: existing.status,
+        },
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+      })
+
+      return { id: existing.id, invoiceNumber: existing.invoiceNumber }
     })
   }
 

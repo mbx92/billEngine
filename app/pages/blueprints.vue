@@ -52,7 +52,7 @@ const form = reactive({
   healthcheckPort: '3000',
   environmentKeys: [] as string[],
   customLabels: '',
-  billingGateEnabled: false,
+  billingGateEnabled: true,
   databaseClusterId: '',
   databaseEnvironmentKey: 'DATABASE_URL',
   isActive: true,
@@ -102,7 +102,7 @@ function resetForm() {
     healthcheckPort: '3000',
     environmentKeys: [],
     customLabels: '',
-    billingGateEnabled: false,
+    billingGateEnabled: true,
     databaseClusterId: '',
     databaseEnvironmentKey: 'DATABASE_URL',
     isActive: true,
@@ -637,8 +637,9 @@ function clearFeedback() {
             <span>
               <span class="block font-semibold">Aktifkan billing gate</span>
               <span class="mt-1 block text-xs leading-5 text-muted">
-                Middleware billing gate dibuat otomatis saat provisioning tanpa menimpa label
-                lain. Request aplikasi akan melewati billing gate sebelum diteruskan ke container.
+                Saat deploy, BillEngine menempelkan middleware Traefik
+                <span class="font-mono">billing-gate@file</span> ke aplikasi (termasuk Docker
+                Compose) tanpa mengubah repo. Request masuk melewati gate sebelum ke container.
               </span>
             </span>
           </label>

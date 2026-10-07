@@ -8,7 +8,7 @@ import type { ProvisioningStatus } from '../../../shared/types/api'
 import { withPostgresAdvisoryLock } from '../../database/advisory-lock'
 import { useDatabase, type Database } from '../../database/client'
 import { clientForCoolifyConnection } from '../../integrations/coolify/connection'
-import { CoolifyClientError } from '../../integrations/coolify/client'
+import { CoolifyClient, CoolifyClientError } from '../../integrations/coolify/client'
 import { normalizeCoolifyApplication } from '../../integrations/coolify/normalize'
 import {
   buildDatabaseUrl,
@@ -26,7 +26,11 @@ import {
   encryptInfrastructureCredential,
 } from '../../utils/credentials'
 import { DomainError } from '../../utils/errors'
-import { buildProvisioningBillingGateLabels } from '../../utils/provisioning-billing-gate'
+import {
+  buildProvisioningBillingGateLabels,
+  injectComposeBillingGateLabel,
+  publicGitComposeUrl,
+} from '../../utils/provisioning-billing-gate'
 import { CoolifyResourceService } from '../coolify/resource-service'
 import { clientForCluster } from '../database/database-cluster-service'
 import { ResourceDomainService } from '../domains/resource-domain-service'
@@ -406,10 +410,7 @@ export class ProvisioningService {
           applicationUuid = recovered?.uuid ?? null
         }
         if (!applicationUuid) {
-          const customLabels =
-            blueprint.buildPack === 'dockercompose'
-              ? (blueprint.customLabels ?? undefined)
-              : provisioningCustomLabels(job.id, blueprint)
+          const customLabels = provisioningCustomLabels(job.id, blueprint)
           const created = await client.createPublicApplication({
             projectUuid: blueprint.projectUuid,
             serverUuid: blueprint.targetServerUuid,
@@ -488,6 +489,9 @@ export class ProvisioningService {
           applicationUuid,
           Object.entries(variables).map(([key, value]) => ({ key, value, isShownOnce: true })),
         )
+        if (blueprint.billingGateEnabled) {
+          await attachBillingGateToApplication(client, applicationUuid, blueprint, job.id)
+        }
         await this.repository.advance(
           job.id,
           'configuring_domain',
@@ -682,6 +686,85 @@ function provisioningCustomLabels(
       'creating_application',
       'Konfigurasi internal billing gate belum lengkap atau tidak valid.',
     )
+  }
+}
+
+async function attachBillingGateToApplication(
+  client: CoolifyClient,
+  applicationUuid: string,
+  blueprint: {
+    billingGateEnabled: boolean
+    buildPack: string
+    customLabels: string | null
+    composeServiceName: string | null
+    repositoryUrl: string
+    branch: string
+    dockerComposeLocation: string | null
+  },
+  jobId: string,
+) {
+  const labels = provisioningCustomLabels(jobId, blueprint)
+  if (labels) {
+    try {
+      await client.updateApplicationCustomLabels(applicationUuid, labels)
+    } catch (error) {
+      throw new ProvisioningStageError(
+        'configuring_environment',
+        error instanceof Error
+          ? `Gagal menulis custom labels billing gate: ${error.message}`
+          : 'Gagal menulis custom labels billing gate.',
+      )
+    }
+  }
+
+  if (blueprint.buildPack !== 'dockercompose') return
+
+  const serviceName = blueprint.composeServiceName?.trim() || 'app'
+  let compose = await client.getApplicationComposeRaw(applicationUuid)
+  if (!compose?.trim()) {
+    compose = await fetchPublicComposeSource(blueprint)
+  }
+  if (!compose?.trim()) {
+    throw new ProvisioningStageError(
+      'configuring_environment',
+      'Compose tidak dapat dibaca untuk inject billing gate.',
+    )
+  }
+
+  try {
+    const injected = injectComposeBillingGateLabel(compose, serviceName)
+    await client.updateApplicationComposeRaw(applicationUuid, injected)
+  } catch (error) {
+    throw new ProvisioningStageError(
+      'configuring_environment',
+      error instanceof Error
+        ? `Gagal inject billing gate ke Compose: ${error.message}`
+        : 'Gagal inject billing gate ke Compose.',
+    )
+  }
+}
+
+async function fetchPublicComposeSource(blueprint: {
+  repositoryUrl: string
+  branch: string
+  dockerComposeLocation: string | null
+}) {
+  const url = publicGitComposeUrl(
+    blueprint.repositoryUrl,
+    blueprint.branch,
+    blueprint.dockerComposeLocation || '/docker-compose.yml',
+  )
+  if (!url) return null
+  try {
+    const response = await fetch(url, {
+      headers: { 'user-agent': 'BillEngine/1.0' },
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (!response.ok) return null
+    const text = await response.text()
+    return text.trim() ? text : null
+  } catch {
+    return null
   }
 }
 

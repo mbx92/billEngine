@@ -80,7 +80,7 @@ const deploymentBlueprintSchema = z.object({
     .default([])
     .refine((keys) => new Set(keys).size === keys.length, 'Environment key harus unik.'),
   customLabels: optionalText(20_000),
-  billingGateEnabled: z.boolean().default(false),
+  billingGateEnabled: z.boolean().default(true),
   databaseClusterId: z.preprocess(
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.uuid().optional(),

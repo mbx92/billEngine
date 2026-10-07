@@ -139,6 +139,47 @@ describe('Coolify client', () => {
     )
   })
 
+  it('writes base64 custom labels and compose source for billing gate injection', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ uuid: 'app-1', docker_compose_raw: 'services:\n  app: {}\n' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValue(
+        new Response(JSON.stringify({ uuid: 'app-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    vi.stubGlobal('fetch', request)
+
+    const client = new CoolifyClient('https://coolify.example.test', 'secret')
+    await expect(client.getApplicationComposeRaw('app-1')).resolves.toContain('services:')
+    await client.updateApplicationCustomLabels('app-1', 'coolify.traefik.middlewares=billing-gate@file')
+    await client.updateApplicationComposeRaw('app-1', 'services:\n  app:\n    image: x\n')
+
+    expect(request.mock.calls[1]![1]).toEqual(
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          custom_labels: Buffer.from(
+            'coolify.traefik.middlewares=billing-gate@file',
+            'utf8',
+          ).toString('base64'),
+        }),
+      }),
+    )
+    expect(request.mock.calls[2]![1]).toEqual(
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ docker_compose_raw: 'services:\n  app:\n    image: x\n' }),
+      }),
+    )
+  })
+
   it('creates a public application without starting deployment', async () => {
     const request = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ uuid: 'app-new' }), {

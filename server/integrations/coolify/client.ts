@@ -310,6 +310,26 @@ export class CoolifyClient {
     })
   }
 
+  async getApplicationComposeRaw(uuid: string) {
+    const payload = await this.request<Record<string, unknown>>(
+      `/api/v1/applications/${encodeURIComponent(uuid)}`,
+    )
+    const raw = payload.docker_compose_raw
+    return typeof raw === 'string' && raw.trim() ? raw : null
+  }
+
+  async updateApplicationCustomLabels(uuid: string, customLabels: string) {
+    await this.updateApplication(uuid, {
+      custom_labels: Buffer.from(customLabels, 'utf8').toString('base64'),
+    })
+  }
+
+  async updateApplicationComposeRaw(uuid: string, dockerComposeRaw: string) {
+    await this.updateApplication(uuid, {
+      docker_compose_raw: dockerComposeRaw,
+    })
+  }
+
   private updateApplication(uuid: string, body: Record<string, unknown>) {
     return this.request<unknown>(`/api/v1/applications/${encodeURIComponent(uuid)}`, {
       method: 'PATCH',
