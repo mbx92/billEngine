@@ -10,6 +10,38 @@ const { data, status, error } = await useFetch<{ data: ApiInvoiceDetail }>(
   () => `/api/portal/invoices/${encodeURIComponent(invoiceId.value)}`,
 )
 const detail = computed(() => data.value?.data)
+const downloadingPdf = ref(false)
+const downloadError = ref<string | null>(null)
+
+async function downloadPdf() {
+  if (!detail.value) return
+  downloadingPdf.value = true
+  downloadError.value = null
+  try {
+    const response = await fetch(`/api/portal/invoices/${detail.value.invoice.id}/pdf`, {
+      credentials: 'same-origin',
+    })
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as {
+        error?: { message?: string }
+      } | null
+      throw new Error(payload?.error?.message || 'PDF gagal diunduh.')
+    }
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `${detail.value.invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+  } catch (caught) {
+    downloadError.value = caught instanceof Error ? caught.message : 'PDF gagal diunduh.'
+  } finally {
+    downloadingPdf.value = false
+  }
+}
 useHead(() => ({
   title: detail.value ? `${detail.value.invoice.invoiceNumber} · Portal` : 'Invoice · Portal',
 }))
@@ -46,13 +78,18 @@ useHead(() => ({
             Jatuh tempo {{ format.date(detail.invoice.dueDate) }}
           </p>
         </div>
-        <a
-          :href="`/api/portal/invoices/${detail.invoice.id}/pdf`"
-          download
-          class="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-brand bg-brand px-4 text-sm font-semibold text-[#071109]"
-          ><Download :size="15" /> Download PDF</a
-        >
+        <UiButton :disabled="downloadingPdf" @click="downloadPdf">
+          <Download :size="15" aria-hidden="true" />
+          {{ downloadingPdf ? 'Mengunduh…' : 'Download PDF' }}
+        </UiButton>
       </header>
+      <p
+        v-if="downloadError"
+        class="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+        role="alert"
+      >
+        {{ downloadError }}
+      </p>
 
       <UiCard :padded="false" class="mb-5">
         <div class="overflow-x-auto">

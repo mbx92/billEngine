@@ -1,3 +1,5 @@
+import { cpSync, existsSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 
 // Keep the legacy unprefixed variables convenient for local `nuxt dev`, but
@@ -101,12 +103,26 @@ export default defineNuxtConfig({
   },
   nitro: {
     preset: 'node-server',
-    // PDFKit and Better Auth currently depend on different major versions of
-    // @noble packages. Keeping both dependency trees inside the server bundle
-    // avoids Node resolving PDFKit's self-imports against Better Auth's newer
-    // top-level version in Nitro's standalone output.
+    // PDFKit 0.20 lazy-loads standard fonts via `#standard-fonts/*` from its
+    // own package. Inlining it into the Nitro bundle breaks that lookup in
+    // production (Helvetica is not registered). Keep pdfkit external so the
+    // real package, including font modules, is traced into `.output`.
+    // Better Auth still needs its @noble tree bundled separately from PDFKit's.
     externals: {
-      inline: ['pdfkit', '@noble/hashes', '@noble/ciphers'],
+      inline: ['@noble/hashes', '@noble/ciphers'],
+      external: ['pdfkit'],
+    },
+    hooks: {
+      compiled(nitro) {
+        const source = join(nitro.options.rootDir, 'node_modules/pdfkit')
+        const destination = join(
+          nitro.options.output.serverDir ?? join(nitro.options.output.dir, 'server'),
+          'node_modules/pdfkit',
+        )
+        if (!existsSync(source)) return
+        mkdirSync(dirname(destination), { recursive: true })
+        cpSync(source, destination, { recursive: true })
+      },
     },
     // Nuxt hardcodes its own error handler, so the JSON API error envelope has
     // to be wired in explicitly.

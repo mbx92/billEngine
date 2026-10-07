@@ -10,6 +10,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Trash2,
 } from '@lucide/vue'
 import type {
   ApiService,
@@ -39,6 +40,8 @@ const actionMessage = ref<string | null>(null)
 const selectedService = ref<ApiService | null>(null)
 const showEditForm = ref(false)
 const showTransitionForm = ref(false)
+const showDeleteConfirm = ref(false)
+const deleting = ref(false)
 const showInfrastructureDialog = ref(false)
 const infrastructureLoading = ref(false)
 const infrastructureApplying = ref(false)
@@ -330,6 +333,28 @@ async function transitionService() {
   }
 }
 
+function openDelete(service: ApiService) {
+  selectedService.value = service
+  actionError.value = null
+  showDeleteConfirm.value = true
+}
+
+async function deleteService() {
+  if (!selectedService.value) return
+  deleting.value = true
+  actionError.value = null
+  try {
+    await $fetch(`/api/services/${selectedService.value.id}`, { method: 'DELETE' })
+    actionMessage.value = `${selectedService.value.serviceNumber} dihapus.`
+    showDeleteConfirm.value = false
+    await Promise.all([refresh(), refreshOptions()])
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Service tidak dapat dihapus.')
+  } finally {
+    deleting.value = false
+  }
+}
+
 async function openInfrastructure(service: ApiService) {
   selectedService.value = service
   showInfrastructureDialog.value = true
@@ -418,6 +443,13 @@ async function applyInfrastructure() {
       role="status"
     >
       {{ actionMessage }}
+    </p>
+    <p
+      v-if="actionError && !showAddForm"
+      class="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+      role="alert"
+    >
+      {{ actionError }}
     </p>
     <UiDialog
       v-if="showAddForm"
@@ -1064,6 +1096,32 @@ async function applyInfrastructure() {
       >
     </UiDialog>
 
+    <UiDialog
+      v-if="showDeleteConfirm && selectedService"
+      title="Hapus service?"
+      :description="`${selectedService.serviceNumber} · ${selectedService.name} akan dihapus permanen dari katalog.`"
+      :close-disabled="deleting"
+      @close="showDeleteConfirm = false"
+    >
+      <div
+        class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
+      >
+        Hanya service berstatus cancelled yang dapat dihapus, dan hanya jika belum pernah
+        ditagihkan. Aplikasi Coolify dan database PostgreSQL tidak dihapus. Tindakan ini tidak
+        dapat dibatalkan.
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UiButton variant="secondary" :disabled="deleting" @click="showDeleteConfirm = false">
+            Kembali
+          </UiButton>
+          <UiButton variant="danger" :disabled="deleting" @click="deleteService">
+            {{ deleting ? 'Menghapus…' : 'Ya, hapus service' }}
+          </UiButton>
+        </div>
+      </template>
+    </UiDialog>
+
     <UiCard :padded="false">
       <div class="flex h-11 items-center justify-between border-b px-4">
         <span class="text-xs font-semibold text-muted">Billable catalog</span>
@@ -1239,6 +1297,14 @@ async function applyInfrastructure() {
                       title="Batalkan"
                       @click="openTransition(service, 'cancelled')"
                       ><Ban :size="14"
+                    /></UiButton>
+                    <UiButton
+                      v-if="service.status === 'cancelled'"
+                      variant="danger"
+                      size="sm"
+                      title="Hapus"
+                      @click="openDelete(service)"
+                      ><Trash2 :size="14"
                     /></UiButton>
                   </div>
                 </td>

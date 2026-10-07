@@ -112,7 +112,7 @@ async function manualInvoiceCreated(invoice: { id: string; invoiceNumber: string
 
 <template>
   <div class="mx-auto max-w-7xl">
-    <header class="mb-5 flex flex-col justify-between gap-4 sm:mb-6 sm:flex-row sm:items-end">
+    <header class="mb-5 flex flex-col justify-between gap-4 sm:mb-6 lg:flex-row lg:items-start">
       <div>
         <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
           Commercial / invoices
@@ -122,32 +122,40 @@ async function manualInvoiceCreated(invoice: { id: string; invoiceNumber: string
           Immutable customer and seller snapshots with payment and overdue state.
         </p>
       </div>
-      <div class="flex flex-wrap gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-          Refresh
-        </UiButton>
-        <UiButton variant="secondary" :disabled="busy !== null" @click="markOverdue()">
-          <ClockAlert :size="15" :stroke-width="1.8" aria-hidden="true" />
-          {{ busy === 'overdue' ? 'Memproses…' : 'Mark overdue' }}
-        </UiButton>
-        <UiButton
-          variant="secondary"
-          :disabled="busy !== null || !settings.billingAutomationEnabled"
-          :title="
-            settings.billingAutomationEnabled
-              ? 'Jalankan recurring billing sekarang'
-              : 'Aktifkan billing automation melalui Settings'
-          "
-          @click="generateRecurring()"
-        >
-          <Zap :size="15" :stroke-width="1.8" aria-hidden="true" />
-          {{ busy === 'generate' ? 'Menjalankan…' : 'Generate recurring' }}
-        </UiButton>
-        <UiButton @click="showManualForm = true">
+      <div class="flex w-full flex-col gap-2 lg:w-auto lg:items-end">
+        <UiButton class="w-full sm:w-auto" @click="showManualForm = true">
           <Plus :size="15" :stroke-width="1.8" aria-hidden="true" />
           Manual invoice
         </UiButton>
+        <div class="flex flex-wrap justify-end gap-2">
+          <UiButton
+            variant="ghost"
+            size="sm"
+            :disabled="status === 'pending'"
+            @click="refresh()"
+          >
+            <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+            Refresh
+          </UiButton>
+          <UiButton variant="secondary" size="sm" :disabled="busy !== null" @click="markOverdue()">
+            <ClockAlert :size="14" :stroke-width="1.8" aria-hidden="true" />
+            {{ busy === 'overdue' ? 'Memproses…' : 'Mark overdue' }}
+          </UiButton>
+          <UiButton
+            variant="secondary"
+            size="sm"
+            :disabled="busy !== null || !settings.billingAutomationEnabled"
+            :title="
+              settings.billingAutomationEnabled
+                ? 'Jalankan recurring billing sekarang'
+                : 'Aktifkan billing automation melalui Settings'
+            "
+            @click="generateRecurring()"
+          >
+            <Zap :size="14" :stroke-width="1.8" aria-hidden="true" />
+            {{ busy === 'generate' ? 'Menjalankan…' : 'Generate' }}
+          </UiButton>
+        </div>
       </div>
     </header>
 

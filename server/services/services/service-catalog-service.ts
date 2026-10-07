@@ -1,11 +1,18 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, notInArray, sql } from 'drizzle-orm'
 import type {
   CreateServiceInput,
   TransitionServiceInput,
   UpdateServiceInput,
 } from '../../../shared/schemas/services'
 import { useDatabase, type Database } from '../../database/client'
-import { serviceDatabases } from '../../database/schema'
+import {
+  invoiceItems,
+  provisioningJobs,
+  serviceBillingRuns,
+  serviceDatabases,
+  serviceResources,
+  services,
+} from '../../database/schema'
 import { AuditLogRepository } from '../../repositories/audit'
 import {
   allocateDocumentNumber,
@@ -237,6 +244,72 @@ export class ServiceCatalogService {
       }
       lockConnection.release()
     }
+  }
+
+  /** Permanently removes a cancelled service that has no invoice history. */
+  async removeCancelled(id: string, actor: ActorContext) {
+    return this.database.transaction(async (transaction) => {
+      const existing = await this.repository.findById(transaction, id)
+      if (!existing) throw DomainError.notFound('Service tidak ditemukan.')
+      if (existing.status !== 'cancelled') {
+        throw DomainError.invalidState('Hanya service yang sudah dibatalkan yang dapat dihapus.')
+      }
+
+      const [billingRun] = await transaction
+        .select({ id: serviceBillingRuns.id })
+        .from(serviceBillingRuns)
+        .where(eq(serviceBillingRuns.serviceId, id))
+        .limit(1)
+      if (billingRun) {
+        throw DomainError.invalidState('Service yang sudah memiliki invoice tidak dapat dihapus.')
+      }
+
+      const [invoiceItem] = await transaction
+        .select({ id: invoiceItems.id })
+        .from(invoiceItems)
+        .where(eq(invoiceItems.serviceId, id))
+        .limit(1)
+      if (invoiceItem) {
+        throw DomainError.invalidState('Service yang sudah memiliki invoice tidak dapat dihapus.')
+      }
+
+      const [runningJob] = await transaction
+        .select({ id: provisioningJobs.id })
+        .from(provisioningJobs)
+        .where(
+          and(
+            eq(provisioningJobs.serviceId, id),
+            notInArray(provisioningJobs.status, ['active', 'failed']),
+          ),
+        )
+        .limit(1)
+      if (runningJob) {
+        throw DomainError.invalidState(
+          'Provisioning masih berjalan. Tunggu job selesai atau gagal sebelum menghapus service.',
+        )
+      }
+
+      await transaction.delete(serviceResources).where(eq(serviceResources.serviceId, id))
+      await transaction.delete(provisioningJobs).where(eq(provisioningJobs.serviceId, id))
+      await transaction.delete(serviceDatabases).where(eq(serviceDatabases.serviceId, id))
+      await transaction.delete(services).where(eq(services.id, id))
+
+      await this.audit.record(transaction, {
+        actorUserId: actor.userId,
+        action: 'service.deleted',
+        entityType: 'service',
+        entityId: id,
+        beforeData: {
+          serviceNumber: existing.serviceNumber,
+          name: existing.name,
+          status: existing.status,
+        },
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+      })
+
+      return { id: existing.id, serviceNumber: existing.serviceNumber }
+    })
   }
 }
 

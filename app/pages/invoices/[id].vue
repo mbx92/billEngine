@@ -32,6 +32,7 @@ const showCreditForm = ref(false)
 const cancelling = ref(false)
 const deleting = ref(false)
 const sendingEmail = ref(false)
+const downloadingPdf = ref(false)
 const creatingCredit = ref(false)
 const creditForm = reactive({ amount: '', reason: '' })
 const actionError = ref<string | null>(null)
@@ -47,6 +48,12 @@ const canRecordPayment = computed(
   () => invoice.value?.status === 'unpaid' || invoice.value?.status === 'overdue',
 )
 const canDelete = computed(() => invoice.value?.status === 'cancelled')
+const canIssueCredit = computed(
+  () => Boolean(canRecordPayment.value && invoice.value && invoice.value.balanceDue !== '0'),
+)
+const hasSecondaryActions = computed(
+  () => canIssueCredit.value || canCancel.value || canDelete.value,
+)
 
 useHead(() => ({
   title: invoice.value
@@ -98,6 +105,33 @@ async function deleteInvoice() {
     actionError.value = apiErrorMessage(caught, 'Invoice tidak dapat dihapus.')
   } finally {
     deleting.value = false
+  }
+}
+
+async function downloadPdf() {
+  downloadingPdf.value = true
+  actionError.value = null
+  try {
+    const response = await fetch(pdfUrl.value, { credentials: 'same-origin' })
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as {
+        error?: { message?: string }
+      } | null
+      throw new Error(payload?.error?.message || 'PDF gagal diunduh.')
+    }
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `${invoice.value?.invoiceNumber?.replace(/[^a-zA-Z0-9_-]/g, '-') ?? 'invoice'}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'PDF gagal diunduh.')
+  } finally {
+    downloadingPdf.value = false
   }
 }
 
@@ -183,58 +217,81 @@ async function createCreditNote() {
         {{ actionError }}
       </p>
 
-      <header class="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
-            Commercial / invoice detail
-          </p>
-          <div class="flex flex-wrap items-center gap-3">
-            <h1 class="font-mono text-2xl font-semibold tracking-tight text-ink">
-              {{ detail.invoice.invoiceNumber }}
-            </h1>
-            <BillingStatusBadge kind="invoice" :status="detail.invoice.status" />
+      <header class="mb-6 space-y-4">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div class="min-w-0">
+            <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
+              Commercial / invoice detail
+            </p>
+            <div class="flex flex-wrap items-center gap-3">
+              <h1 class="font-mono text-2xl font-semibold tracking-tight text-ink">
+                {{ detail.invoice.invoiceNumber }}
+              </h1>
+              <BillingStatusBadge kind="invoice" :status="detail.invoice.status" />
+            </div>
+            <p class="mt-2 text-sm text-muted">
+              Dibuat {{ format.date(detail.invoice.issueDate) }} · jatuh tempo
+              {{ format.date(detail.invoice.dueDate) }}
+            </p>
           </div>
-          <p class="mt-2 text-sm text-muted">
-            Dibuat {{ format.date(detail.invoice.issueDate) }} · jatuh tempo
-            {{ format.date(detail.invoice.dueDate) }}
-          </p>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <UiButton variant="secondary" :disabled="sendingEmail" @click="sendInvoiceEmail">
-            <Mail :size="15" aria-hidden="true" />
-            {{ sendingEmail ? 'Mengirim…' : 'Kirim email' }}
-          </UiButton>
-          <UiButton
-            v-if="canRecordPayment && detail.invoice.balanceDue !== '0'"
-            variant="secondary"
-            @click="showCreditForm = true"
-          >
-            <ReceiptText :size="15" aria-hidden="true" /> Credit note
-          </UiButton>
-          <UiButton v-if="canCancel" variant="danger" @click="showCancelConfirm = true">
-            <Ban :size="15" aria-hidden="true" />
-            Cancel invoice
-          </UiButton>
-          <UiButton v-if="canDelete" variant="danger" @click="showDeleteConfirm = true">
-            <Trash2 :size="15" aria-hidden="true" />
-            Hapus invoice
-          </UiButton>
-          <NuxtLink
-            v-if="canRecordPayment"
-            :to="{ path: '/payments', query: { invoiceId: detail.invoice.id } }"
-            class="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line-strong bg-surface-raised px-4 text-sm font-semibold text-ink transition hover:border-muted hover:bg-[#1a222d]"
-          >
-            <CreditCard :size="15" aria-hidden="true" />
-            Record payment
-          </NuxtLink>
-          <a
-            :href="pdfUrl"
-            download
-            class="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-brand bg-brand px-4 text-sm font-semibold text-[#071109] transition hover:bg-brand-strong"
-          >
-            <Download :size="15" aria-hidden="true" />
-            Download PDF
-          </a>
+
+          <div class="flex w-full flex-col gap-2 lg:max-w-md lg:items-end">
+            <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+              <UiButton
+                class="col-span-2 w-full sm:col-auto sm:w-auto"
+                :disabled="downloadingPdf"
+                @click="downloadPdf"
+              >
+                <LoaderCircle v-if="downloadingPdf" class="animate-spin" :size="15" aria-hidden="true" />
+                <Download v-else :size="15" aria-hidden="true" />
+                {{ downloadingPdf ? 'Mengunduh…' : 'Unduh PDF' }}
+              </UiButton>
+              <UiButton
+                v-if="canRecordPayment"
+                variant="secondary"
+                class="w-full sm:w-auto"
+                @click="navigateTo({ path: '/payments', query: { invoiceId: detail.invoice.id } })"
+              >
+                <CreditCard :size="15" aria-hidden="true" />
+                Catat bayar
+              </UiButton>
+              <UiButton
+                variant="secondary"
+                class="w-full sm:w-auto"
+                :class="canRecordPayment ? '' : 'col-span-2'"
+                :disabled="sendingEmail"
+                @click="sendInvoiceEmail"
+              >
+                <Mail :size="15" aria-hidden="true" />
+                {{ sendingEmail ? 'Mengirim…' : 'Email' }}
+              </UiButton>
+            </div>
+
+            <div v-if="hasSecondaryActions" class="flex flex-wrap justify-end gap-2">
+              <UiButton
+                v-if="canIssueCredit"
+                variant="ghost"
+                size="sm"
+                @click="showCreditForm = true"
+              >
+                <ReceiptText :size="14" aria-hidden="true" />
+                Credit note
+              </UiButton>
+              <UiButton
+                v-if="canCancel"
+                variant="danger"
+                size="sm"
+                @click="showCancelConfirm = true"
+              >
+                <Ban :size="14" aria-hidden="true" />
+                Batalkan
+              </UiButton>
+              <UiButton v-if="canDelete" variant="danger" size="sm" @click="showDeleteConfirm = true">
+                <Trash2 :size="14" aria-hidden="true" />
+                Hapus
+              </UiButton>
+            </div>
+          </div>
         </div>
       </header>
 
