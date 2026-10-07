@@ -1,6 +1,15 @@
 import PDFDocument from 'pdfkit'
+import * as pdfkit from 'pdfkit'
+import Helvetica from 'pdfkit/standard-fonts/Helvetica'
+import HelveticaBold from 'pdfkit/standard-fonts/HelveticaBold'
 import { billingPeriodMonths, monthlyEquivalent } from '../../../shared/utils/billing-display'
 import type { InvoiceRepository } from '../../repositories/invoices'
+
+const registerStdFonts = (pdfkit as { registerStdFonts?: (...fonts: unknown[]) => void })
+  .registerStdFonts
+if (typeof registerStdFonts === 'function') {
+  registerStdFonts(Helvetica, HelveticaBold)
+}
 
 type InvoiceDetail = NonNullable<Awaited<ReturnType<InvoiceRepository['findDetail']>>>
 type PdfDocument = PDFKit.PDFDocument

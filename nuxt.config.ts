@@ -1,6 +1,11 @@
-import { cpSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
+
+const pdfkitBrowserEntry = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'node_modules/pdfkit/js/pdfkit.browser.mjs',
+)
 
 // Keep the legacy unprefixed variables convenient for local `nuxt dev`, but
 // never serialize them into a production build. Deployed Nitro applications
@@ -103,26 +108,18 @@ export default defineNuxtConfig({
   },
   nitro: {
     preset: 'node-server',
-    // PDFKit 0.20 lazy-loads standard fonts via `#standard-fonts/*` from its
-    // own package. Inlining it into the Nitro bundle breaks that lookup in
-    // production (Helvetica is not registered). Keep pdfkit external so the
-    // real package, including font modules, is traced into `.output`.
-    // Better Auth still needs its @noble tree bundled separately from PDFKit's.
-    externals: {
-      inline: ['@noble/hashes', '@noble/ciphers'],
-      external: ['pdfkit'],
+    // PDFKit and Better Auth currently depend on different major versions of
+    // @noble packages. Keeping both dependency trees inside the server bundle
+    // avoids Node resolving PDFKit's self-imports against Better Auth's newer
+    // top-level version in Nitro's standalone output.
+    // The Node PDFKit entry lazy-loads `#standard-fonts/*` from disk, which
+    // breaks after inlining. Alias the browser build and register Helvetica
+    // metrics in invoice-pdf-service instead.
+    alias: {
+      pdfkit: pdfkitBrowserEntry,
     },
-    hooks: {
-      compiled(nitro) {
-        const source = join(nitro.options.rootDir, 'node_modules/pdfkit')
-        const destination = join(
-          nitro.options.output.serverDir ?? join(nitro.options.output.dir, 'server'),
-          'node_modules/pdfkit',
-        )
-        if (!existsSync(source)) return
-        mkdirSync(dirname(destination), { recursive: true })
-        cpSync(source, destination, { recursive: true })
-      },
+    externals: {
+      inline: ['pdfkit', '@noble/hashes', '@noble/ciphers'],
     },
     // Nuxt hardcodes its own error handler, so the JSON API error envelope has
     // to be wired in explicitly.
