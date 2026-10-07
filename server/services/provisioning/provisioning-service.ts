@@ -26,10 +26,7 @@ import {
   encryptInfrastructureCredential,
 } from '../../utils/credentials'
 import { DomainError } from '../../utils/errors'
-import {
-  buildProvisioningBillingGateLabels,
-  withGateKeyQuery,
-} from '../../utils/provisioning-billing-gate'
+import { buildProvisioningBillingGateLabels } from '../../utils/provisioning-billing-gate'
 import { CoolifyResourceService } from '../coolify/resource-service'
 import { clientForCluster } from '../database/database-cluster-service'
 import { ResourceDomainService } from '../domains/resource-domain-service'
@@ -460,13 +457,10 @@ export class ProvisioningService {
         const variables = decryptEnvironment(job.environmentEncrypted)
         if (blueprint.billingGateEnabled) {
           const billingGate = provisioningBillingGateRuntime()
+          // Traefik uses billing-gate@file on the Coolify host; these envs are
+          // informational for compose apps that still reference them.
           variables.BILLING_GATE_SHARED_KEY = billingGate.sharedKey
-          // Compose Traefik labels use a single forwardAuth middleware, so the
-          // shared key must travel on the URL (see withGateKeyQuery).
-          variables.BILLING_GATE_INTERNAL_URL = withGateKeyQuery(
-            billingGate.forwardAuthAddress,
-            billingGate.sharedKey,
-          )
+          variables.BILLING_GATE_INTERNAL_URL = billingGate.forwardAuthAddress
         }
         if (context.planDatabaseMode === 'shared') {
           const allocation = context.serviceDatabase

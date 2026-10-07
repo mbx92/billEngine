@@ -81,6 +81,50 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Writes Traefik file-provider middleware used by billable apps via billing-gate@file.
+  # Coolify expands docker-defined middlewares onto routers and returns HTTP 500.
+  billing-gate-config:
+    image: alpine:3.22
+    user: '0:0'
+    restart: 'no'
+    environment:
+      BILLING_GATE_SHARED_KEY: ${BILLING_GATE_SHARED_KEY:?BILLING_GATE_SHARED_KEY is required}
+      BILLING_GATE_FORWARD_URL: ${BILLING_GATE_INTERNAL_URL:-http://host.docker.internal:8010/api/billing-gate/check}
+    volumes:
+      - /data/coolify/proxy/dynamic:/dynamic:rw
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        test -n "$$BILLING_GATE_SHARED_KEY"
+        test -n "$$BILLING_GATE_FORWARD_URL"
+        cat > /dynamic/billing-gate.yaml <<EOF
+        http:
+          middlewares:
+            billing-gate-key:
+              headers:
+                customRequestHeaders:
+                  X-Billing-Gate-Key: "$$BILLING_GATE_SHARED_KEY"
+            billing-gate-forward:
+              forwardAuth:
+                address: "$$BILLING_GATE_FORWARD_URL"
+                trustForwardHeader: true
+                preserveLocationHeader: true
+                addAuthCookiesToResponse:
+                  - billing_notice_ack
+            billing-gate-key-clear:
+              headers:
+                customRequestHeaders:
+                  X-Billing-Gate-Key: ""
+            billing-gate:
+              chain:
+                middlewares:
+                  - billing-gate-key
+                  - billing-gate-forward
+                  - billing-gate-key-clear
+        EOF
+        echo "wrote /dynamic/billing-gate.yaml"
+
   app:
     build:
       context: .
@@ -147,6 +191,8 @@ services:
       migrate:
         condition: service_completed_successfully
       admin-init:
+        condition: service_completed_successfully
+      billing-gate-config:
         condition: service_completed_successfully
     stop_grace_period: 30s
 

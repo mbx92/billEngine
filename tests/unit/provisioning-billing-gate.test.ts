@@ -5,33 +5,31 @@ import {
 } from '../../server/utils/provisioning-billing-gate'
 
 describe('provisioning billing gate labels', () => {
-  it('builds a single forwardAuth middleware with gate_key on the URL', () => {
+  it('attaches only billing-gate@file without docker middleware definitions', () => {
     const labels = buildProvisioningBillingGateLabels({
       namespace: 'BillEngine Job 123',
       sharedKey: 'hidden-key',
       forwardAuthAddress: 'http://host.docker.internal:8010/api/billing-gate/check',
     })
 
-    expect(labels).toContain('coolify.traefik.middlewares=billengine-job-123-billing')
-    expect(labels).toContain(
-      'billengine-job-123-billing.forwardauth.address=http://host.docker.internal:8010/api/billing-gate/check?gate_key=hidden-key',
-    )
+    expect(labels).toBe('coolify.traefik.middlewares=billing-gate@file')
+    expect(labels).not.toContain('forwardauth')
     expect(labels).not.toContain('billing-key')
-    expect(labels).not.toContain('billing-gate.chain')
+    expect(labels).not.toContain('gate_key=')
   })
 
-  it('preserves unrelated labels and replaces the legacy file middleware', () => {
+  it('preserves unrelated labels and replaces docker billing middleware names', () => {
     const labels = buildProvisioningBillingGateLabels({
       existingLabels:
-        'traefik.enable=true\ncoolify.traefik.middlewares=gzip@file,billing-gate@file',
+        'traefik.enable=true\ncoolify.traefik.middlewares=gzip@file,digarasi-billing',
       namespace: 'digarasi',
       sharedKey: 'hidden-key',
       forwardAuthAddress: 'http://gate/check',
     })
 
     expect(labels).toContain('traefik.enable=true')
-    expect(labels).toContain('coolify.traefik.middlewares=gzip@file,digarasi-billing')
-    expect(labels).not.toContain('billing-gate@file')
+    expect(labels).toContain('coolify.traefik.middlewares=gzip@file,billing-gate@file')
+    expect(labels).not.toContain('digarasi-billing')
   })
 
   it('rejects multiline secret values', () => {
