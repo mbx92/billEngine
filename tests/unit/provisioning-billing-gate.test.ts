@@ -12,9 +12,7 @@ describe('provisioning billing gate labels', () => {
       forwardAuthAddress: 'http://host.docker.internal:8010/api/billing-gate/check',
     })
 
-    expect(labels).toContain(
-      'coolify.traefik.middlewares=billengine-job-123-billing@docker',
-    )
+    expect(labels).toContain('coolify.traefik.middlewares=billengine-job-123-billing')
     expect(labels).toContain(
       'billengine-job-123-billing.forwardauth.address=http://host.docker.internal:8010/api/billing-gate/check?gate_key=hidden-key',
     )
@@ -32,7 +30,7 @@ describe('provisioning billing gate labels', () => {
     })
 
     expect(labels).toContain('traefik.enable=true')
-    expect(labels).toContain('coolify.traefik.middlewares=gzip@file,digarasi-billing@docker')
+    expect(labels).toContain('coolify.traefik.middlewares=gzip@file,digarasi-billing')
     expect(labels).not.toContain('billing-gate@file')
   })
 

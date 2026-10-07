@@ -27,8 +27,9 @@ export function buildProvisioningBillingGateLabels(input: ProvisioningBillingGat
     singleLineValue(input.forwardAuthAddress, 'alamat internal billing gate'),
     sharedKey,
   )
+  // Do not append @docker: Coolify already merges compose middleware names onto the
+  // router, and mixing `name` + `name@docker` makes Traefik return HTTP 500.
   const gateMiddleware = `${namespace}-billing`
-  const gateMiddlewareRef = `${gateMiddleware}@docker`
 
   const lines = removeBillingGateTraefikLabel(input.existingLabels ?? '')
     .split(/\r?\n/)
@@ -38,15 +39,15 @@ export function buildProvisioningBillingGateLabels(input: ProvisioningBillingGat
 
   const middlewareIndex = lines.findIndex((line) => coolifyMiddlewarePattern.test(line))
   if (middlewareIndex === -1) {
-    lines.push(`${COOLIFY_TRAEFIK_MIDDLEWARE_LABEL}=${gateMiddlewareRef}`)
+    lines.push(`${COOLIFY_TRAEFIK_MIDDLEWARE_LABEL}=${gateMiddleware}`)
   } else {
     const match = lines[middlewareIndex]!.match(coolifyMiddlewarePattern)!
     const middlewares = match[2]!
       .split(',')
       .map((middleware) => middleware.trim())
       .filter(Boolean)
-      .filter((middleware) => !middleware.includes('billing-gate'))
-    if (!middlewares.includes(gateMiddlewareRef)) middlewares.push(gateMiddlewareRef)
+      .filter((middleware) => !middleware.includes('billing-gate') && !middleware.endsWith('-billing'))
+    if (!middlewares.includes(gateMiddleware)) middlewares.push(gateMiddleware)
     lines[middlewareIndex] = `${match[1]}${COOLIFY_TRAEFIK_MIDDLEWARE_LABEL}=${middlewares.join(',')}`
   }
 
