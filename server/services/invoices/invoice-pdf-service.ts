@@ -13,7 +13,7 @@ import type { InvoiceRepository } from '../../repositories/invoices'
 registerStdFonts(Helvetica, HelveticaBold)
 
 type InvoiceDetail = NonNullable<Awaited<ReturnType<InvoiceRepository['findDetail']>>>
-type PdfDocument = PDFKit.PDFDocument
+type PdfDocument = InstanceType<typeof PDFDocument>
 
 const COLORS = {
   ink: '#17202b',
