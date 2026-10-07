@@ -56,6 +56,9 @@ export default defineNuxtConfig({
     { path: '~/components/infrastructure', pathPrefix: false },
     { path: '~/components', pattern: '*.vue', pathPrefix: false },
   ],
+  alias: {
+    '#pdfkit-browser': pdfkitBrowserEntry,
+  },
   vite: {
     plugins: [tailwindcss()],
   },
@@ -113,10 +116,10 @@ export default defineNuxtConfig({
     // avoids Node resolving PDFKit's self-imports against Better Auth's newer
     // top-level version in Nitro's standalone output.
     // The Node PDFKit entry lazy-loads `#standard-fonts/*` from disk, which
-    // breaks after inlining. Alias the browser build and register Helvetica
-    // metrics in invoice-pdf-service instead.
+    // breaks after inlining. Invoice PDFs import the browser build via
+    // `#pdfkit-browser` and register Helvetica metrics in memory.
     alias: {
-      pdfkit: pdfkitBrowserEntry,
+      '#pdfkit-browser': pdfkitBrowserEntry,
     },
     externals: {
       inline: ['pdfkit', '@noble/hashes', '@noble/ciphers'],

@@ -1,6 +1,8 @@
-import PDFDocument from 'pdfkit'
-import * as pdfkit from 'pdfkit'
-// PDFKit ships these metric modules without TypeScript declarations.
+// The Nitro alias `#pdfkit-browser` points at PDFKit's browser build, which
+// exports registerStdFonts. The Node build does not, and after inlining it
+// cannot load Helvetica metrics from disk.
+// @ts-expect-error -- aliased browser entry is not in PDFKit's package exports
+import { PDFDocument, registerStdFonts } from '#pdfkit-browser'
 // @ts-expect-error -- no types for pdfkit/standard-fonts/*
 import Helvetica from 'pdfkit/standard-fonts/Helvetica'
 // @ts-expect-error -- no types for pdfkit/standard-fonts/*
@@ -8,11 +10,7 @@ import HelveticaBold from 'pdfkit/standard-fonts/HelveticaBold'
 import { billingPeriodMonths, monthlyEquivalent } from '../../../shared/utils/billing-display'
 import type { InvoiceRepository } from '../../repositories/invoices'
 
-const registerStdFonts = (pdfkit as { registerStdFonts?: (...fonts: unknown[]) => void })
-  .registerStdFonts
-if (typeof registerStdFonts === 'function') {
-  registerStdFonts(Helvetica, HelveticaBold)
-}
+registerStdFonts(Helvetica, HelveticaBold)
 
 type InvoiceDetail = NonNullable<Awaited<ReturnType<InvoiceRepository['findDetail']>>>
 type PdfDocument = PDFKit.PDFDocument
