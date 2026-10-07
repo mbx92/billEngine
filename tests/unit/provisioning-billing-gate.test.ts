@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildProvisioningBillingGateLabels } from '../../server/utils/provisioning-billing-gate'
+import {
+  buildProvisioningBillingGateLabels,
+  withGateKeyQuery,
+} from '../../server/utils/provisioning-billing-gate'
 
 describe('provisioning billing gate labels', () => {
-  it('builds a self-contained Docker middleware chain', () => {
+  it('builds a single forwardAuth middleware with gate_key on the URL', () => {
     const labels = buildProvisioningBillingGateLabels({
       namespace: 'BillEngine Job 123',
       sharedKey: 'hidden-key',
@@ -10,15 +13,13 @@ describe('provisioning billing gate labels', () => {
     })
 
     expect(labels).toContain(
-      'coolify.traefik.middlewares=billengine-job-123-billing-gate@docker',
-    )
-    expect(labels).toContain('X-Billing-Gate-Key=hidden-key')
-    expect(labels).toContain(
-      'billengine-job-123-billing-forward.forwardauth.address=http://host.docker.internal:8010/api/billing-gate/check',
+      'coolify.traefik.middlewares=billengine-job-123-billing@docker',
     )
     expect(labels).toContain(
-      'billengine-job-123-billing-gate.chain.middlewares=billengine-job-123-billing-key,billengine-job-123-billing-forward,billengine-job-123-billing-key-clear',
+      'billengine-job-123-billing.forwardauth.address=http://host.docker.internal:8010/api/billing-gate/check?gate_key=hidden-key',
     )
+    expect(labels).not.toContain('billing-key')
+    expect(labels).not.toContain('billing-gate.chain')
   })
 
   it('preserves unrelated labels and replaces the legacy file middleware', () => {
@@ -31,7 +32,7 @@ describe('provisioning billing gate labels', () => {
     })
 
     expect(labels).toContain('traefik.enable=true')
-    expect(labels).toContain('coolify.traefik.middlewares=gzip@file,digarasi-billing-gate@docker')
+    expect(labels).toContain('coolify.traefik.middlewares=gzip@file,digarasi-billing@docker')
     expect(labels).not.toContain('billing-gate@file')
   })
 
@@ -43,5 +44,11 @@ describe('provisioning billing gate labels', () => {
         forwardAuthAddress: 'http://gate/check',
       }),
     ).toThrow(/shared key billing gate tidak valid/)
+  })
+
+  it('appends gate_key without dropping existing query params', () => {
+    expect(withGateKeyQuery('http://gate/check?x=1', 'secret')).toBe(
+      'http://gate/check?x=1&gate_key=secret',
+    )
   })
 })

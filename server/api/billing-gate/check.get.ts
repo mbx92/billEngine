@@ -2,6 +2,7 @@ import {
   deleteCookie,
   getCookie,
   getHeader,
+  getQuery,
   getRequestProtocol,
   sendRedirect,
   setCookie,
@@ -31,7 +32,11 @@ export default defineEventHandler(async (event) => {
     setResponseStatus(event, 503)
     return { error: 'Billing gate is not configured.' }
   }
-  if (!secureStringEqual(getHeader(event, 'x-billing-gate-key'), runtime.sharedKey)) {
+  // Header is preferred. Query `gate_key` is supported for Docker Compose Traefik
+  // forwardAuth, where a single middleware cannot set custom request headers.
+  const providedKey =
+    getHeader(event, 'x-billing-gate-key') ?? getQuery(event).gate_key?.toString() ?? null
+  if (!secureStringEqual(providedKey, runtime.sharedKey)) {
     setResponseStatus(event, 401)
     return { error: 'Invalid billing gate key.' }
   }

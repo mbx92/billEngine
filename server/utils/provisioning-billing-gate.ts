@@ -12,49 +12,58 @@ interface ProvisioningBillingGateLabelsInput {
 
 const coolifyMiddlewarePattern = /^([\t ]*)coolify\.traefik\.middlewares[\t ]*=(.*)$/
 
-export function buildProvisioningBillingGateLabels(
-  input: ProvisioningBillingGateLabelsInput,
-) {
+/**
+ * Builds Traefik labels for a Coolify application.
+ *
+ * Uses a single forwardAuth middleware (no chain). Coolify's Docker Compose
+ * label merger attaches every `traefik.http.middlewares.<name>.*` definition to
+ * the generated router; a multi-middleware chain therefore breaks routing with
+ * HTTP 500. The shared key is passed as `gate_key` on the forwardAuth URL.
+ */
+export function buildProvisioningBillingGateLabels(input: ProvisioningBillingGateLabelsInput) {
   const namespace = normalizeNamespace(input.namespace)
   const sharedKey = singleLineValue(input.sharedKey, 'shared key billing gate')
-  const forwardAuthAddress = singleLineValue(
-    input.forwardAuthAddress,
-    'alamat internal billing gate',
+  const forwardAuthAddress = withGateKeyQuery(
+    singleLineValue(input.forwardAuthAddress, 'alamat internal billing gate'),
+    sharedKey,
   )
-  const gateMiddleware = `${namespace}-billing-gate@docker`
-  const keyMiddleware = `${namespace}-billing-key`
-  const forwardMiddleware = `${namespace}-billing-forward`
-  const clearMiddleware = `${namespace}-billing-key-clear`
+  const gateMiddleware = `${namespace}-billing`
+  const gateMiddlewareRef = `${gateMiddleware}@docker`
 
   const lines = removeBillingGateTraefikLabel(input.existingLabels ?? '')
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .filter(Boolean)
-  const middlewareIndex = lines.findIndex((line) => coolifyMiddlewarePattern.test(line))
+    .filter((line) => !/billing-(gate|key|forward|key-clear)|-billing(\.|@|$)/.test(line))
 
+  const middlewareIndex = lines.findIndex((line) => coolifyMiddlewarePattern.test(line))
   if (middlewareIndex === -1) {
-    lines.push(`${COOLIFY_TRAEFIK_MIDDLEWARE_LABEL}=${gateMiddleware}`)
+    lines.push(`${COOLIFY_TRAEFIK_MIDDLEWARE_LABEL}=${gateMiddlewareRef}`)
   } else {
     const match = lines[middlewareIndex]!.match(coolifyMiddlewarePattern)!
     const middlewares = match[2]!
       .split(',')
       .map((middleware) => middleware.trim())
       .filter(Boolean)
-    if (!middlewares.includes(gateMiddleware)) middlewares.push(gateMiddleware)
+      .filter((middleware) => !middleware.includes('billing-gate'))
+    if (!middlewares.includes(gateMiddlewareRef)) middlewares.push(gateMiddlewareRef)
     lines[middlewareIndex] = `${match[1]}${COOLIFY_TRAEFIK_MIDDLEWARE_LABEL}=${middlewares.join(',')}`
   }
 
   lines.push(
-    `traefik.http.middlewares.${keyMiddleware}.headers.customrequestheaders.X-Billing-Gate-Key=${sharedKey}`,
-    `traefik.http.middlewares.${forwardMiddleware}.forwardauth.address=${forwardAuthAddress}`,
-    `traefik.http.middlewares.${forwardMiddleware}.forwardauth.trustForwardHeader=true`,
-    `traefik.http.middlewares.${forwardMiddleware}.forwardauth.preserveLocationHeader=true`,
-    `traefik.http.middlewares.${forwardMiddleware}.forwardauth.addAuthCookiesToResponse=billing_notice_ack`,
-    `traefik.http.middlewares.${clearMiddleware}.headers.customrequestheaders.X-Billing-Gate-Key=`,
-    `traefik.http.middlewares.${namespace}-billing-gate.chain.middlewares=${keyMiddleware},${forwardMiddleware},${clearMiddleware}`,
+    `traefik.http.middlewares.${gateMiddleware}.forwardauth.address=${forwardAuthAddress}`,
+    `traefik.http.middlewares.${gateMiddleware}.forwardauth.trustForwardHeader=true`,
+    `traefik.http.middlewares.${gateMiddleware}.forwardauth.preserveLocationHeader=true`,
+    `traefik.http.middlewares.${gateMiddleware}.forwardauth.addAuthCookiesToResponse=billing_notice_ack`,
   )
 
   return lines.join('\n')
+}
+
+export function withGateKeyQuery(forwardAuthAddress: string, sharedKey: string) {
+  const url = new URL(forwardAuthAddress)
+  url.searchParams.set('gate_key', sharedKey)
+  return url.toString()
 }
 
 function normalizeNamespace(value: string) {
