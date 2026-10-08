@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { updateBillingSettingsSchema } from '../../shared/schemas/settings'
+import { overlayStoredBillingSettings } from '../../shared/utils/billing-settings'
 
 const validSettings = {
   companyName: 'PT Billing Infrastruktur',
@@ -78,5 +79,50 @@ describe('billing settings schema', () => {
     expect(() =>
       updateBillingSettingsSchema.parse({ ...validSettings, graceNoticeIntervalHours: 0 }),
     ).toThrow()
+  })
+})
+
+describe('billing settings overlay', () => {
+  const fallback = {
+    companyName: 'OC Networks Billing',
+    companyEmail: 'ops@ocnetworks.web.id',
+    companyAddress: null,
+    companyTaxId: null,
+    billingTimezone: 'Asia/Makassar',
+    billingCurrency: 'IDR',
+    defaultTaxRate: null,
+    billingAutomationEnabled: false,
+    billingAccessControlEnabled: false,
+    overdueGraceDays: 7,
+    graceNoticeIntervalHours: 24,
+    source: 'environment' as const,
+    updatedAt: null,
+  }
+
+  it('uses the stored company name instead of the environment fallback', () => {
+    const resolved = overlayStoredBillingSettings(
+      fallback,
+      { ...validSettings, companyName: 'PT OC Networks' },
+      new Date('2026-10-08T00:00:00.000Z'),
+    )
+
+    expect(resolved.companyName).toBe('PT OC Networks')
+    expect(resolved.source).toBe('database')
+  })
+
+  it('keeps a valid stored company name when another field is stale', () => {
+    const resolved = overlayStoredBillingSettings(
+      fallback,
+      {
+        companyName: 'PT OC Networks',
+        billingTimezone: 'Makassar',
+        defaultTaxRate: '11',
+      },
+      '2026-10-08T00:00:00.000Z',
+    )
+
+    expect(resolved.companyName).toBe('PT OC Networks')
+    expect(resolved.billingTimezone).toBe('Asia/Makassar')
+    expect(resolved.source).toBe('database')
   })
 })

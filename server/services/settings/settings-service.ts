@@ -1,8 +1,6 @@
 import type { ApiBillingSettings } from '../../../shared/types/api'
-import {
-  updateBillingSettingsSchema,
-  type UpdateBillingSettingsInput,
-} from '../../../shared/schemas/settings'
+import type { UpdateBillingSettingsInput } from '../../../shared/schemas/settings'
+import { overlayStoredBillingSettings } from '../../../shared/utils/billing-settings'
 import { useDatabase, type Database } from '../../database/client'
 import { AuditLogRepository } from '../../repositories/audit'
 import { BILLING_SETTINGS_KEY, SettingsRepository } from '../../repositories/settings'
@@ -25,22 +23,10 @@ export class SettingsService {
     const row = await this.settings.findByKey(BILLING_SETTINGS_KEY)
     if (!row) return fallback
 
-    const parsed = updateBillingSettingsSchema.safeParse(row.value)
-    if (!parsed.success) return fallback
-
-    return {
-      ...parsed.data,
-      // A true deployment flag is an operational safety override. It lets an
-      // operator recover automation/gating even when an older database row
-      // still contains false; the UI can only disable the feature after the
-      // deployment override is removed.
-      billingAutomationEnabled:
-        fallback.billingAutomationEnabled || parsed.data.billingAutomationEnabled,
-      billingAccessControlEnabled:
-        fallback.billingAccessControlEnabled || parsed.data.billingAccessControlEnabled,
-      source: 'database',
-      updatedAt: row.updatedAt.toISOString(),
-    }
+    // Keep valid database fields even when one stored value is stale. A single
+    // invalid timezone/tax rate used to discard the whole row, including
+    // companyName, and silently fall back to NUXT_COMPANY_NAME.
+    return overlayStoredBillingSettings(fallback, row.value, row.updatedAt)
   }
 
   async updateBillingSettings(input: UpdateBillingSettingsInput, actor: SettingsActorContext) {
