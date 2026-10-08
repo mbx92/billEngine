@@ -31,6 +31,10 @@ export const invoices = pgTable(
     issueDate: date('issue_date').notNull(),
     dueDate: date('due_date').notNull(),
     subtotalAmount: bigint('subtotal_amount', { mode: 'bigint' }).notNull(),
+    discountAmount: bigint('discount_amount', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    discountPercent: numeric('discount_percent', { precision: 7, scale: 4 }),
     taxAmount: bigint('tax_amount', { mode: 'bigint' })
       .notNull()
       .default(sql`0`),
@@ -66,6 +70,7 @@ export const invoices = pgTable(
     index('invoices_due_date_idx').on(table.dueDate),
     index('invoices_customer_status_idx').on(table.customerId, table.status),
     check('invoices_subtotal_amount_check', sql`${table.subtotalAmount} >= 0`),
+    check('invoices_discount_amount_check', sql`${table.discountAmount} >= 0`),
     check('invoices_tax_amount_check', sql`${table.taxAmount} >= 0`),
     check('invoices_total_amount_check', sql`${table.totalAmount} >= 0`),
     check('invoices_amount_paid_check', sql`${table.amountPaid} >= 0`),

@@ -15,6 +15,8 @@ export function serializeInvoiceDetail(detail: Detail, today: string): ApiInvoic
       issueDate: invoice.issueDate,
       dueDate: invoice.dueDate,
       subtotalAmount: invoice.subtotalAmount.toString(),
+      discountAmount: invoice.discountAmount.toString(),
+      discountPercent: invoice.discountPercent,
       taxAmount: invoice.taxAmount.toString(),
       totalAmount: invoice.totalAmount.toString(),
       amountPaid: invoice.amountPaid.toString(),

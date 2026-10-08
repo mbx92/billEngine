@@ -26,9 +26,18 @@ export interface ComputedInvoiceLine {
   totalAmount: bigint
 }
 
+export interface InvoiceDiscountInput {
+  /** Rupiah discount. Ignored when `percent` is set. */
+  amount?: bigint | null
+  /** numeric(7,4) fraction, e.g. "0.1000" for 10%. */
+  percent?: string | null
+}
+
 export interface ComputedInvoiceTotals {
   lines: ComputedInvoiceLine[]
   subtotalAmount: bigint
+  discountAmount: bigint
+  discountPercent: string | null
   taxAmount: bigint
   totalAmount: bigint
 }
@@ -78,28 +87,105 @@ export function taxForAmount(subtotalAmount: bigint, taxRate: string | null): bi
   return divideHalfUp(subtotalAmount * rate, TAX_RATE_SCALE)
 }
 
+export function resolveDiscount(
+  subtotalAmount: bigint,
+  discount?: InvoiceDiscountInput | null,
+): { discountAmount: bigint; discountPercent: string | null } {
+  if (!discount || subtotalAmount <= 0n) {
+    return { discountAmount: 0n, discountPercent: null }
+  }
+
+  if (discount.percent) {
+    const rate = parseScaledDecimal(discount.percent, TAX_RATE_SCALE, 4)
+    if (rate === 0n) return { discountAmount: 0n, discountPercent: null }
+
+    const amount = divideHalfUp(subtotalAmount * rate, TAX_RATE_SCALE)
+    return {
+      discountAmount: amount > subtotalAmount ? subtotalAmount : amount,
+      discountPercent: discount.percent,
+    }
+  }
+
+  if (discount.amount && discount.amount > 0n) {
+    return {
+      discountAmount: discount.amount > subtotalAmount ? subtotalAmount : discount.amount,
+      discountPercent: null,
+    }
+  }
+
+  return { discountAmount: 0n, discountPercent: null }
+}
+
+/**
+ * Splits an invoice-level discount across lines so tax can be applied on the
+ * discounted taxable amount. The last line absorbs remainder so the header
+ * discount always equals the sum of line discounts.
+ */
+export function allocateLineDiscounts(
+  subtotals: readonly bigint[],
+  discountAmount: bigint,
+): bigint[] {
+  const allocated = subtotals.map(() => 0n)
+  if (discountAmount <= 0n || subtotals.length === 0) return allocated
+
+  const total = subtotals.reduce((sum, value) => sum + value, 0n)
+  if (total <= 0n) return allocated
+
+  const target = discountAmount > total ? total : discountAmount
+  let remaining = target
+
+  for (let index = 0; index < subtotals.length; index += 1) {
+    const lineSubtotalAmount = subtotals[index]!
+    const isLast = index === subtotals.length - 1
+    const share = isLast ? remaining : divideHalfUp(target * lineSubtotalAmount, total)
+    const applied =
+      share > lineSubtotalAmount
+        ? lineSubtotalAmount
+        : share > remaining
+          ? remaining
+          : share
+    allocated[index] = applied
+    remaining -= applied
+  }
+
+  return allocated
+}
+
 /**
  * Totals are computed per line and then summed, so the invoice header always
- * equals the sum of its items (no separate rounding path).
+ * equals the sum of its items (no separate rounding path). Invoice-level
+ * discount is allocated onto lines before tax.
  */
-export function computeInvoiceTotals(lines: readonly InvoiceLine[]): ComputedInvoiceTotals {
-  const computed = lines.map<ComputedInvoiceLine>((line) => {
-    const subtotalAmount = lineSubtotal(line.quantity, line.unitPriceAmount)
-    const taxAmount = taxForAmount(subtotalAmount, line.taxRate)
+export function computeInvoiceTotals(
+  lines: readonly InvoiceLine[],
+  discount?: InvoiceDiscountInput | null,
+): ComputedInvoiceTotals {
+  const rawSubtotals = lines.map((line) => lineSubtotal(line.quantity, line.unitPriceAmount))
+  const subtotalAmount = rawSubtotals.reduce((sum, value) => sum + value, 0n)
+  const resolved = resolveDiscount(subtotalAmount, discount)
+  const lineDiscounts = allocateLineDiscounts(rawSubtotals, resolved.discountAmount)
+  const discountAmount = lineDiscounts.reduce((sum, value) => sum + value, 0n)
+
+  const computed = lines.map<ComputedInvoiceLine>((line, index) => {
+    const subtotalLineAmount = rawSubtotals[index]!
+    const taxableAmount = subtotalLineAmount - lineDiscounts[index]!
+    const taxAmount = taxForAmount(taxableAmount, line.taxRate)
 
     return {
       quantity: line.quantity,
       unitPriceAmount: line.unitPriceAmount,
-      subtotalAmount,
+      subtotalAmount: subtotalLineAmount,
       taxRate: line.taxRate,
       taxAmount,
-      totalAmount: subtotalAmount + taxAmount,
+      totalAmount: taxableAmount + taxAmount,
     }
   })
 
   return {
     lines: computed,
-    subtotalAmount: computed.reduce((sum, line) => sum + line.subtotalAmount, 0n),
+    subtotalAmount,
+    discountAmount,
+    discountPercent: discountAmount > 0n ? resolved.discountPercent : null,
     taxAmount: computed.reduce((sum, line) => sum + line.taxAmount, 0n),
     totalAmount: computed.reduce((sum, line) => sum + line.totalAmount, 0n),
   }

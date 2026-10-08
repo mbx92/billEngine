@@ -91,7 +91,54 @@ describe('computeInvoiceTotals', () => {
 
   it('handles an empty invoice', () => {
     const totals = computeInvoiceTotals([])
-    expect(totals).toEqual({ lines: [], subtotalAmount: 0n, taxAmount: 0n, totalAmount: 0n })
+    expect(totals).toEqual({
+      lines: [],
+      subtotalAmount: 0n,
+      discountAmount: 0n,
+      discountPercent: null,
+      taxAmount: 0n,
+      totalAmount: 0n,
+    })
+  })
+
+  it('applies a percent discount before tax', () => {
+    const totals = computeInvoiceTotals(
+      [{ quantity: '1', unitPriceAmount: 1_000_000n, taxRate: '0.11' }],
+      { percent: '0.1' },
+    )
+
+    expect(totals.subtotalAmount).toBe(1_000_000n)
+    expect(totals.discountAmount).toBe(100_000n)
+    expect(totals.discountPercent).toBe('0.1')
+    expect(totals.taxAmount).toBe(99_000n)
+    expect(totals.totalAmount).toBe(999_000n)
+  })
+
+  it('applies a nominal discount and keeps header equal to line totals', () => {
+    const totals = computeInvoiceTotals(
+      [
+        { quantity: '1', unitPriceAmount: 500_000n, taxRate: '0.11' },
+        { quantity: '1', unitPriceAmount: 500_000n, taxRate: '0.11' },
+      ],
+      { amount: 100_000n },
+    )
+
+    expect(totals.discountAmount).toBe(100_000n)
+    expect(totals.discountPercent).toBeNull()
+    expect(totals.taxAmount).toBe(99_000n)
+    expect(totals.totalAmount).toBe(999_000n)
+    expect(totals.totalAmount).toBe(totals.lines.reduce((sum, line) => sum + line.totalAmount, 0n))
+  })
+
+  it('caps a discount at the invoice subtotal', () => {
+    const totals = computeInvoiceTotals(
+      [{ quantity: '1', unitPriceAmount: 50_000n, taxRate: '0.11' }],
+      { amount: 80_000n },
+    )
+
+    expect(totals.discountAmount).toBe(50_000n)
+    expect(totals.taxAmount).toBe(0n)
+    expect(totals.totalAmount).toBe(0n)
   })
 })
 

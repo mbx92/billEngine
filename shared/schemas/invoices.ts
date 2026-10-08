@@ -16,40 +16,54 @@ export const invoiceListQuerySchema = paginationSchema.extend({
 
 const isoDateSchema = z.iso.date()
 
+const invoiceItemSchema = z.object({
+  serviceId: uuidSchema.optional(),
+  description: z.string().trim().min(2).max(500),
+  /** numeric(14,4) as a string, e.g. "1" or "1.5". */
+  quantity: z
+    .string()
+    .trim()
+    .regex(/^\d+(\.\d{1,4})?$/, 'Quantity tidak valid.')
+    .default('1'),
+  unitPriceAmount: idrAmountSchema,
+  /** numeric(7,4) fraction, e.g. "0.11" for 11%. */
+  taxRate: z
+    .string()
+    .trim()
+    .regex(/^(0(\.\d{1,4})?|1(\.0{1,4})?)$/, 'Tax rate harus antara 0 dan 1.')
+    .optional(),
+  servicePeriodStart: isoDateSchema.optional(),
+  servicePeriodEnd: isoDateSchema.optional(),
+})
+
+const optionalDiscountPercent = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z
+    .string()
+    .trim()
+    .regex(/^(0(\.\d{1,4})?|1(\.0{1,4})?)$/, 'Diskon persen harus antara 0 dan 1.')
+    .optional(),
+)
+
+const optionalNotes = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.string().trim().max(5_000).optional(),
+)
+
 /**
- * Manual invoice creation. The admin chooses the customer, the due date, and
- * the line items; totals are always recomputed server-side from the lines so a
- * client can never dictate the amount owed.
+ * Manual invoice creation and edit. The admin chooses the customer, the due
+ * date, optional discount, and the line items; totals are always recomputed
+ * server-side from the lines so a client can never dictate the amount owed.
  */
-export const createInvoiceSchema = z
+const invoiceWritableSchema = z
   .object({
     customerId: uuidSchema,
     issueDate: isoDateSchema,
     dueDate: isoDateSchema,
-    notes: z.string().trim().max(5_000).optional(),
-    items: z
-      .array(
-        z.object({
-          serviceId: uuidSchema.optional(),
-          description: z.string().trim().min(2).max(500),
-          /** numeric(14,4) as a string, e.g. "1" or "1.5". */
-          quantity: z
-            .string()
-            .trim()
-            .regex(/^\d+(\.\d{1,4})?$/, 'Quantity tidak valid.')
-            .default('1'),
-          unitPriceAmount: idrAmountSchema,
-          /** numeric(7,4) fraction, e.g. "0.11" for 11%. */
-          taxRate: z
-            .string()
-            .trim()
-            .regex(/^(0(\.\d{1,4})?|1(\.0{1,4})?)$/, 'Tax rate harus antara 0 dan 1.')
-            .optional(),
-          servicePeriodStart: isoDateSchema.optional(),
-          servicePeriodEnd: isoDateSchema.optional(),
-        }),
-      )
-      .min(1, 'Invoice harus memiliki minimal satu item.'),
+    notes: optionalNotes,
+    discountAmount: idrAmountSchema.optional(),
+    discountPercent: optionalDiscountPercent,
+    items: z.array(invoiceItemSchema).min(1, 'Invoice harus memiliki minimal satu item.'),
   })
   .superRefine((input, context) => {
     if (input.dueDate < input.issueDate) {
@@ -57,6 +71,14 @@ export const createInvoiceSchema = z
         code: 'custom',
         path: ['dueDate'],
         message: 'Due date tidak boleh sebelum issue date.',
+      })
+    }
+
+    if (input.discountAmount && input.discountAmount > 0n && input.discountPercent) {
+      context.addIssue({
+        code: 'custom',
+        path: ['discountPercent'],
+        message: 'Pilih diskon nominal atau persen, bukan keduanya.',
       })
     }
 
@@ -74,6 +96,9 @@ export const createInvoiceSchema = z
       }
     })
   })
+
+export const createInvoiceSchema = invoiceWritableSchema
+export const updateInvoiceSchema = invoiceWritableSchema
 
 export const generateRecurringInvoicesSchema = z.object({
   /** Defaults to the billing timezone's current date on the server. */
@@ -113,6 +138,7 @@ export const createCreditNoteSchema = z.object({
 })
 
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>
+export type UpdateInvoiceInput = z.infer<typeof updateInvoiceSchema>
 export type GenerateRecurringInvoicesInput = z.infer<typeof generateRecurringInvoicesSchema>
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>
 export type CreateCreditNoteInput = z.infer<typeof createCreditNoteSchema>

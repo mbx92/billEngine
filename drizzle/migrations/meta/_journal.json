@@ -64,6 +64,13 @@
       "when": 1790859227315,
       "tag": "0008_powerful_snowbird",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791432000000,
+      "tag": "0009_invoice_discount",
+      "breakpoints": true
     }
   ]
 }

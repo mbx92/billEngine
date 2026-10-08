@@ -114,6 +114,24 @@ useHead(() => ({
         </div>
         <dl class="ml-auto w-full max-w-sm space-y-3 border-t p-4 text-sm">
           <div class="flex justify-between">
+            <dt class="text-muted">Subtotal</dt>
+            <dd>
+              <MoneyDisplay
+                :amount="detail.invoice.subtotalAmount"
+                :currency="detail.invoice.currency"
+              />
+            </dd>
+          </div>
+          <div v-if="detail.invoice.discountAmount !== '0'" class="flex justify-between">
+            <dt class="text-muted">Diskon</dt>
+            <dd>
+              -<MoneyDisplay
+                :amount="detail.invoice.discountAmount"
+                :currency="detail.invoice.currency"
+              />
+            </dd>
+          </div>
+          <div class="flex justify-between">
             <dt class="text-muted">Total</dt>
             <dd>
               <MoneyDisplay

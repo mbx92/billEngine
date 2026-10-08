@@ -3,6 +3,7 @@ import type { InvoiceStatus } from '../../../shared/constants/domain'
 import type {
   CreateInvoiceInput,
   GenerateRecurringInvoicesInput,
+  UpdateInvoiceInput,
 } from '../../../shared/schemas/invoices'
 import { useDatabase, type Database } from '../../database/client'
 import {
@@ -100,13 +101,7 @@ export class InvoiceService {
     }
 
     const config = await useBillingConfig()
-    const totals = computeInvoiceTotals(
-      input.items.map((item) => ({
-        quantity: item.quantity,
-        unitPriceAmount: item.unitPriceAmount,
-        taxRate: item.taxRate ?? config.defaultTaxRate,
-      })),
-    )
+    const totals = computeManualInvoiceTotals(input, config.defaultTaxRate)
 
     if (totals.totalAmount <= 0n) {
       throw DomainError.validation('Total invoice harus lebih dari 0.')
@@ -117,22 +112,7 @@ export class InvoiceService {
       const sequence = await allocateDocumentNumber(transaction, 'invoice', year)
       const invoiceNumber = formatInvoiceNumber(year, sequence)
 
-      const items: NewInvoiceItem[] = totals.lines.map((line, index) => {
-        const inputItem = input.items[index]!
-
-        return {
-          serviceId: inputItem.serviceId ?? null,
-          description: inputItem.description,
-          quantity: line.quantity,
-          unitPriceAmount: line.unitPriceAmount,
-          subtotalAmount: line.subtotalAmount,
-          taxRate: line.taxRate,
-          taxAmount: line.taxAmount,
-          totalAmount: line.totalAmount,
-          servicePeriodStart: inputItem.servicePeriodStart ?? null,
-          servicePeriodEnd: inputItem.servicePeriodEnd ?? null,
-        }
-      })
+      const items = mapManualInvoiceItems(input, totals)
 
       const created = await this.invoices.createWithItems(
         transaction,
@@ -143,6 +123,8 @@ export class InvoiceService {
           issueDate: input.issueDate,
           dueDate: input.dueDate,
           subtotalAmount: totals.subtotalAmount,
+          discountAmount: totals.discountAmount,
+          discountPercent: totals.discountPercent,
           taxAmount: totals.taxAmount,
           totalAmount: totals.totalAmount,
           balanceDue: totals.totalAmount,
@@ -177,6 +159,119 @@ export class InvoiceService {
       })
 
       return created
+    })
+  }
+
+  /**
+   * Replaces dates, notes, discount, and line items on an unpaid invoice.
+   * Paid invoices, invoices with payments, and invoices with credit notes stay
+   * immutable so the financial history cannot be rewritten.
+   */
+  async update(id: string, input: UpdateInvoiceInput, actor: ActorContext) {
+    if (input.dueDate < input.issueDate) {
+      throw DomainError.validation('Due date tidak boleh sebelum issue date.')
+    }
+
+    const existing = await this.invoices.findById(id)
+    if (!existing) throw DomainError.notFound('Invoice tidak ditemukan.')
+    assertInvoiceEditable(existing)
+
+    if (input.customerId !== existing.customerId) {
+      throw DomainError.invalidState(
+        'Customer invoice tidak dapat diubah. Batalkan lalu buat invoice baru.',
+      )
+    }
+
+    const customer = await this.customers.findById(existing.customerId)
+    if (!customer) throw DomainError.notFound('Customer tidak ditemukan.')
+
+    const serviceIds = [
+      ...new Set(input.items.flatMap((item) => (item.serviceId ? [item.serviceId] : []))),
+    ]
+    const validServiceIds = await this.services.findActiveCustomerServiceIds(
+      this.database,
+      customer.id,
+      serviceIds,
+    )
+    if (validServiceIds.length !== serviceIds.length) {
+      throw DomainError.validation(
+        'Satu atau lebih service tidak aktif atau bukan milik customer invoice ini.',
+      )
+    }
+
+    const config = await useBillingConfig()
+    const totals = computeManualInvoiceTotals(input, config.defaultTaxRate)
+    if (totals.totalAmount <= 0n) {
+      throw DomainError.validation('Total invoice harus lebih dari 0.')
+    }
+
+    const today = todayIsoDate(config.timezone)
+    const nextStatus =
+      existing.status === 'draft'
+        ? 'draft'
+        : input.dueDate < today
+          ? 'overdue'
+          : 'unpaid'
+
+    return this.database.transaction(async (transaction) => {
+      const locked = await this.invoices.findByIdForUpdate(id, transaction)
+      if (!locked) throw DomainError.notFound('Invoice tidak ditemukan.')
+      assertInvoiceEditable(locked)
+
+      const [payment] = await transaction
+        .select({ id: payments.id })
+        .from(payments)
+        .where(eq(payments.invoiceId, id))
+        .limit(1)
+      if (payment) {
+        throw DomainError.invalidState('Invoice dengan riwayat pembayaran tidak dapat diubah.')
+      }
+
+      const [credit] = await transaction
+        .select({ id: creditNotes.id })
+        .from(creditNotes)
+        .where(eq(creditNotes.invoiceId, id))
+        .limit(1)
+      if (credit) {
+        throw DomainError.invalidState('Invoice dengan credit note tidak dapat diubah.')
+      }
+
+      const items = mapManualInvoiceItems(input, totals)
+      await this.invoices.replaceItems(transaction, id, items)
+      const updated = await this.invoices.updateEditable(transaction, id, {
+        issueDate: input.issueDate,
+        dueDate: input.dueDate,
+        subtotalAmount: totals.subtotalAmount,
+        discountAmount: totals.discountAmount,
+        discountPercent: totals.discountPercent,
+        taxAmount: totals.taxAmount,
+        totalAmount: totals.totalAmount,
+        balanceDue: totals.totalAmount,
+        status: nextStatus,
+        notes: input.notes ?? null,
+      })
+
+      await this.audit.record(transaction, {
+        actorUserId: actor.userId,
+        action: 'invoice.updated',
+        entityType: 'invoice',
+        entityId: id,
+        beforeData: {
+          invoiceNumber: existing.invoiceNumber,
+          totalAmount: existing.totalAmount.toString(),
+          discountAmount: existing.discountAmount.toString(),
+        },
+        afterData: {
+          invoiceNumber: updated.invoiceNumber,
+          totalAmount: updated.totalAmount.toString(),
+          discountAmount: updated.discountAmount.toString(),
+          itemCount: items.length,
+        },
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+      })
+
+      return updated
     })
   }
 
@@ -311,6 +406,8 @@ export class InvoiceService {
           issueDate,
           dueDate,
           subtotalAmount: totals.subtotalAmount,
+          discountAmount: totals.discountAmount,
+          discountPercent: totals.discountPercent,
           taxAmount: totals.taxAmount,
           totalAmount: totals.totalAmount,
           balanceDue: totals.totalAmount,
@@ -491,6 +588,68 @@ export class InvoiceService {
     }
 
     return { asOf, marked: affected.length, invoiceIds: affected }
+  }
+}
+
+function computeManualInvoiceTotals(
+  input: CreateInvoiceInput | UpdateInvoiceInput,
+  defaultTaxRate: string | null,
+) {
+  return computeInvoiceTotals(
+    input.items.map((item) => ({
+      quantity: item.quantity,
+      unitPriceAmount: item.unitPriceAmount,
+      taxRate: item.taxRate ?? defaultTaxRate,
+    })),
+    {
+      amount: input.discountPercent ? null : (input.discountAmount ?? null),
+      percent: input.discountPercent ?? null,
+    },
+  )
+}
+
+function mapManualInvoiceItems(
+  input: CreateInvoiceInput | UpdateInvoiceInput,
+  totals: ComputedInvoiceTotals,
+): NewInvoiceItem[] {
+  return totals.lines.map((line, index) => {
+    const inputItem = input.items[index]!
+
+    return {
+      serviceId: inputItem.serviceId ?? null,
+      description: inputItem.description,
+      quantity: line.quantity,
+      unitPriceAmount: line.unitPriceAmount,
+      subtotalAmount: line.subtotalAmount,
+      taxRate: line.taxRate,
+      taxAmount: line.taxAmount,
+      totalAmount: line.totalAmount,
+      servicePeriodStart: inputItem.servicePeriodStart ?? null,
+      servicePeriodEnd: inputItem.servicePeriodEnd ?? null,
+    }
+  })
+}
+
+function assertInvoiceEditable(invoice: {
+  status: InvoiceStatus
+  amountPaid: bigint
+  creditedAmount: bigint
+}) {
+  if (invoice.status === 'paid') {
+    throw DomainError.invalidState('Invoice yang sudah dibayar tidak dapat diubah.')
+  }
+  if (invoice.status === 'cancelled') {
+    throw DomainError.invalidState('Invoice yang sudah dibatalkan tidak dapat diubah.')
+  }
+  if (invoice.amountPaid > 0n) {
+    throw DomainError.invalidState(
+      'Invoice dengan pembayaran tidak dapat diubah sebelum pembayaran direfund.',
+    )
+  }
+  if (invoice.creditedAmount > 0n) {
+    throw DomainError.invalidState(
+      'Invoice dengan credit note tidak dapat diubah untuk menjaga audit finansial.',
+    )
   }
 }
 

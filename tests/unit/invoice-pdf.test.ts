@@ -14,9 +14,12 @@ describe('invoice PDF', () => {
         issueDate: '2026-09-29',
         dueDate: '2026-10-06',
         subtotalAmount: 500_000n,
+        discountAmount: 0n,
+        discountPercent: null,
         taxAmount: 55_000n,
         totalAmount: 555_000n,
         amountPaid: 0n,
+        creditedAmount: 0n,
         balanceDue: 555_000n,
         customerName: 'Example Administrator',
         customerCompanyName: 'PT Example A',
@@ -54,6 +57,7 @@ describe('invoice PDF', () => {
         },
       ],
       payments: [],
+      creditNotes: [],
     } satisfies Parameters<typeof generateInvoicePdf>[0]
 
     const pdf = await generateInvoicePdf(detail)
@@ -95,9 +99,12 @@ describe('invoice PDF', () => {
         issueDate: '2026-09-29',
         dueDate: '2026-10-06',
         subtotalAmount: 6_000_000n,
+        discountAmount: 0n,
+        discountPercent: null,
         taxAmount: 660_000n,
         totalAmount: 6_660_000n,
         amountPaid: 6_660_000n,
+        creditedAmount: 0n,
         balanceDue: 0n,
         customerName: 'Example Administrator',
         customerCompanyName: 'PT Example A',
@@ -118,6 +125,7 @@ describe('invoice PDF', () => {
       },
       items,
       payments: [],
+      creditNotes: [],
     } satisfies Parameters<typeof generateInvoicePdf>[0]
 
     const pdf = await generateInvoicePdf(detail)

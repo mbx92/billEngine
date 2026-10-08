@@ -6,6 +6,7 @@ import {
   Download,
   LoaderCircle,
   Mail,
+  Pencil,
   ReceiptText,
   Trash2,
 } from '@lucide/vue'
@@ -29,6 +30,7 @@ const invoice = computed(() => detail.value?.invoice)
 const showCancelConfirm = ref(false)
 const showDeleteConfirm = ref(false)
 const showCreditForm = ref(false)
+const showEditForm = ref(false)
 const cancelling = ref(false)
 const deleting = ref(false)
 const sendingEmail = ref(false)
@@ -48,11 +50,18 @@ const canRecordPayment = computed(
   () => invoice.value?.status === 'unpaid' || invoice.value?.status === 'overdue',
 )
 const canDelete = computed(() => invoice.value?.status === 'cancelled')
+const canEdit = computed(
+  () =>
+    canCancel.value &&
+    Boolean(detail.value) &&
+    detail.value!.payments.length === 0 &&
+    detail.value!.creditNotes.length === 0,
+)
 const canIssueCredit = computed(
   () => Boolean(canRecordPayment.value && invoice.value && invoice.value.balanceDue !== '0'),
 )
 const hasSecondaryActions = computed(
-  () => canIssueCredit.value || canCancel.value || canDelete.value,
+  () => canEdit.value || canIssueCredit.value || canCancel.value || canDelete.value,
 )
 
 useHead(() => ({
@@ -71,6 +80,13 @@ function monthlyBreakdown(item: ApiInvoiceDetail['items'][number]) {
   if (months <= 1) return null
   const monthly = monthlyEquivalent(BigInt(item.unitPriceAmount), months)
   return `Rata-rata ${format.money(monthly, detail.value!.invoice.currency)} / bulan × ${months} bulan`
+}
+
+async function onInvoiceUpdated() {
+  showEditForm.value = false
+  actionError.value = null
+  actionMessage.value = 'Invoice berhasil diubah.'
+  await refresh()
 }
 
 async function cancelInvoice() {
@@ -268,6 +284,10 @@ async function createCreditNote() {
             </div>
 
             <div v-if="hasSecondaryActions" class="flex flex-wrap justify-end gap-2">
+              <UiButton v-if="canEdit" variant="ghost" size="sm" @click="showEditForm = true">
+                <Pencil :size="14" aria-hidden="true" />
+                Ubah
+              </UiButton>
               <UiButton
                 v-if="canIssueCredit"
                 variant="ghost"
@@ -294,6 +314,13 @@ async function createCreditNote() {
           </div>
         </div>
       </header>
+
+      <ManualInvoiceDialog
+        v-if="showEditForm"
+        :invoice="detail"
+        @close="showEditForm = false"
+        @updated="onInvoiceUpdated"
+      />
 
       <UiDialog
         v-if="showCancelConfirm"
@@ -467,6 +494,23 @@ async function createCreditNote() {
               <dd class="font-mono text-ink">
                 <MoneyDisplay
                   :amount="detail.invoice.subtotalAmount"
+                  :currency="detail.invoice.currency"
+                />
+              </dd>
+            </div>
+            <div
+              v-if="detail.invoice.discountAmount !== '0'"
+              class="flex justify-between gap-4"
+            >
+              <dt class="text-muted">
+                Diskon
+                <span v-if="detail.invoice.discountPercent">
+                  ({{ taxLabel(detail.invoice.discountPercent) }})
+                </span>
+              </dt>
+              <dd class="font-mono text-danger">
+                -<MoneyDisplay
+                  :amount="detail.invoice.discountAmount"
                   :currency="detail.invoice.currency"
                 />
               </dd>

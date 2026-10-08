@@ -644,6 +644,8 @@ export interface ApiPayment {
 export interface ApiInvoiceDetail {
   invoice: ApiInvoiceListItem & {
     subtotalAmount: DecimalString
+    discountAmount: DecimalString
+    discountPercent: string | null
     taxAmount: DecimalString
     creditedAmount: DecimalString
     notes: string | null

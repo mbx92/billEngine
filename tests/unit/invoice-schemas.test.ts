@@ -4,6 +4,7 @@ import {
   createCreditNoteSchema,
   invoiceListQuerySchema,
   paymentListQuerySchema,
+  updateInvoiceSchema,
 } from '../../shared/schemas/invoices'
 
 const customerId = '11111111-1111-4111-8111-111111111111'
@@ -91,6 +92,44 @@ describe('manual invoice schema', () => {
     })
 
     expect(result.success).toBe(false)
+  })
+
+  it('accepts a percent or amount discount, but not both', () => {
+    const base = {
+      customerId,
+      issueDate: '2026-09-30',
+      dueDate: '2026-10-07',
+      items: [{ description: 'Managed hosting', quantity: '1', unitPriceAmount: '500000' }],
+    }
+
+    expect(createInvoiceSchema.parse({ ...base, discountPercent: '0.1' }).discountPercent).toBe(
+      '0.1',
+    )
+    expect(createInvoiceSchema.parse({ ...base, discountAmount: '50000' }).discountAmount).toBe(
+      50_000n,
+    )
+    expect(
+      createInvoiceSchema.safeParse({
+        ...base,
+        discountAmount: '50000',
+        discountPercent: '0.1',
+      }).success,
+    ).toBe(false)
+  })
+})
+
+describe('update invoice schema', () => {
+  it('reuses the same writable invoice rules', () => {
+    const parsed = updateInvoiceSchema.parse({
+      customerId,
+      issueDate: '2026-09-30',
+      dueDate: '2026-10-07',
+      notes: '',
+      items: [{ description: 'Update fee', quantity: '1', unitPriceAmount: '250000' }],
+    })
+
+    expect(parsed.notes).toBeUndefined()
+    expect(parsed.items[0]?.unitPriceAmount).toBe(250_000n)
   })
 })
 

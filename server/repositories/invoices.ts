@@ -54,6 +54,8 @@ export interface NewInvoice {
   issueDate: string
   dueDate: string
   subtotalAmount: bigint
+  discountAmount: bigint
+  discountPercent: string | null
   taxAmount: bigint
   totalAmount: bigint
   balanceDue: bigint
@@ -294,6 +296,43 @@ export class InvoiceRepository {
     }
 
     return created
+  }
+
+  async replaceItems(
+    transaction: Transaction,
+    invoiceId: string,
+    items: NewInvoiceItem[],
+  ) {
+    await transaction.delete(invoiceItems).where(eq(invoiceItems.invoiceId, invoiceId))
+    await transaction
+      .insert(invoiceItems)
+      .values(items.map((item) => ({ ...item, invoiceId })))
+  }
+
+  async updateEditable(
+    transaction: Transaction,
+    invoiceId: string,
+    values: {
+      issueDate: string
+      dueDate: string
+      subtotalAmount: bigint
+      discountAmount: bigint
+      discountPercent: string | null
+      taxAmount: bigint
+      totalAmount: bigint
+      balanceDue: bigint
+      status: InvoiceStatus
+      notes: string | null
+    },
+  ) {
+    const [updated] = await transaction
+      .update(invoices)
+      .set({ ...values, updatedAt: new Date() })
+      .where(eq(invoices.id, invoiceId))
+      .returning()
+
+    if (!updated) throw new Error('Failed to update invoice.')
+    return updated
   }
 
   /** Recomputes invoice payment state; called inside the payment transaction. */

@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { LoaderCircle, Plus, Trash2 } from '@lucide/vue'
-import type { ApiManualInvoiceOptions } from '#shared/types/api'
+import type { ApiInvoiceDetail, ApiManualInvoiceOptions } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
+
+const props = defineProps<{
+  invoice?: ApiInvoiceDetail
+}>()
 
 const emit = defineEmits<{
   close: []
   created: [invoice: { id: string; invoiceNumber: string }]
+  updated: [invoice: { id: string; invoiceNumber: string }]
 }>()
 
 interface InvoiceLineForm {
@@ -25,14 +30,20 @@ const saving = ref(false)
 const optionError = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const options = ref<ApiManualInvoiceOptions>({ customers: [], services: [] })
+const isEdit = computed(() => Boolean(props.invoice))
 
 const today = dateInTimeZone(new Date(), settings.value.billingTimezone)
 const form = reactive({
-  customerId: '',
-  issueDate: today,
-  dueDate: addIsoDays(today, 7),
-  notes: '',
-  items: [newLine()] as InvoiceLineForm[],
+  customerId: props.invoice?.invoice.customerId ?? '',
+  issueDate: props.invoice?.invoice.issueDate ?? today,
+  dueDate: props.invoice?.invoice.dueDate ?? addIsoDays(today, 7),
+  notes: props.invoice?.invoice.notes ?? '',
+  discountType: initialDiscountType(props.invoice),
+  discountAmount: props.invoice && props.invoice.invoice.discountAmount !== '0'
+    ? props.invoice.invoice.discountAmount
+    : '',
+  discountPercent: fractionToUiPercent(props.invoice?.invoice.discountPercent),
+  items: (props.invoice?.items.map(toLineForm) ?? [newLine()]) as InvoiceLineForm[],
 })
 
 const customerServices = computed(() =>
@@ -56,13 +67,42 @@ function newLine(): InvoiceLineForm {
   }
 }
 
+function toLineForm(item: ApiInvoiceDetail['items'][number]): InvoiceLineForm {
+  return {
+    serviceId: item.serviceId ?? '',
+    description: item.description,
+    quantity: trimScaledDecimal(item.quantity),
+    unitPriceAmount: item.unitPriceAmount,
+    taxRate: item.taxRate ?? '',
+    servicePeriodStart: item.servicePeriodStart ?? '',
+    servicePeriodEnd: item.servicePeriodEnd ?? '',
+  }
+}
+
+function initialDiscountType(detail?: ApiInvoiceDetail) {
+  if (!detail || detail.invoice.discountAmount === '0') return 'none' as const
+  return detail.invoice.discountPercent ? ('percent' as const) : ('amount' as const)
+}
+
+function fractionToUiPercent(value: string | null | undefined) {
+  if (!value) return ''
+  const percent = Number(value) * 100
+  if (!Number.isFinite(percent) || percent <= 0) return ''
+  return String(Number(percent.toFixed(4)))
+}
+
+function trimScaledDecimal(value: string) {
+  if (!value.includes('.')) return value
+  return value.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+}
+
 async function loadOptions() {
   loadingOptions.value = true
   optionError.value = null
   try {
     const response = await $fetch<{ data: ApiManualInvoiceOptions }>('/api/invoices/options')
     options.value = response.data
-    form.customerId = response.data.customers[0]?.id ?? ''
+    if (!form.customerId) form.customerId = response.data.customers[0]?.id ?? ''
   } catch (caught) {
     optionError.value = apiErrorMessage(caught, 'Pilihan customer dan service gagal dimuat.')
   } finally {
@@ -92,7 +132,47 @@ function removeLine(index: number) {
   if (form.items.length > 1) form.items.splice(index, 1)
 }
 
-async function createInvoice() {
+function invoiceBody() {
+  const discountPercent =
+    form.discountType === 'percent' ? uiPercentToFraction(form.discountPercent) : undefined
+  const discountAmount =
+    form.discountType === 'amount' && form.discountAmount ? form.discountAmount : undefined
+
+  return {
+    customerId: form.customerId,
+    issueDate: form.issueDate,
+    dueDate: form.dueDate,
+    notes: form.notes || undefined,
+    discountAmount,
+    discountPercent,
+    items: form.items.map((item) => ({
+      serviceId: item.serviceId || undefined,
+      description: item.description,
+      quantity: item.quantity,
+      unitPriceAmount: item.unitPriceAmount,
+      taxRate: item.taxRate || undefined,
+      servicePeriodStart: item.servicePeriodStart || undefined,
+      servicePeriodEnd: item.servicePeriodEnd || undefined,
+    })),
+  }
+}
+
+function uiPercentToFraction(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    throw new Error('Isi persentase diskon.')
+  }
+  if (!/^\d+(\.\d{1,4})?$/.test(trimmed)) {
+    throw new Error('Persentase diskon tidak valid.')
+  }
+  const percent = Number(trimmed)
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+    throw new Error('Persentase diskon harus antara 0 dan 100.')
+  }
+  return (percent / 100).toFixed(4)
+}
+
+async function submitInvoice() {
   actionError.value = null
   if (!form.customerId) {
     actionError.value = 'Pilih customer terlebih dahulu.'
@@ -102,32 +182,44 @@ async function createInvoice() {
     actionError.value = 'Due date tidak boleh sebelum issue date.'
     return
   }
+  if (form.discountType === 'amount' && !form.discountAmount) {
+    actionError.value = 'Isi nominal diskon.'
+    return
+  }
+  if (form.discountType === 'percent') {
+    try {
+      uiPercentToFraction(form.discountPercent)
+    } catch (caught) {
+      actionError.value = caught instanceof Error ? caught.message : 'Persentase diskon tidak valid.'
+      return
+    }
+  }
 
   saving.value = true
   try {
-    const response = await $fetch<{
-      data: { id: string; invoiceNumber: string; status: string }
-    }>('/api/invoices', {
-      method: 'POST',
-      body: {
-        customerId: form.customerId,
-        issueDate: form.issueDate,
-        dueDate: form.dueDate,
-        notes: form.notes || undefined,
-        items: form.items.map((item) => ({
-          serviceId: item.serviceId || undefined,
-          description: item.description,
-          quantity: item.quantity,
-          unitPriceAmount: item.unitPriceAmount,
-          taxRate: item.taxRate || undefined,
-          servicePeriodStart: item.servicePeriodStart || undefined,
-          servicePeriodEnd: item.servicePeriodEnd || undefined,
-        })),
-      },
-    })
-    emit('created', response.data)
+    const body = invoiceBody()
+    if (props.invoice) {
+      const response = await $fetch<{
+        data: { id: string; invoiceNumber: string; status: string }
+      }>(`/api/invoices/${encodeURIComponent(props.invoice.invoice.id)}`, {
+        method: 'PATCH',
+        body,
+      })
+      emit('updated', response.data)
+    } else {
+      const response = await $fetch<{
+        data: { id: string; invoiceNumber: string; status: string }
+      }>('/api/invoices', {
+        method: 'POST',
+        body,
+      })
+      emit('created', response.data)
+    }
   } catch (caught) {
-    actionError.value = apiErrorMessage(caught, 'Gagal membuat manual invoice.')
+    actionError.value = apiErrorMessage(
+      caught,
+      isEdit.value ? 'Gagal mengubah invoice.' : 'Gagal membuat manual invoice.',
+    )
   } finally {
     saving.value = false
   }
@@ -154,8 +246,12 @@ function addIsoDays(value: string, days: number) {
 
 <template>
   <UiDialog
-    title="Buat manual invoice"
-    description="Pilih customer dan susun satu atau beberapa item. Nilai akhir dihitung ulang oleh server."
+    :title="isEdit ? 'Ubah invoice' : 'Buat manual invoice'"
+    :description="
+      isEdit
+        ? 'Ubah item, tanggal, catatan, atau diskon. Total dihitung ulang oleh server.'
+        : 'Pilih customer dan susun satu atau beberapa item. Nilai akhir dihitung ulang oleh server.'
+    "
     size="xl"
     :close-disabled="saving"
     @close="emit('close')"
@@ -176,7 +272,7 @@ function addIsoDays(value: string, days: number) {
       <UiButton variant="secondary" size="sm" @click="loadOptions">Coba lagi</UiButton>
     </UiEmptyState>
 
-    <form v-else id="manual-invoice-form" class="space-y-5" @submit.prevent="createInvoice">
+    <form v-else id="manual-invoice-form" class="space-y-5" @submit.prevent="submitInvoice">
       <p
         v-if="actionError"
         class="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
@@ -192,7 +288,8 @@ function addIsoDays(value: string, days: number) {
             v-model="form.customerId"
             autofocus
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            :disabled="isEdit"
+            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-60"
             @change="changeCustomer"
           >
             <option value="" disabled>Pilih customer</option>
@@ -293,6 +390,42 @@ function addIsoDays(value: string, days: number) {
         </div>
       </div>
 
+      <div class="grid gap-4 sm:grid-cols-3">
+        <label class="block">
+          <span class="mb-2 block text-xs font-semibold text-muted">Diskon</span>
+          <select
+            v-model="form.discountType"
+            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+          >
+            <option value="none">Tanpa diskon</option>
+            <option value="amount">Nominal</option>
+            <option value="percent">Persen</option>
+          </select>
+        </label>
+        <UiMoneyInput
+          v-if="form.discountType === 'amount'"
+          v-model="form.discountAmount"
+          label="Nominal diskon"
+          :currency="settings.billingCurrency"
+          required
+        />
+        <UiInput
+          v-else-if="form.discountType === 'percent'"
+          v-model="form.discountPercent"
+          label="Persen diskon"
+          inputmode="decimal"
+          placeholder="10"
+          hint="Contoh 10 untuk potongan 10%."
+          required
+        />
+        <div
+          v-else
+          class="rounded-md border bg-canvas px-3 py-2 text-xs leading-5 text-muted sm:col-span-2"
+        >
+          Diskon dipotong dari subtotal sebelum pajak.
+        </div>
+      </div>
+
       <label class="block">
         <span class="mb-2 block text-xs font-semibold text-muted">Catatan invoice</span>
         <textarea
@@ -314,7 +447,15 @@ function addIsoDays(value: string, days: number) {
           :disabled="saving || loadingOptions || Boolean(optionError)"
         >
           <LoaderCircle v-if="saving" class="animate-spin" :size="15" aria-hidden="true" />
-          {{ saving ? 'Membuat…' : 'Buat invoice' }}
+          {{
+            saving
+              ? isEdit
+                ? 'Menyimpan…'
+                : 'Membuat…'
+              : isEdit
+                ? 'Simpan perubahan'
+                : 'Buat invoice'
+          }}
         </UiButton>
       </div>
     </template>

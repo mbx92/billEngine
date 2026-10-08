@@ -425,7 +425,8 @@ function drawSummary(document: PdfDocument, detail: InvoiceDetail) {
   const gap = 14
   const leftWidth = LAYOUT.width - totalsWidth - gap
   const showPayments = invoice.amountPaid > 0n
-  const totalsHeight = 24 + 40 + 40 + (showPayments ? 44 : 0)
+  const showDiscount = invoice.discountAmount > 0n
+  const totalsHeight = 24 + 40 + 40 + (showDiscount ? 20 : 0) + (showPayments ? 44 : 0)
 
   document.font('Helvetica').fontSize(8.5)
   const notesHeight = invoice.notes
@@ -466,7 +467,7 @@ function drawSummary(document: PdfDocument, detail: InvoiceDetail) {
   const x = LAYOUT.right - totalsWidth
   fillRect(document, x, y, totalsWidth, blockHeight, COLORS.soft)
 
-  const stackHeight = 20 + 20 + 16 + 32 + (showPayments ? 40 : 0)
+  const stackHeight = 20 + 20 + 16 + 32 + (showDiscount ? 20 : 0) + (showPayments ? 40 : 0)
   let rowY = y + Math.max(14, (blockHeight - stackHeight) / 2)
   totalRow(
     document,
@@ -477,6 +478,20 @@ function drawSummary(document: PdfDocument, detail: InvoiceDetail) {
     totalsWidth,
   )
   rowY += 20
+  if (showDiscount) {
+    const discountLabel = invoice.discountPercent
+      ? `Diskon (${formatTaxRate(invoice.discountPercent)})`
+      : 'Diskon'
+    totalRow(
+      document,
+      discountLabel,
+      `-${formatMoney(invoice.discountAmount, invoice.currency)}`,
+      x,
+      rowY,
+      totalsWidth,
+    )
+    rowY += 20
+  }
   totalRow(
     document,
     'Pajak',
