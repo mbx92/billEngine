@@ -7,6 +7,7 @@ definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Settings · Billing Infra' })
 
 const appSettings = useAppSettings()
+const appVersion = useAppVersion()
 const saving = ref(false)
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
@@ -276,7 +277,8 @@ async function reloadSettings() {
 
       <div class="flex flex-col-reverse justify-between gap-3 sm:flex-row sm:items-center">
         <p class="text-xs text-muted">
-          Invoice lama tidak berubah karena menyimpan snapshot seller dan nilai billing.
+          Aplikasi {{ appVersion.label }}. Invoice lama tidak berubah karena menyimpan snapshot
+          seller dan nilai billing.
         </p>
         <UiButton type="submit" :disabled="saving || status === 'pending'">
           <Save :size="15" :stroke-width="1.8" aria-hidden="true" />

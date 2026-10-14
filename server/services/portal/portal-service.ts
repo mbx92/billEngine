@@ -32,6 +32,11 @@ export class PortalService {
         customerNumber: customer.customerNumber,
         name: customer.name,
         companyName: customer.companyName,
+        email: customer.email,
+        phone: customer.phone,
+        address: formatCustomerAddress(customer),
+        taxId: customer.taxId,
+        status: customer.status,
       },
       services,
       invoices: invoices.map((invoice) => ({
@@ -59,4 +64,24 @@ export class PortalService {
     const today = todayIsoDate((await useBillingConfig()).timezone)
     return { raw: detail, serialized: serializeInvoiceDetail(detail, today) }
   }
+}
+
+function formatCustomerAddress(customer: {
+  addressLine1: string | null
+  addressLine2: string | null
+  city: string | null
+  province: string | null
+  postalCode: string | null
+  countryCode: string
+}): string | null {
+  const parts = [
+    customer.addressLine1,
+    customer.addressLine2,
+    customer.city,
+    customer.province,
+    customer.postalCode,
+    customer.countryCode,
+  ].filter((part): part is string => Boolean(part))
+
+  return parts.length ? parts.join(', ') : null
 }

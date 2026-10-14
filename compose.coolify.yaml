@@ -40,6 +40,7 @@ services:
       NUXT_PUBLIC_APP_URL: https://billengine.ocnetworks.web.id
       NUXT_PUBLIC_COMPANY_NAME: OC Networks Billing Test
       NUXT_PUBLIC_BILLING_TIMEZONE: Asia/Makassar
+      NUXT_PUBLIC_APP_REVISION: ${SOURCE_COMMIT:-}
       NUXT_COMPANY_NAME: OC Networks Billing Test
       NUXT_BILLING_TIMEZONE: Asia/Makassar
       NUXT_BILLING_CURRENCY: IDR

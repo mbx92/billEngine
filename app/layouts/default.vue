@@ -25,6 +25,7 @@ import { authClient } from '~/lib/auth-client'
 const route = useRoute()
 const mobileOpen = ref(false)
 const appSettings = useAppSettings()
+const appVersion = useAppVersion()
 const { data: currentUserResponse } = await useFetch<{ data: ApiCurrentUser }>('/api/me')
 const currentUser = computed(() => currentUserResponse.value?.data)
 const isCustomer = computed(() => currentUser.value?.role === 'customer')
@@ -58,10 +59,16 @@ const commercialNavigation = computed(() => [
   ...primaryNavigation,
   { label: 'Reports', to: '/reports', icon: BarChart3 },
 ])
-const customerNavigation = [{ label: 'Portal', to: '/portal', icon: FileText }] as const
+const customerNavigation = [
+  { label: 'Ringkasan', to: '/portal', icon: LayoutDashboard },
+  { label: 'Invoice', to: '/portal/invoices', icon: FileText },
+  { label: 'Layanan', to: '/portal/services', icon: Layers3 },
+  { label: 'Akun', to: '/portal/account', icon: Users },
+] as const
 
 function isActive(path: string) {
-  return path === '/' ? route.path === '/' : route.path.startsWith(path)
+  if (path === '/' || path === '/portal') return route.path === path
+  return route.path.startsWith(path)
 }
 
 async function signOut() {
@@ -84,7 +91,11 @@ async function signOut() {
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
     >
       <div class="flex h-16 items-center border-b px-5">
-        <NuxtLink to="/" class="flex items-center gap-3" @click="mobileOpen = false">
+        <NuxtLink
+          :to="isCustomer ? '/portal' : '/'"
+          class="flex items-center gap-3"
+          @click="mobileOpen = false"
+        >
           <span
             class="flex size-8 items-center justify-center rounded-md border border-brand/30 bg-brand/10 font-mono text-sm font-bold text-brand"
             >B_</span
@@ -93,9 +104,9 @@ async function signOut() {
             <strong class="block max-w-40 truncate text-sm leading-tight">{{
               appSettings.companyName
             }}</strong>
-            <span class="font-mono text-[10px] tracking-wider text-muted uppercase"
-              >control plane</span
-            >
+            <span class="font-mono text-[10px] tracking-wider text-muted uppercase">{{
+              isCustomer ? 'customer portal' : 'control plane'
+            }}</span>
           </span>
         </NuxtLink>
       </div>
@@ -196,6 +207,9 @@ async function signOut() {
           </span>
           Sign out
         </button>
+        <p class="mt-2 px-3 font-mono text-[10px] tracking-wider text-muted uppercase">
+          {{ appVersion.label }}
+        </p>
       </div>
     </aside>
 
@@ -213,7 +227,7 @@ async function signOut() {
           </button>
           <div class="hidden items-center gap-2 text-xs text-muted sm:flex">
             <span class="size-1.5 rounded-full bg-brand" />
-            Platform operational
+            {{ isCustomer ? 'Portal pelanggan' : 'Platform operational' }}
           </div>
         </div>
         <div class="flex items-center gap-3">

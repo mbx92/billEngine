@@ -725,6 +725,11 @@ export interface ApiPortalSummary {
     customerNumber: string
     name: string
     companyName: string | null
+    email: string
+    phone: string | null
+    address: string | null
+    taxId: string | null
+    status: CustomerStatus
   }
   services: ApiService[]
   invoices: ApiInvoiceListItem[]

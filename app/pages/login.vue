@@ -5,6 +5,7 @@ definePageMeta({ layout: 'auth' })
 useHead({ title: 'Sign in · Billing Infra' })
 
 const route = useRoute()
+const appVersion = useAppVersion()
 const email = ref('')
 const password = ref('')
 const errorMessage = ref('')
@@ -40,9 +41,9 @@ async function submit() {
       </div>
     </div>
     <UiCard>
-      <h1 class="text-xl font-semibold tracking-tight">Administrator sign in</h1>
+      <h1 class="text-xl font-semibold tracking-tight">Masuk</h1>
       <p class="mt-2 text-sm leading-6 text-muted">
-        Use your billing platform credentials. Coolify credentials are never accepted here.
+        Masuk dengan akun admin atau customer portal. Kredensial Coolify tidak diterima di sini.
       </p>
       <form class="mt-6 space-y-4" @submit.prevent="submit">
         <UiInput
@@ -50,7 +51,7 @@ async function submit() {
           label="Email"
           type="email"
           autocomplete="email"
-          placeholder="admin@example.test"
+          placeholder="billing@example.test"
           required
         />
         <UiInput
@@ -68,10 +69,12 @@ async function submit() {
           {{ errorMessage }}
         </div>
         <UiButton class="w-full" type="submit" :disabled="pending">{{
-          pending ? 'Signing in…' : 'Sign in'
+          pending ? 'Masuk…' : 'Masuk'
         }}</UiButton>
       </form>
     </UiCard>
-    <p class="mt-4 text-center font-mono text-[10px] text-muted">SESSION AUTH · HTTP-ONLY COOKIE</p>
+    <p class="mt-4 text-center font-mono text-[10px] text-muted">
+      {{ appVersion.label }} · SESSION AUTH
+    </p>
   </div>
 </template>

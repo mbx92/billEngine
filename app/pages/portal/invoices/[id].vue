@@ -50,9 +50,9 @@ useHead(() => ({
 <template>
   <div class="mx-auto max-w-5xl">
     <NuxtLink
-      to="/portal"
+      to="/portal/invoices"
       class="focus-ring mb-5 inline-flex items-center gap-2 rounded text-xs font-semibold text-muted hover:text-ink"
-      ><ArrowLeft :size="14" /> Kembali ke portal</NuxtLink
+      ><ArrowLeft :size="14" /> Kembali ke invoice</NuxtLink
     >
     <div v-if="status === 'pending'" class="space-y-4">
       <UiSkeleton height="7rem" /><UiSkeleton height="20rem" />
@@ -90,6 +90,27 @@ useHead(() => ({
       >
         {{ downloadError }}
       </p>
+
+      <div class="mb-5 grid gap-4 sm:grid-cols-2">
+        <UiCard>
+          <p class="text-[10px] font-semibold tracking-wider text-muted uppercase">Dari</p>
+          <h2 class="mt-2 text-sm font-semibold text-ink">{{ detail.invoice.sellerName }}</h2>
+          <div class="mt-2 space-y-1 text-xs leading-5 text-muted">
+            <p v-if="detail.invoice.sellerAddress">{{ detail.invoice.sellerAddress }}</p>
+            <p v-if="detail.invoice.sellerEmail">{{ detail.invoice.sellerEmail }}</p>
+          </div>
+        </UiCard>
+        <UiCard>
+          <p class="text-[10px] font-semibold tracking-wider text-muted uppercase">Ditagihkan kepada</p>
+          <h2 class="mt-2 text-sm font-semibold text-ink">
+            {{ detail.invoice.customerCompanyName || detail.invoice.customerName }}
+          </h2>
+          <div class="mt-2 space-y-1 text-xs leading-5 text-muted">
+            <p>{{ detail.invoice.customerEmail }}</p>
+            <p v-if="detail.invoice.customerAddress">{{ detail.invoice.customerAddress }}</p>
+          </div>
+        </UiCard>
+      </div>
 
       <UiCard :padded="false" class="mb-5">
         <div class="overflow-x-auto">
@@ -131,6 +152,15 @@ useHead(() => ({
               />
             </dd>
           </div>
+          <div v-if="detail.invoice.taxAmount !== '0'" class="flex justify-between">
+            <dt class="text-muted">Pajak</dt>
+            <dd>
+              <MoneyDisplay
+                :amount="detail.invoice.taxAmount"
+                :currency="detail.invoice.currency"
+              />
+            </dd>
+          </div>
           <div class="flex justify-between">
             <dt class="text-muted">Total</dt>
             <dd>
@@ -168,6 +198,11 @@ useHead(() => ({
             </dd>
           </div>
         </dl>
+      </UiCard>
+
+      <UiCard v-if="detail.invoice.notes" class="mb-5">
+        <p class="text-[10px] font-semibold tracking-wider text-muted uppercase">Catatan</p>
+        <p class="mt-2 whitespace-pre-line text-sm leading-6 text-ink">{{ detail.invoice.notes }}</p>
       </UiCard>
 
       <UiCard v-if="detail.payments.length || detail.creditNotes.length">

@@ -1,10 +1,16 @@
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 
-const pdfkitBrowserEntry = join(
-  dirname(fileURLToPath(import.meta.url)),
-  'node_modules/pdfkit/js/pdfkit.browser.mjs',
+const rootDir = dirname(fileURLToPath(import.meta.url))
+const pdfkitBrowserEntry = join(rootDir, 'node_modules/pdfkit/js/pdfkit.browser.mjs')
+const packageVersion = (
+  JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8')) as { version: string }
+).version
+const gitRevision = (process.env.SOURCE_COMMIT || process.env.NUXT_PUBLIC_APP_REVISION || '').slice(
+  0,
+  7,
 )
 
 // Keep the legacy unprefixed variables convenient for local `nuxt dev`, but
@@ -107,6 +113,8 @@ export default defineNuxtConfig({
       billingTimezone: developmentEnv.BILLING_TIMEZONE || 'Asia/Makassar',
       companyName: developmentEnv.COMPANY_NAME || 'Billing Infra',
       companyEmail: developmentEnv.COMPANY_EMAIL || '',
+      appVersion: packageVersion,
+      appRevision: gitRevision,
     },
   },
   nitro: {
