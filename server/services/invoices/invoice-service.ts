@@ -5,7 +5,7 @@ import type {
   GenerateRecurringInvoicesInput,
   UpdateInvoiceInput,
 } from '../../../shared/schemas/invoices'
-import { useDatabase, type Database } from '../../database/client'
+import { useDatabase, type Database, type Transaction } from '../../database/client'
 import {
   creditNotes,
   emailDeliveries,
@@ -450,9 +450,8 @@ export class InvoiceService {
   }
 
   /**
-   * Cancels an issued invoice. The billing run is removed and the service's
-   * `next_due_date` is rolled back, so the scheduler can re-bill that period.
-   * Paid invoices are protected (docs §19).
+   * Cancels an issued invoice. The billing period stays claimed so the hourly
+   * scheduler cannot recreate the same invoice. Paid invoices are protected.
    */
   async cancel(id: string, actor: ActorContext) {
     return this.database.transaction(async (transaction) => {
@@ -487,16 +486,13 @@ export class InvoiceService {
       const cancelled = await this.invoices.cancel(transaction, id)
       if (!cancelled) throw DomainError.invalidState('Invoice tidak dapat dibatalkan.')
 
-      let restoredNextDueDate: string | null = null
-
+      let skippedNextDueDate: string | null = null
       if (billingRun) {
-        await transaction.delete(serviceBillingRuns).where(eq(serviceBillingRuns.id, billingRun.id))
-        await this.invoices.advanceNextDueDate(
+        skippedNextDueDate = await this.skipBilledPeriod(
           transaction,
           billingRun.serviceId,
           billingRun.periodStart,
         )
-        restoredNextDueDate = billingRun.periodStart
       }
 
       await this.audit.record(transaction, {
@@ -505,7 +501,7 @@ export class InvoiceService {
         entityType: 'invoice',
         entityId: id,
         beforeData: { status: existing.status, balanceDue: existing.balanceDue.toString() },
-        afterData: { status: 'cancelled', restoredNextDueDate },
+        afterData: { status: 'cancelled', skippedNextDueDate },
         ipAddress: actor.ipAddress,
         userAgent: actor.userAgent,
       })
@@ -547,9 +543,48 @@ export class InvoiceService {
         throw DomainError.invalidState('Invoice dengan credit note tidak dapat dihapus.')
       }
 
+      const [billingRun] = await transaction
+        .select()
+        .from(serviceBillingRuns)
+        .where(eq(serviceBillingRuns.invoiceId, id))
+        .limit(1)
+      const items = await transaction
+        .select({
+          serviceId: invoiceItems.serviceId,
+          servicePeriodStart: invoiceItems.servicePeriodStart,
+          servicePeriodEnd: invoiceItems.servicePeriodEnd,
+        })
+        .from(invoiceItems)
+        .where(eq(invoiceItems.invoiceId, id))
+
+      const periods = new Map<string, { serviceId: string; periodStart: string; periodEnd: string }>()
+      if (billingRun) {
+        periods.set(`${billingRun.serviceId}:${billingRun.periodStart}:${billingRun.periodEnd}`, {
+          serviceId: billingRun.serviceId,
+          periodStart: billingRun.periodStart,
+          periodEnd: billingRun.periodEnd,
+        })
+      }
+      for (const item of items) {
+        if (!item.serviceId || !item.servicePeriodStart || !item.servicePeriodEnd) continue
+        periods.set(`${item.serviceId}:${item.servicePeriodStart}:${item.servicePeriodEnd}`, {
+          serviceId: item.serviceId,
+          periodStart: item.servicePeriodStart,
+          periodEnd: item.servicePeriodEnd,
+        })
+      }
+
+      for (const period of periods.values()) {
+        await this.invoices.claimBillingPeriod(transaction, {
+          ...period,
+          invoiceId: null,
+        })
+        await this.skipBilledPeriod(transaction, period.serviceId, period.periodStart)
+      }
+
+      await this.invoices.detachBillingRunFromInvoice(transaction, id)
       await transaction.delete(emailDeliveries).where(eq(emailDeliveries.invoiceId, id))
       await transaction.delete(invoiceItems).where(eq(invoiceItems.invoiceId, id))
-      await transaction.delete(serviceBillingRuns).where(eq(serviceBillingRuns.invoiceId, id))
       await transaction.delete(invoices).where(eq(invoices.id, id))
 
       await this.audit.record(transaction, {
@@ -588,6 +623,26 @@ export class InvoiceService {
     }
 
     return { asOf, marked: affected.length, invoiceIds: affected }
+  }
+
+  /**
+   * Moves the service cursor past a voided period so automation cannot bill it
+   * again. Never moves the cursor backwards.
+   */
+  private async skipBilledPeriod(
+    transaction: Transaction,
+    serviceId: string,
+    periodStart: string,
+  ) {
+    const service = await this.invoices.findServiceSchedule(serviceId, transaction)
+    if (!service) return null
+
+    const next = nextBillingDate(periodStart, service.billingCycle)
+    if (!next) return service.nextDueDate
+    if (service.nextDueDate && service.nextDueDate > periodStart) return service.nextDueDate
+
+    await this.invoices.advanceNextDueDate(transaction, serviceId, next)
+    return next
   }
 }
 

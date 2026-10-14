@@ -333,8 +333,8 @@ async function createCreditNote() {
         <div
           class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
         >
-          Jika invoice berasal dari recurring billing, periode service akan dikembalikan agar dapat
-          dibuat ulang. Invoice yang sudah memiliki pembayaran tidak dapat dibatalkan.
+          Jika invoice berasal dari langganan, periode itu tidak akan ditagih ulang. Invoice yang
+          sudah memiliki pembayaran tidak dapat dibatalkan.
         </div>
         <template #footer>
           <div class="flex justify-end gap-2">
@@ -360,8 +360,9 @@ async function createCreditNote() {
         <div
           class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
         >
-          Hanya invoice berstatus cancelled yang dapat dihapus. Riwayat pembayaran dan credit note
-          tidak boleh ada. Tindakan ini tidak dapat dibatalkan.
+          Hanya invoice berstatus cancelled yang dapat dihapus. Periode langganan yang sudah
+          dibatalkan tidak akan dibuat ulang oleh billing otomatis. Riwayat pembayaran dan credit
+          note tidak boleh ada.
         </div>
         <template #footer>
           <div class="flex justify-end gap-2">

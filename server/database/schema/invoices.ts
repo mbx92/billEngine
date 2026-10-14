@@ -138,9 +138,7 @@ export const serviceBillingRuns = pgTable(
     serviceId: uuid('service_id')
       .notNull()
       .references(() => services.id, { onDelete: 'restrict' }),
-    invoiceId: uuid('invoice_id')
-      .notNull()
-      .references(() => invoices.id, { onDelete: 'restrict' }),
+    invoiceId: uuid('invoice_id').references(() => invoices.id, { onDelete: 'set null' }),
     periodStart: date('period_start').notNull(),
     periodEnd: date('period_end').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

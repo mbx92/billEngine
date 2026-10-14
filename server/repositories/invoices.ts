@@ -7,6 +7,8 @@ import {
   exists,
   ilike,
   inArray,
+  isNotNull,
+  isNull,
   lt,
   lte,
   notExists,
@@ -438,12 +440,12 @@ export class InvoiceRepository {
           eq(services.status, 'active'),
           or(
             and(
+              isNull(services.nextDueDate),
               notExists(billingRun),
               sql`${services.billingStartDate} - (${services.invoiceLeadDays} * interval '1 day') <= ${today}::date`,
             ),
             and(
-              exists(billingRun),
-              sql`${services.nextDueDate} is not null`,
+              isNotNull(services.nextDueDate),
               sql`${services.nextDueDate} - (${services.invoiceLeadDays} * interval '1 day') <= ${today}::date`,
             ),
           ),
@@ -472,5 +474,61 @@ export class InvoiceRepository {
       .update(services)
       .set({ nextDueDate, updatedAt: new Date() })
       .where(eq(services.id, serviceId))
+  }
+
+  async findServiceSchedule(
+    serviceId: string,
+    database: Transaction | Database = this.database,
+  ) {
+    const [service] = await database
+      .select({
+        id: services.id,
+        billingCycle: services.billingCycle,
+        nextDueDate: services.nextDueDate,
+      })
+      .from(services)
+      .where(eq(services.id, serviceId))
+      .limit(1)
+
+    return service ?? null
+  }
+
+  /** Keeps the period claimed after the invoice itself is removed. */
+  async detachBillingRunFromInvoice(transaction: Transaction, invoiceId: string) {
+    await transaction
+      .update(serviceBillingRuns)
+      .set({ invoiceId: null })
+      .where(eq(serviceBillingRuns.invoiceId, invoiceId))
+  }
+
+  async claimBillingPeriod(
+    transaction: Transaction,
+    input: { serviceId: string; periodStart: string; periodEnd: string; invoiceId?: string | null },
+  ) {
+    const existing = await this.findBillingRun(
+      input.serviceId,
+      input.periodStart,
+      input.periodEnd,
+      transaction,
+    )
+    if (existing) {
+      if (input.invoiceId === null && existing.invoiceId) {
+        await transaction
+          .update(serviceBillingRuns)
+          .set({ invoiceId: null })
+          .where(eq(serviceBillingRuns.id, existing.id))
+      }
+      return
+    }
+
+    await transaction
+      .insert(serviceBillingRuns)
+      .values({
+        serviceId: input.serviceId,
+        periodStart: input.periodStart,
+        periodEnd: input.periodEnd,
+        invoiceId: input.invoiceId ?? null,
+      })
+      .onConflictDoNothing()
   }
 }
