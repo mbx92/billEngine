@@ -155,7 +155,7 @@ export class InfrastructureTemplateRepository {
         return { incompatibleAgent: true as const, minimumAgentVersion: '0.6.0' }
       }
       if (input.hostname && !supportsGatewayRoutes(node.agentVersion)) {
-        return { incompatibleAgent: true as const, minimumAgentVersion: '0.7.0' }
+        return { incompatibleAgent: true as const, minimumAgentVersion: '0.7.2' }
       }
       if (input.hostname && node.gatewayStatus !== 'healthy') {
         return { gatewayUnavailable: true as const }
@@ -391,6 +391,6 @@ function supportsApplicationRegistry(version: string | null) {
 
 function supportsGatewayRoutes(version: string | null) {
   if (!version) return false
-  const [major = 0, minor = 0] = version.split('.').map(Number)
-  return major > 0 || minor >= 7
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number)
+  return major > 0 || minor > 7 || (minor === 7 && patch >= 2)
 }

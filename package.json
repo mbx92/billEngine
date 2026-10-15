@@ -1,6 +1,6 @@
 {
   "name": "oc-infrastructure-platform",
-  "version": "2.1.0",
+  "version": "2.1.2",
   "private": true,
   "type": "module",
   "packageManager": "npm@10.9.3",

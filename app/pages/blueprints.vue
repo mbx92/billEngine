@@ -196,8 +196,8 @@ function supportsApplicationRegistry(version: string | null) {
 
 function supportsGatewayRoutes(version: string | null) {
   if (!version) return false
-  const [major = 0, minor = 0] = version.split('.').map(Number)
-  return major > 0 || minor >= 7
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number)
+  return major > 0 || minor > 7 || (minor === 7 && patch >= 2)
 }
 </script>
 
@@ -234,7 +234,7 @@ function supportsGatewayRoutes(version: string | null) {
       v-if="status !== 'pending' && !nodes.length"
       class="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
     >
-      Template database membutuhkan OC Agent 0.3.0 atau lebih baru. Buka halaman Ubuntu Nodes lalu
+      Template database membutuhkan OC Agent 0.3.0 atau lebih baru. Buka halaman Nodes lalu
       jalankan kembali perintah installer pada server; identity node lama tetap digunakan.
     </p>
 

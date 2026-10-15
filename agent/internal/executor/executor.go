@@ -109,6 +109,11 @@ type routePayload struct {
 	BillingGateURL     string `json:"billingGateUrl"`
 }
 
+const (
+	gatewayConfigVersion      = "3"
+	gatewayHealthcheckCommand = "traefik healthcheck --ping=true --ping.entrypoint=management --entrypoints.management.address=:8082"
+)
+
 var (
 	uuidPattern               = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	slugPattern               = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,159}$`)
@@ -240,7 +245,7 @@ func deleteRoute(
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, &Error{Code: "route_delete_failed", Message: "route configuration could not be removed", Retryable: true}
 	}
-	if _, err := run(ctx, "docker", "exec", gatewayContainerName, "traefik", "healthcheck", "--ping"); err != nil {
+	if _, err := runGatewayHealthcheck(ctx, run); err != nil {
 		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik did not accept the route deletion", Retryable: true}
 	}
 	return map[string]any{"routeId": payload.RouteID, "deleted": true}, nil
@@ -330,7 +335,7 @@ func configureRoute(
 		_ = os.Remove(temporary)
 		return nil, &Error{Code: "route_write_failed", Message: "route configuration could not be activated", Retryable: true}
 	}
-	if _, err := run(ctx, "docker", "exec", gatewayContainerName, "traefik", "healthcheck", "--ping"); err != nil {
+	if _, err := runGatewayHealthcheck(ctx, run); err != nil {
 		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik did not accept the route configuration", Retryable: true}
 	}
 	return map[string]any{"routeId": payload.RouteID, "hostname": payload.Hostname, "active": true}, nil
@@ -371,7 +376,11 @@ func ensureGateway(
 		if componentErr != nil || strings.TrimSpace(string(component)) != "gateway" {
 			return nil, &Error{Code: "ownership_conflict", Message: "existing oc-gateway container is not managed by OC Agent"}
 		}
-		if strings.TrimSpace(string(existingImage)) != payload.Image {
+		configVersion, configVersionErr := run(ctx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.gateway-config-version"}}`, gatewayContainerName)
+		if configVersionErr != nil {
+			return nil, commandError("gateway_inspect_failed", configVersionErr, true)
+		}
+		if strings.TrimSpace(string(existingImage)) != payload.Image || strings.TrimSpace(string(configVersion)) != gatewayConfigVersion {
 			if _, err := run(ctx, "docker", "rm", "--force", gatewayContainerName); err != nil {
 				return nil, commandError("gateway_replace_failed", err, true)
 			}
@@ -388,11 +397,12 @@ func ensureGateway(
 			"--network", managedNetworkName,
 			"--label", "oc.managed=true",
 			"--label", "oc.component=gateway",
+			"--label", "oc.gateway-config-version=" + gatewayConfigVersion,
 			"--restart", "unless-stopped",
 			"--publish", "80:80",
 			"--publish", "443:443",
 			"--mount", fmt.Sprintf("type=bind,src=%s,dst=/etc/traefik/dynamic,readonly", dynamicDirectory),
-			"--health-cmd", "traefik healthcheck --ping",
+			"--health-cmd", gatewayHealthcheckCommand,
 			"--health-interval", "10s",
 			"--health-timeout", "3s",
 			"--health-retries", "3",
@@ -421,7 +431,7 @@ func ensureGateway(
 			return nil, commandError("gateway_start_failed", err, true)
 		}
 	}
-	if _, err := run(ctx, "docker", "exec", gatewayContainerName, "traefik", "healthcheck", "--ping"); err != nil {
+	if _, err := runGatewayHealthcheck(ctx, run); err != nil {
 		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik is running but its health check is not ready", Retryable: true}
 	}
 	containerID, err := run(ctx, "docker", "inspect", "--format", "{{.Id}}", gatewayContainerName)
@@ -434,6 +444,20 @@ func ensureGateway(
 		"image":         payload.Image,
 		"healthy":       true,
 	}, nil
+}
+
+func runGatewayHealthcheck(ctx context.Context, run CommandRunner) ([]byte, error) {
+	return run(
+		ctx,
+		"docker",
+		"exec",
+		gatewayContainerName,
+		"traefik",
+		"healthcheck",
+		"--ping=true",
+		"--ping.entrypoint=management",
+		"--entrypoints.management.address=:8082",
+	)
 }
 
 func ensureServiceDatabase(

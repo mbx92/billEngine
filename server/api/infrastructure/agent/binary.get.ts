@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
     throw error
   }
 
-  setResponseHeader(event, 'cache-control', 'public, max-age=300')
+  setResponseHeader(event, 'cache-control', 'no-store')
   if (query.checksum === '1') {
     const checksum = createHash('sha256').update(binary).digest('hex')
     setResponseHeader(event, 'content-type', 'text/plain; charset=utf-8')

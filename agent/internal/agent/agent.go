@@ -18,7 +18,7 @@ import (
 	"github.com/mbx92/billEngine/agent/internal/platform"
 )
 
-const Version = "0.7.0"
+const Version = "0.7.2"
 
 type Agent struct {
 	config config.Config

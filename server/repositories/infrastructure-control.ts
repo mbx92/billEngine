@@ -305,7 +305,12 @@ export class InfrastructureControlRepository {
         isDraining: infrastructureNodes.isDraining,
       })
 
-    if (updated && gateway && gateway.status !== 'healthy') {
+    if (
+      updated &&
+      gateway &&
+      gateway.status !== 'healthy' &&
+      supportsGatewayHealthcheckV3(input.agentVersion)
+    ) {
       const [activeGatewayOperation] = await this.database
         .select({ id: infrastructureOperations.id })
         .from(infrastructureOperations)
@@ -322,7 +327,7 @@ export class InfrastructureControlRepository {
           .insert(infrastructureOperations)
           .values({
             nodeId,
-            idempotencyKey: `gateway.ensure:${nodeId}:bootstrap-v1`,
+            idempotencyKey: `gateway.ensure:${nodeId}:bootstrap-v3`,
             action: 'gateway.ensure',
             expiresAt: new Date(now.getTime() + 30 * 60_000),
             payload: { image: gatewayImage },
@@ -414,4 +419,9 @@ export class InfrastructureControlRepository {
       return node
     })
   }
+}
+
+function supportsGatewayHealthcheckV3(version: string) {
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number)
+  return major > 0 || minor > 7 || (minor === 7 && patch >= 2)
 }

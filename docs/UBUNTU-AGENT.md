@@ -57,7 +57,7 @@ Content-Type: application/json
 Token pada response hanya ditampilkan satu kali. Jangan menyimpannya di Git,
 shell history, atau log.
 
-Setelah token dibuat, halaman Ubuntu Nodes menampilkan perintah installer:
+Setelah token dibuat, halaman Nodes menampilkan perintah installer:
 
 ```bash
 curl -fsSL 'https://panel.example.com/install/oc-agent.sh' | \
@@ -129,6 +129,9 @@ Traefik memakai port host `80` dan `443`. Pastikan port tersebut belum digunakan
 service lain. Image dapat dipin melalui `NUXT_INFRASTRUCTURE_GATEWAY_IMAGE`; nilai
 default adalah `traefik:v3.7.14`. Konfigurasi route dinamis disimpan di
 `/var/lib/oc-agent/gateway/dynamic` dan dibaca read-only oleh container gateway.
+Healthcheck memakai endpoint `/ping` pada entrypoint internal `management:8082`;
+port ini tidak dipublikasikan ke host. Karena healthcheck berjalan sebagai proses
+CLI terpisah, command healthcheck membawa konfigurasi entrypoint yang sama.
 
 Deployment template aplikasi membuat hostname `<subdomain>.<platform-domain>`.
 Setelah `application.ensure` berhasil, control plane mengantrekan

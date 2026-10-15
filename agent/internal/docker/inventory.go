@@ -71,9 +71,29 @@ func InspectGateway(ctx context.Context) Gateway {
 		gateway.Status = "healthy"
 	case containerState == "created" || containerState == "restarting" || healthState == "starting":
 		gateway.Status = "installing"
+	case healthState == "unhealthy":
+		gateway.Status = "failed"
+		gateway.Error = "oc-gateway health check is unhealthy"
+		healthLog, healthLogErr := runCommand(
+			ctx,
+			"docker",
+			"inspect",
+			"--format",
+			"{{if .State.Health}}{{range .State.Health.Log}}{{.Output}}{{end}}{{end}}",
+			"oc-gateway",
+		)
+		if healthLogErr == nil {
+			detail := strings.Join(strings.Fields(string(healthLog)), " ")
+			if len(detail) > 500 {
+				detail = detail[len(detail)-500:]
+			}
+			if detail != "" {
+				gateway.Error += ": " + detail
+			}
+		}
 	case containerState == "running":
 		gateway.Status = "unknown"
-		gateway.Error = "oc-gateway health status is unavailable"
+		gateway.Error = "oc-gateway has no Docker health status"
 	default:
 		gateway.Status = "failed"
 		gateway.Error = "oc-gateway container is " + containerState

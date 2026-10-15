@@ -4,7 +4,7 @@ import { apiErrorMessage } from '~/lib/api-error'
 import { copyText } from '~/lib/clipboard'
 
 definePageMeta({ middleware: 'auth' })
-useHead({ title: 'Ubuntu Nodes · Billing Infra' })
+useHead({ title: 'Nodes · Billing Infra' })
 
 interface InfrastructureNode {
   id: string
@@ -52,7 +52,7 @@ const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const enrollment = ref<EnrollmentResult | null>(null)
 const form = reactive({ nodeName: '', environment: 'staging', region: '' })
-const minimumAgentVersion = '0.7.0'
+const minimumAgentVersion = '0.7.2'
 
 const { data, status, error, refresh } = await useFetch<{ data: InfrastructureNode[] }>(
   '/api/infrastructure/nodes',
@@ -98,8 +98,8 @@ function statusTone(nodeStatus: InfrastructureNode['status']) {
 
 function supportsCurrentFeatures(version: string | null) {
   if (!version) return false
-  const [major = 0, minor = 0] = version.split('.').map(Number)
-  return major > 0 || minor >= 7
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number)
+  return major > 0 || minor > 7 || (minor === 7 && patch >= 2)
 }
 
 function agentVersionTone(version: string | null) {
@@ -189,9 +189,9 @@ function closeEnrollment() {
     <header class="mb-5 flex flex-col justify-between gap-4 sm:mb-6 sm:flex-row sm:items-end">
       <div>
         <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
-          Infrastructure / Ubuntu nodes
+          Infrastructure / Nodes
         </p>
-        <h1 class="text-2xl font-semibold tracking-tight text-ink">Ubuntu Nodes</h1>
+        <h1 class="text-2xl font-semibold tracking-tight text-ink">Nodes</h1>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">
           Kelola server Ubuntu yang menjalankan OC Agent. Control plane tidak membuka akses shell
           dan tidak memberikan Docker socket kepada dashboard.
