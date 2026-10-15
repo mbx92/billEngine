@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 export const NODE_ENVIRONMENTS = ['development', 'staging', 'production'] as const
 export const INFRASTRUCTURE_ACTIONS = [
+  'gateway.ensure',
   'application.ensure',
   'application.deploy',
   'application.start',
@@ -13,6 +14,7 @@ export const INFRASTRUCTURE_ACTIONS = [
   'database.cluster.activate',
   'database.service.ensure',
   'route.configure',
+  'route.delete',
 ] as const
 export const AGENT_OPERATION_STATUSES = ['running', 'succeeded', 'failed'] as const
 
@@ -54,6 +56,14 @@ export const agentHeartbeatSchema = z.object({
   dockerVersion: z.string().trim().min(1).max(64),
   composeVersion: z.string().trim().min(1).max(64),
   capacity: nodeCapacitySchema,
+  gateway: z
+    .object({
+      status: z.enum(['pending', 'installing', 'healthy', 'failed', 'unknown']),
+      image: z.string().trim().min(1).max(160).optional(),
+      containerId: z.string().trim().min(1).max(128).optional(),
+      error: z.string().trim().min(1).max(1000).optional(),
+    })
+    .optional(),
 })
 
 const resourceLimitsSchema = z.object({

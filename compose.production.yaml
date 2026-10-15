@@ -81,50 +81,6 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # Writes Traefik file-provider middleware used by billable apps via billing-gate@file.
-  # Coolify expands docker-defined middlewares onto routers and returns HTTP 500.
-  billing-gate-config:
-    image: alpine:3.22
-    user: '0:0'
-    restart: 'no'
-    environment:
-      BILLING_GATE_SHARED_KEY: ${BILLING_GATE_SHARED_KEY:?BILLING_GATE_SHARED_KEY is required}
-      BILLING_GATE_FORWARD_URL: ${BILLING_GATE_INTERNAL_URL:-http://host.docker.internal:8010/api/billing-gate/check}
-    volumes:
-      - /data/coolify/proxy/dynamic:/dynamic:rw
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        test -n "$$BILLING_GATE_SHARED_KEY"
-        test -n "$$BILLING_GATE_FORWARD_URL"
-        cat > /dynamic/billing-gate.yaml <<EOF
-        http:
-          middlewares:
-            billing-gate-key:
-              headers:
-                customRequestHeaders:
-                  X-Billing-Gate-Key: "$$BILLING_GATE_SHARED_KEY"
-            billing-gate-forward:
-              forwardAuth:
-                address: "$$BILLING_GATE_FORWARD_URL"
-                trustForwardHeader: true
-                preserveLocationHeader: true
-                addAuthCookiesToResponse:
-                  - billing_notice_ack
-            billing-gate-key-clear:
-              headers:
-                customRequestHeaders:
-                  X-Billing-Gate-Key: ""
-            billing-gate:
-              chain:
-                middlewares:
-                  - billing-gate-key
-                  - billing-gate-forward
-                  - billing-gate-key-clear
-        EOF
-        echo "wrote /dynamic/billing-gate.yaml"
-
   app:
     build:
       context: .
@@ -144,11 +100,6 @@ services:
       NUXT_COMPANY_NAME: ${COMPANY_NAME:-OC Networks Billing}
       NUXT_BILLING_TIMEZONE: ${BILLING_TIMEZONE:-Asia/Makassar}
       NUXT_BILLING_CURRENCY: ${BILLING_CURRENCY:-IDR}
-      # Prefer an internal Coolify URL on the same host (e.g. http://host.docker.internal:8000)
-      # so outbound API calls do not hairpin through Cloudflare.
-      NUXT_COOLIFY_API_URL: ${COOLIFY_API_URL:?COOLIFY_API_URL is required}
-      NUXT_COOLIFY_API_TOKEN: ${COOLIFY_API_TOKEN:?COOLIFY_API_TOKEN is required}
-      NUXT_COOLIFY_CREDENTIALS_KEY: ${COOLIFY_CREDENTIALS_KEY:-}
       NUXT_INFRA_CREDENTIALS_KEY: ${INFRA_CREDENTIALS_KEY:-}
       NUXT_PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-ocnetworks.web.id}
       NUXT_CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
@@ -173,9 +124,6 @@ services:
     # should still be restricted at the host firewall to the tunnel/proxy path.
     ports:
       - '${APP_PORT:-8010}:3000'
-    networks:
-      - default
-      - coolify
     healthcheck:
       test:
         - CMD
@@ -193,16 +141,9 @@ services:
         condition: service_completed_successfully
       admin-init:
         condition: service_completed_successfully
-      billing-gate-config:
-        condition: service_completed_successfully
     stop_grace_period: 30s
 
 volumes:
-  # The historical key must not be renamed: Coolify associates it with the
-  # existing production PostgreSQL data volume.
+  # Keep the historical key so existing production PostgreSQL data is retained.
   billengine_test_postgres_v3:
   billengine_backups:
-
-networks:
-  coolify:
-    external: true

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import { Check, Pencil, Plus, Trash2 } from '@lucide/vue'
 import type { BillingCycle } from '#shared/constants/domain'
 import type { ApiPlan, DatabaseMode, Paginated } from '#shared/types/api'
 import { billingCycleUnit } from '#shared/utils/billing-display'
@@ -183,10 +183,7 @@ async function toggleStatus(plan: ApiPlan) {
         </p>
       </div>
       <div class="flex gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-          Refresh
-        </UiButton>
+        <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <UiButton @click="openCreate">
           <Plus :size="15" aria-hidden="true" />
           Tambah plan
@@ -249,7 +246,7 @@ async function toggleStatus(plan: ApiPlan) {
         <div class="rounded-md border border-line bg-canvas p-4 md:col-span-2">
           <p class="text-sm font-semibold text-ink">Alokasi infrastructure dalam plan</p>
           <p class="mt-1 text-xs text-muted">
-            Nilai ini dibandingkan dengan total limit resource Coolify yang terhubung ke service.
+            Nilai ini dibandingkan dengan total limit resource OC Agent yang terhubung ke service.
           </p>
           <div class="mt-4 grid gap-4 md:grid-cols-3">
             <UiInput

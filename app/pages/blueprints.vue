@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { Box, Database, KeyRound, RefreshCw, Rocket, Server } from '@lucide/vue'
+import { Box, Database, KeyRound, Rocket, Server } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
 
 definePageMeta({ middleware: 'auth', alias: ['/templates'] })
 useHead({ title: 'Templates · Billing Infra' })
+const runtimeConfig = useRuntimeConfig()
 
 interface TemplateParameter {
   key: string
@@ -23,7 +24,16 @@ interface InfrastructureTemplate {
   description: string | null
   category: 'application' | 'database' | 'cache'
   version: number
+  applicationId: string | null
+  releasePolicy: 'manual' | 'track_latest'
   isBuiltin: boolean
+  resolvedRelease: {
+    id: string
+    version: string
+    commitSha: string
+    imageDigest: string
+    imageReference: string
+  } | null
   definition: {
     engine: 'generic' | 'postgresql' | 'mysql' | 'redis'
     resourceKind: 'application' | 'database'
@@ -44,12 +54,26 @@ interface InfrastructureNode {
   isActive: boolean
   isDraining: boolean
   agentVersion: string | null
+  gatewayStatus: 'pending' | 'installing' | 'healthy' | 'failed' | 'unknown'
 }
 
-const [{ data: templateResponse, status, error, refresh }, { data: nodeResponse }] =
+interface ServiceOption {
+  id: string
+  serviceNumber: string
+  name: string
+  customerName: string
+  status: 'active' | 'suspended' | 'cancelled'
+}
+
+const [
+  { data: templateResponse, status, error, refresh },
+  { data: nodeResponse },
+  { data: serviceResponse },
+] =
   await Promise.all([
     useFetch<{ data: InfrastructureTemplate[] }>('/api/infrastructure/templates'),
     useFetch<{ data: InfrastructureNode[] }>('/api/infrastructure/nodes'),
+    useFetch<{ data: ServiceOption[] }>('/api/services', { query: { page: 1, perPage: 100 } }),
   ])
 
 const templates = computed(() => templateResponse.value?.data ?? [])
@@ -62,13 +86,19 @@ const nodes = computed(() =>
       supportsTemplateSecrets(node.agentVersion),
   ),
 )
+const services = computed(() =>
+  (serviceResponse.value?.data ?? []).filter((service) => service.status !== 'cancelled'),
+)
+const platformDomain = computed(() => String(runtimeConfig.public.platformDomain || ''))
 const selectedTemplate = ref<InfrastructureTemplate | null>(null)
 const deploying = ref(false)
 const actionMessage = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const form = reactive({
   nodeId: '',
+  serviceId: '',
   name: '',
+  subdomain: '',
   hostPort: '',
   classification: 'internal' as 'billable' | 'internal' | 'ignored',
   values: {} as Record<string, string>,
@@ -78,13 +108,29 @@ function openDeploy(template: InfrastructureTemplate) {
   actionMessage.value = null
   actionError.value = null
   selectedTemplate.value = template
-  form.nodeId = nodes.value[0]?.id ?? ''
+  form.nodeId = nodesForTemplate(template)[0]?.id ?? ''
+  form.serviceId = ''
   form.name = `${template.slug}-01`
+  form.subdomain = `${template.slug}-01`
   form.hostPort = String(defaultHostPort(template))
   form.classification = 'internal'
   form.values = Object.fromEntries(
-    template.definition.parameters.map((parameter) => [parameter.key, parameter.defaultValue ?? '']),
+    template.definition.parameters.map((parameter) => [
+      parameter.key,
+      parameter.defaultValue ?? '',
+    ]),
   )
+}
+
+function nodesForTemplate(template: InfrastructureTemplate) {
+  const compatible = template.applicationId
+    ? nodes.value.filter((node) => supportsApplicationRegistry(node.agentVersion))
+    : nodes.value
+  return template.definition.resourceKind === 'application'
+    ? compatible.filter(
+        (node) => supportsGatewayRoutes(node.agentVersion) && node.gatewayStatus === 'healthy',
+      )
+    : compatible
 }
 
 function defaultHostPort(template: InfrastructureTemplate) {
@@ -106,14 +152,23 @@ async function deployTemplate() {
       headers: { 'Idempotency-Key': `template:${template.id}:${crypto.randomUUID()}` },
       body: {
         nodeId: form.nodeId,
+        serviceId: form.serviceId || undefined,
         name: form.name,
-        hostPort: Number(form.hostPort),
+        subdomain:
+          template.definition.resourceKind === 'application' ? form.subdomain : undefined,
+        hostPort:
+          template.definition.resourceKind === 'application'
+            ? undefined
+            : Number(form.hostPort),
         classification: form.classification,
         values: form.values,
       },
     })
     selectedTemplate.value = null
-    actionMessage.value = `${template.name} sedang dideploy. Progresnya dapat dilihat di halaman Resources.`
+    actionMessage.value =
+      template.definition.resourceKind === 'application'
+        ? `${template.name} sedang dideploy. ${form.subdomain}.${platformDomain.value} akan diaktifkan setelah container berhasil.`
+        : `${template.name} sedang dideploy. Progresnya dapat dilihat di halaman Resources.`
   } catch (caught) {
     actionError.value = apiErrorMessage(caught, 'Template gagal dideploy.')
   } finally {
@@ -132,6 +187,18 @@ function supportsTemplateSecrets(version: string | null) {
   const [major = 0, minor = 0] = version.split('.').map(Number)
   return major > 0 || minor >= 3
 }
+
+function supportsApplicationRegistry(version: string | null) {
+  if (!version) return false
+  const [major = 0, minor = 0] = version.split('.').map(Number)
+  return major > 0 || minor >= 6
+}
+
+function supportsGatewayRoutes(version: string | null) {
+  if (!version) return false
+  const [major = 0, minor = 0] = version.split('.').map(Number)
+  return major > 0 || minor >= 7
+}
 </script>
 
 <template>
@@ -147,9 +214,7 @@ function supportsTemplateSecrets(version: string | null) {
           konfigurasi, secret, container, dan volume persisten yang terpisah.
         </p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-        <RefreshCw :size="15" /> Refresh
-      </UiButton>
+      <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>
 
     <p
@@ -194,6 +259,7 @@ function supportsTemplateSecrets(version: string | null) {
           </div>
           <div class="flex gap-2">
             <UiBadge tone="info">{{ categoryLabel(template.category) }}</UiBadge>
+            <UiBadge v-if="template.applicationId" tone="success">Application</UiBadge>
             <UiBadge v-if="template.isBuiltin" tone="neutral">Built-in</UiBadge>
           </div>
         </div>
@@ -202,7 +268,18 @@ function supportsTemplateSecrets(version: string | null) {
         <dl class="mt-4 space-y-2 border-t pt-4 text-xs">
           <div class="flex justify-between gap-3">
             <dt class="text-muted">Image</dt>
-            <dd class="truncate font-mono text-ink">{{ template.definition.spec.source.reference }}</dd>
+            <dd class="truncate font-mono text-ink">
+              {{ template.definition.spec.source.reference }}
+            </dd>
+          </div>
+          <div v-if="template.resolvedRelease" class="flex justify-between gap-3">
+            <dt class="text-muted">Release</dt>
+            <dd class="font-mono text-ink">
+              {{ template.resolvedRelease.version }} ·
+              {{
+                template.releasePolicy === 'track_latest' ? 'track latest' : 'pinned after deploy'
+              }}
+            </dd>
           </div>
           <div class="flex justify-between gap-3">
             <dt class="text-muted">Container port</dt>
@@ -217,7 +294,14 @@ function supportsTemplateSecrets(version: string | null) {
             </dd>
           </div>
         </dl>
-        <UiButton class="mt-5 w-full" :disabled="!nodes.length" @click="openDeploy(template)">
+        <UiButton
+          class="mt-5 w-full"
+          :disabled="
+            !nodesForTemplate(template).length ||
+            (Boolean(template.applicationId) && !template.resolvedRelease)
+          "
+          @click="openDeploy(template)"
+        >
           <Rocket :size="15" /> Deploy
         </UiButton>
       </UiCard>
@@ -226,7 +310,11 @@ function supportsTemplateSecrets(version: string | null) {
     <UiDialog
       v-if="selectedTemplate"
       :title="`Deploy ${selectedTemplate.name}`"
-      description="Password dapat diisi sendiri atau dikosongkan agar dibuat otomatis. Nilainya tidak akan ditampilkan kembali."
+      :description="
+        selectedTemplate.applicationId
+          ? `Deploy memakai release ${selectedTemplate.resolvedRelease?.version ?? 'terbaru'} dan menautkan resource ke Application.`
+          : 'Password dapat diisi sendiri atau dikosongkan agar dibuat otomatis. Nilainya tidak akan ditampilkan kembali.'
+      "
       size="lg"
       :close-disabled="deploying"
       @close="selectedTemplate = null"
@@ -243,13 +331,38 @@ function supportsTemplateSecrets(version: string | null) {
               class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
             >
               <option value="" disabled>Pilih node</option>
-              <option v-for="node in nodes" :key="node.id" :value="node.id">
+              <option
+                v-for="node in nodesForTemplate(selectedTemplate)"
+                :key="node.id"
+                :value="node.id"
+              >
                 {{ node.name }} · {{ node.environment }} · {{ node.status }}
               </option>
             </select>
           </label>
-          <UiInput v-model="form.name" label="Nama resource" required pattern="[a-z0-9][a-z0-9-]*" />
-          <UiInput v-model="form.hostPort" label="Host port" type="number" min="1" max="65535" required />
+          <UiInput
+            v-model="form.name"
+            label="Nama resource"
+            required
+            pattern="[a-z0-9][a-z0-9-]*"
+          />
+          <UiInput
+            v-if="selectedTemplate.definition.resourceKind === 'application'"
+            v-model="form.subdomain"
+            label="Subdomain"
+            required
+            pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+            :hint="`${form.subdomain || 'app'}.${platformDomain}`"
+          />
+          <UiInput
+            v-else
+            v-model="form.hostPort"
+            label="Host port"
+            type="number"
+            min="1"
+            max="65535"
+            required
+          />
           <label class="block md:col-span-2">
             <span class="mb-2 block text-xs font-semibold text-muted">Classification</span>
             <select
@@ -261,6 +374,24 @@ function supportsTemplateSecrets(version: string | null) {
               <option value="ignored">Ignored</option>
             </select>
           </label>
+          <label class="block md:col-span-2">
+            <span class="mb-2 block text-xs font-semibold text-muted">
+              Service {{ form.classification === 'billable' ? '(wajib)' : '(opsional)' }}
+            </span>
+            <select
+              v-model="form.serviceId"
+              :required="form.classification === 'billable'"
+              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            >
+              <option value="">Tidak ditautkan</option>
+              <option v-for="service in services" :key="service.id" :value="service.id">
+                {{ service.serviceNumber }} · {{ service.customerName }} · {{ service.name }}
+              </option>
+            </select>
+            <span class="mt-1 block text-xs text-muted">
+              Billing gate memakai relasi service ini untuk mengecek invoice domain.
+            </span>
+          </label>
         </div>
 
         <div class="rounded-md border border-line-strong">
@@ -268,7 +399,9 @@ function supportsTemplateSecrets(version: string | null) {
             <h3 class="flex items-center gap-2 text-sm font-semibold text-ink">
               <KeyRound :size="15" /> Parameter
             </h3>
-            <p class="mt-1 text-xs text-muted">Secret disimpan terenkripsi dan dikirim ke agent saat operasi berjalan.</p>
+            <p class="mt-1 text-xs text-muted">
+              Secret disimpan terenkripsi dan dikirim ke agent saat operasi berjalan.
+            </p>
           </div>
           <div class="grid gap-4 p-4 md:grid-cols-2">
             <UiInput
@@ -291,7 +424,11 @@ function supportsTemplateSecrets(version: string | null) {
           <UiButton variant="secondary" :disabled="deploying" @click="selectedTemplate = null">
             Batal
           </UiButton>
-          <UiButton type="submit" form="template-deploy-form" :disabled="deploying || !nodes.length">
+          <UiButton
+            type="submit"
+            form="template-deploy-form"
+            :disabled="deploying || !nodesForTemplate(selectedTemplate).length"
+          >
             <Rocket :size="15" /> {{ deploying ? 'Menjadwalkan…' : 'Deploy template' }}
           </UiButton>
         </div>

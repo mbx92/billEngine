@@ -12,7 +12,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     status: readiness.ready ? 'ready' : 'not_ready',
-    service: 'coolify-billing-platform',
+    service: 'oc-infrastructure-platform',
     checks: readiness.checks,
     features: {
       billingAutomation: settings?.billingAutomationEnabled ?? null,

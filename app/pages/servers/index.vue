@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Copy, Plus, RefreshCw, Server as ServerIcon, ShieldX, X } from '@lucide/vue'
+import { Copy, Plus, Server as ServerIcon, ShieldX, X } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
+import { copyText } from '~/lib/clipboard'
 
 definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Ubuntu Nodes · Billing Infra' })
@@ -18,6 +19,11 @@ interface InfrastructureNode {
   architecture: string | null
   dockerVersion: string | null
   composeVersion: string | null
+  gatewayStatus: 'pending' | 'installing' | 'healthy' | 'failed' | 'unknown'
+  gatewayVersion: string | null
+  gatewayContainerId: string | null
+  gatewayLastObservedAt: string | null
+  gatewayLastError: string | null
   capacityCpuMilli: number | null
   capacityMemoryBytes: string | null
   capacityDiskBytes: string | null
@@ -35,6 +41,7 @@ interface EnrollmentResult {
 }
 
 const format = useFormat()
+const toast = useToast()
 const runtimeConfig = useRuntimeConfig()
 const requestUrl = useRequestURL()
 const showEnrollmentForm = ref(false)
@@ -45,15 +52,19 @@ const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const enrollment = ref<EnrollmentResult | null>(null)
 const form = reactive({ nodeName: '', environment: 'staging', region: '' })
-const minimumAgentVersion = '0.5.0'
+const minimumAgentVersion = '0.7.0'
 
 const { data, status, error, refresh } = await useFetch<{ data: InfrastructureNode[] }>(
   '/api/infrastructure/nodes',
 )
 const nodes = computed(() => data.value?.data ?? [])
-const controlPlaneUrl = computed(() =>
-  String(runtimeConfig.public.appUrl || requestUrl.origin).replace(/\/$/, ''),
-)
+const controlPlaneUrl = computed(() => {
+  const appUrl = String(runtimeConfig.public.appUrl || requestUrl.origin)
+  const developmentUrl = String(runtimeConfig.public.agentControlPlaneUrl || '')
+  const url =
+    enrollment.value?.environment === 'development' && developmentUrl ? developmentUrl : appUrl
+  return url.replace(/\/$/, '')
+})
 const usesInsecureRemoteHttp = computed(() => {
   try {
     const url = new URL(controlPlaneUrl.value)
@@ -88,12 +99,19 @@ function statusTone(nodeStatus: InfrastructureNode['status']) {
 function supportsCurrentFeatures(version: string | null) {
   if (!version) return false
   const [major = 0, minor = 0] = version.split('.').map(Number)
-  return major > 0 || minor >= 5
+  return major > 0 || minor >= 7
 }
 
 function agentVersionTone(version: string | null) {
   if (!version) return 'neutral' as const
   return supportsCurrentFeatures(version) ? ('info' as const) : ('warning' as const)
+}
+
+function gatewayStatusTone(gatewayStatus: InfrastructureNode['gatewayStatus']) {
+  if (gatewayStatus === 'healthy') return 'success' as const
+  if (gatewayStatus === 'failed') return 'danger' as const
+  if (gatewayStatus === 'installing' || gatewayStatus === 'pending') return 'warning' as const
+  return 'neutral' as const
 }
 
 async function createEnrollment() {
@@ -127,19 +145,19 @@ async function createEnrollment() {
 async function copyEnrollmentToken() {
   if (!enrollment.value) return
   try {
-    await navigator.clipboard.writeText(enrollment.value.token)
-    actionMessage.value = 'Enrollment token disalin.'
+    await copyText(enrollment.value.token)
+    toast.success('Enrollment token berhasil disalin.')
   } catch {
-    actionError.value = 'Browser tidak dapat menyalin token. Salin token secara manual.'
+    toast.error('Browser tidak dapat menyalin token. Salin token secara manual.')
   }
 }
 
 async function copyInstallerCommand() {
   try {
-    await navigator.clipboard.writeText(installerCommand.value)
-    actionMessage.value = 'Perintah installer disalin.'
+    await copyText(installerCommand.value)
+    toast.success('Perintah installer berhasil disalin.')
   } catch {
-    actionError.value = 'Browser tidak dapat menyalin perintah. Salin secara manual.'
+    toast.error('Browser tidak dapat menyalin perintah. Salin secara manual.')
   }
 }
 
@@ -180,10 +198,7 @@ function closeEnrollment() {
         </p>
       </div>
       <div class="flex gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-          Refresh
-        </UiButton>
+        <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <UiButton @click="showEnrollmentForm = !showEnrollmentForm">
           <X v-if="showEnrollmentForm" :size="15" aria-hidden="true" />
           <Plus v-else :size="15" aria-hidden="true" />
@@ -246,7 +261,16 @@ function closeEnrollment() {
           berhasil. Kedaluwarsa {{ format.dateTime(enrollment.expiresAt) }}.
         </p>
         <div class="mt-4 flex items-center gap-2 rounded-md border bg-canvas p-3">
-          <code class="min-w-0 flex-1 break-all text-xs text-ink">{{ enrollment.token }}</code>
+          <code
+            class="min-w-0 flex-1 cursor-pointer break-all text-xs text-ink"
+            title="Klik untuk menyalin token"
+            tabindex="0"
+            role="button"
+            @click="copyEnrollmentToken"
+            @keydown.enter="copyEnrollmentToken"
+            @keydown.space.prevent="copyEnrollmentToken"
+            >{{ enrollment.token }}</code
+          >
           <UiButton variant="secondary" size="sm" @click="copyEnrollmentToken">
             <Copy :size="14" aria-hidden="true" />
             Salin
@@ -319,7 +343,7 @@ function closeEnrollment() {
               :tone="agentVersionTone(node.agentVersion)"
               :title="
                 node.agentVersion && !supportsCurrentFeatures(node.agentVersion)
-                  ? `Upgrade ke ${minimumAgentVersion}+ untuk provisioning database service`
+                  ? `Upgrade ke ${minimumAgentVersion}+ untuk bootstrap gateway dan route aplikasi`
                   : 'Versi OC Agent yang dilaporkan pada heartbeat terakhir'
               "
             >
@@ -356,6 +380,21 @@ function closeEnrollment() {
             <dd class="mt-1 truncate font-mono text-ink">
               {{ node.dockerVersion || '—' }} / {{ node.composeVersion || '—' }}
             </dd>
+          </div>
+          <div class="col-span-2">
+            <dt class="text-muted">Traefik gateway</dt>
+            <dd class="mt-1 flex items-center gap-2">
+              <UiBadge :tone="gatewayStatusTone(node.gatewayStatus)" dot>
+                {{ node.gatewayStatus }}
+              </UiBadge>
+              <span class="truncate font-mono text-ink">{{ node.gatewayVersion || '—' }}</span>
+            </dd>
+            <p v-if="node.gatewayLastError" class="mt-2 text-xs leading-5 text-danger">
+              {{ node.gatewayLastError }}
+            </p>
+            <p v-if="node.gatewayLastObservedAt" class="mt-1 text-[11px] text-muted">
+              Observed {{ format.dateTime(node.gatewayLastObservedAt) }}
+            </p>
           </div>
           <div class="col-span-2">
             <dt class="text-muted">Heartbeat terakhir</dt>

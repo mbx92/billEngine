@@ -1,4 +1,4 @@
-import { and, eq, isNull, notInArray, sql } from 'drizzle-orm'
+import { and, eq, isNull, sql } from 'drizzle-orm'
 import type {
   CreateServiceInput,
   TransitionServiceInput,
@@ -8,9 +8,7 @@ import { useDatabase, type Database } from '../../database/client'
 import {
   invoiceItems,
   infrastructureServiceDatabases,
-  provisioningJobs,
   serviceBillingRuns,
-  serviceDatabases,
   serviceResources,
   services,
 } from '../../database/schema'
@@ -191,6 +189,7 @@ export class ServiceCatalogService {
       const infrastructureOperation = await this.infrastructureLifecycle.apply(
         id,
         infrastructureTarget,
+        actor.userId,
       )
 
       try {
@@ -206,12 +205,10 @@ export class ServiceCatalogService {
             input.reason,
           )
           if (input.status === 'cancelled') {
-            const retentionUntil = new Date()
-            retentionUntil.setUTCDate(retentionUntil.getUTCDate() + 30)
             await transaction
-              .update(serviceDatabases)
-              .set({ status: 'pending_deletion', retentionUntil, updatedAt: new Date() })
-              .where(eq(serviceDatabases.serviceId, id))
+              .update(infrastructureServiceDatabases)
+              .set({ status: 'pending_deletion', updatedAt: new Date() })
+              .where(eq(infrastructureServiceDatabases.serviceId, id))
           }
           await this.audit.record(transaction, {
             actorUserId: actor.userId,
@@ -232,7 +229,7 @@ export class ServiceCatalogService {
       } catch (error) {
         if (infrastructureOperation && !(await infrastructureOperation.rollback())) {
           throw DomainError.external(
-            'Status billing gagal disimpan dan rollback Coolify tidak lengkap. Periksa resource secara manual.',
+            'Status billing gagal disimpan dan rollback operation tidak lengkap. Periksa deployment secara manual.',
           )
         }
         throw error
@@ -274,22 +271,6 @@ export class ServiceCatalogService {
         throw DomainError.invalidState('Service yang sudah memiliki invoice tidak dapat dihapus.')
       }
 
-      const [runningJob] = await transaction
-        .select({ id: provisioningJobs.id })
-        .from(provisioningJobs)
-        .where(
-          and(
-            eq(provisioningJobs.serviceId, id),
-            notInArray(provisioningJobs.status, ['active', 'failed']),
-          ),
-        )
-        .limit(1)
-      if (runningJob) {
-        throw DomainError.invalidState(
-          'Provisioning masih berjalan. Tunggu job selesai atau gagal sebelum menghapus service.',
-        )
-      }
-
       const [nativeDatabase] = await transaction
         .select({ id: infrastructureServiceDatabases.id })
         .from(infrastructureServiceDatabases)
@@ -307,8 +288,6 @@ export class ServiceCatalogService {
       }
 
       await transaction.delete(serviceResources).where(eq(serviceResources.serviceId, id))
-      await transaction.delete(provisioningJobs).where(eq(provisioningJobs.serviceId, id))
-      await transaction.delete(serviceDatabases).where(eq(serviceDatabases.serviceId, id))
       await transaction.delete(services).where(eq(services.id, id))
 
       await this.audit.record(transaction, {

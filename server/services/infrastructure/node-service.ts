@@ -10,6 +10,7 @@ import { DomainError } from '../../utils/errors'
 import { isUbuntuRelease } from './policy'
 
 export const AGENT_PROTOCOL_VERSION = '1'
+const DEFAULT_GATEWAY_IMAGE = 'traefik:v3.7.14'
 
 type ControlRepository = Pick<
   InfrastructureControlRepository,
@@ -68,6 +69,7 @@ export class InfrastructureNodeService {
       tokenHash: hashCredential(input.token),
       credentialHash,
       fingerprint: credentialHash.slice(0, 32),
+      gatewayImage: configuredGatewayImage(),
       node: {
         agentVersion: input.agentVersion,
         protocolVersion: input.protocolVersion,
@@ -98,7 +100,11 @@ export class InfrastructureNodeService {
       throw DomainError.invalidState('Versi protocol agent tidak kompatibel.')
     }
 
-    const result = await this.repository.recordHeartbeat(nodeId, input)
+    const result = await this.repository.recordHeartbeat(
+      nodeId,
+      input,
+      configuredGatewayImage(),
+    )
     if (!result) throw DomainError.notFound('Node tidak aktif atau tidak ditemukan.')
     return result
   }
@@ -118,4 +124,8 @@ export class InfrastructureNodeService {
 
 export function hashCredential(value: string) {
   return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function configuredGatewayImage() {
+  return String(useRuntimeConfig().infrastructureGatewayImage || DEFAULT_GATEWAY_IMAGE)
 }

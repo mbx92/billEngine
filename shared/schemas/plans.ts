@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { BILLING_CYCLES } from '../constants/domain'
-import { DATABASE_MODES } from './database-provisioning'
+export const DATABASE_MODES = ['none', 'shared', 'dedicated'] as const
 
 const optionalText = (max: number) =>
   z.preprocess(

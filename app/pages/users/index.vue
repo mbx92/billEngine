@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { KeyRound, Plus, RefreshCw, Save } from '@lucide/vue'
+import { KeyRound, Plus, Save } from '@lucide/vue'
 import type { ApiCustomer, ApiUser, Paginated } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
 
@@ -130,7 +130,7 @@ async function updatePassword() {
         <p class="mt-2 text-sm text-muted">Kelola admin dan akun portal customer.</p>
       </div>
       <div class="flex gap-2">
-        <UiButton variant="secondary" @click="refresh()"><RefreshCw :size="15" /> Refresh</UiButton>
+        <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <UiButton @click="showForm = true"><Plus :size="15" /> Tambah user</UiButton>
       </div>
     </header>

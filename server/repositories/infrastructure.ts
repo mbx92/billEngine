@@ -1,6 +1,11 @@
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, eq, isNull } from 'drizzle-orm'
 import { useDatabase, type Database } from '../database/client'
-import { coolifyResources, coolifyServers, serviceResources, services } from '../database/schema'
+import {
+  infrastructureNodes,
+  infrastructureResources,
+  serviceResources,
+  services,
+} from '../database/schema'
 
 export class InfrastructureRepository {
   constructor(private readonly database: Database = useDatabase()) {}
@@ -24,28 +29,51 @@ export class InfrastructureRepository {
 
     if (!service) return null
 
-    const resources = await this.database
+    const rows = await this.database
       .select({
-        id: coolifyResources.id,
-        name: coolifyResources.name,
-        status: coolifyResources.status,
-        resourceType: coolifyResources.resourceType,
-        coolifyUuid: coolifyResources.coolifyUuid,
-        limitsCpus: coolifyResources.limitsCpus,
-        limitsMemoryBytes: coolifyResources.limitsMemoryBytes,
-        resourceUpdatedAt: coolifyResources.updatedAt,
-        serverId: coolifyServers.id,
-        serverName: coolifyServers.name,
-        baseUrl: coolifyServers.baseUrl,
-        tokenEncrypted: coolifyServers.tokenEncrypted,
-        serverActive: coolifyServers.isActive,
+        id: infrastructureResources.id,
+        name: infrastructureResources.name,
+        status: infrastructureResources.observedState,
+        resourceType: infrastructureResources.kind,
+        classification: infrastructureResources.classification,
+        desiredSpec: infrastructureResources.desiredSpec,
+        resourceUpdatedAt: infrastructureResources.updatedAt,
+        nodeId: infrastructureNodes.id,
+        serverName: infrastructureNodes.name,
+        serverActive: infrastructureNodes.isActive,
       })
       .from(serviceResources)
-      .innerJoin(coolifyResources, eq(coolifyResources.id, serviceResources.resourceId))
-      .innerJoin(coolifyServers, eq(coolifyServers.id, coolifyResources.coolifyServerId))
-      .where(eq(serviceResources.serviceId, serviceId))
-      .orderBy(asc(coolifyResources.id))
+      .innerJoin(
+        infrastructureResources,
+        eq(infrastructureResources.id, serviceResources.resourceId),
+      )
+      .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
+      .where(
+        and(eq(serviceResources.serviceId, serviceId), isNull(infrastructureResources.deletedAt)),
+      )
+      .orderBy(asc(infrastructureResources.id))
+
+    const resources = rows.map((resource) => ({
+      ...resource,
+      ...resourceLimits(resource.desiredSpec),
+    }))
 
     return { ...service, resources }
   }
+}
+
+function resourceLimits(desiredSpec: Record<string, unknown>) {
+  const limits = (desiredSpec as { limits?: { cpuMilli?: number; memoryBytes?: string } }).limits
+  return {
+    limitsCpus: limits?.cpuMilli === undefined ? null : milliToDecimal(limits.cpuMilli),
+    limitsMemoryBytes: limits?.memoryBytes ? BigInt(limits.memoryBytes) : null,
+  }
+}
+
+function milliToDecimal(value: number) {
+  const whole = Math.floor(value / 1000)
+  const fraction = String(value % 1000)
+    .padStart(3, '0')
+    .replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : String(whole)
 }

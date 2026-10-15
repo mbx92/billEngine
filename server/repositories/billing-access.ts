@@ -1,17 +1,14 @@
 import { and, asc, eq, gt, inArray, lt, ne } from 'drizzle-orm'
 import { useDatabase, type Database } from '../database/client'
 import {
-  coolifyResources,
+  infrastructureResources,
   invoiceItems,
   invoices,
-  resourceDomains,
+  resourceRoutes,
   serviceResources,
   services,
 } from '../database/schema'
-import {
-  hostsFromCoolifyFqdn,
-  normalizeRequestHost,
-} from '../services/billing/access-policy'
+import { normalizeRequestHost } from '../services/billing/access-policy'
 
 export class BillingAccessRepository {
   constructor(private readonly database: Database = useDatabase()) {}
@@ -23,26 +20,27 @@ export class BillingAccessRepository {
         name: services.name,
         serviceNumber: services.serviceNumber,
         status: services.status,
-        fqdn: coolifyResources.fqdn,
-        managedHostname: resourceDomains.hostname,
-        managedDomainStatus: resourceDomains.status,
+        managedHostname: resourceRoutes.hostname,
+        managedDomainStatus: resourceRoutes.observedStatus,
       })
       .from(serviceResources)
       .innerJoin(services, eq(services.id, serviceResources.serviceId))
-      .innerJoin(coolifyResources, eq(coolifyResources.id, serviceResources.resourceId))
-      .leftJoin(resourceDomains, eq(resourceDomains.resourceId, coolifyResources.id))
+      .innerJoin(
+        infrastructureResources,
+        eq(infrastructureResources.id, serviceResources.resourceId),
+      )
+      .innerJoin(resourceRoutes, eq(resourceRoutes.resourceId, infrastructureResources.id))
       .where(
-        and(ne(services.status, 'cancelled'), eq(coolifyResources.resourceType, 'application')),
+        and(
+          ne(services.status, 'cancelled'),
+          eq(infrastructureResources.kind, 'application'),
+          eq(resourceRoutes.observedStatus, 'active'),
+        ),
       )
 
-    const matches = candidates.filter((candidate) => {
-      if (hostsFromCoolifyFqdn(candidate.fqdn).includes(host)) return true
-
-      return (
-        candidate.managedDomainStatus === 'active' &&
-        normalizeRequestHost(candidate.managedHostname) === host
-      )
-    })
+    const matches = candidates.filter(
+      (candidate) => normalizeRequestHost(candidate.managedHostname) === host,
+    )
     const serviceIds = new Set(matches.map((match) => match.id))
 
     // Ambiguous host ownership must fail open instead of blocking the wrong customer.

@@ -23,6 +23,13 @@ type Resource struct {
 	Snapshot         map[string]any    `json:"snapshot"`
 }
 
+type Gateway struct {
+	Status      string `json:"status"`
+	Image       string `json:"image,omitempty"`
+	ContainerID string `json:"containerId,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
 type containerRow struct {
 	ID     string `json:"ID"`
 	Image  string `json:"Image"`
@@ -35,6 +42,43 @@ type containerRow struct {
 
 func Inventory(ctx context.Context) ([]Resource, error) {
 	return InventoryWith(ctx, runCommand)
+}
+
+func InspectGateway(ctx context.Context) Gateway {
+	output, err := runCommand(
+		ctx,
+		"docker",
+		"inspect",
+		"--format",
+		"{{.Id}}\t{{.Config.Image}}\t{{.State.Status}}\t{{if .State.Health}}{{.State.Health.Status}}{{end}}",
+		"oc-gateway",
+	)
+	if err != nil {
+		return Gateway{Status: "unknown", Error: "oc-gateway container was not found"}
+	}
+	parts := strings.Split(strings.TrimSpace(string(output)), "\t")
+	if len(parts) < 3 {
+		return Gateway{Status: "unknown", Error: "oc-gateway state could not be inspected"}
+	}
+	gateway := Gateway{ContainerID: parts[0], Image: parts[1]}
+	containerState := parts[2]
+	healthState := ""
+	if len(parts) > 3 {
+		healthState = parts[3]
+	}
+	switch {
+	case containerState == "running" && healthState == "healthy":
+		gateway.Status = "healthy"
+	case containerState == "created" || containerState == "restarting" || healthState == "starting":
+		gateway.Status = "installing"
+	case containerState == "running":
+		gateway.Status = "unknown"
+		gateway.Error = "oc-gateway health status is unavailable"
+	default:
+		gateway.Status = "failed"
+		gateway.Error = "oc-gateway container is " + containerState
+	}
+	return gateway
 }
 
 func InventoryWith(ctx context.Context, run CommandRunner) ([]Resource, error) {
@@ -63,6 +107,9 @@ func InventoryWith(ctx context.Context, run CommandRunner) ([]Resource, error) {
 			return nil, fmt.Errorf("decode docker inventory: %w", err)
 		}
 		labels := parseLabels(row.Labels)
+		if labels["oc.component"] != "" || labels["oc.resource-id"] == "" {
+			continue
+		}
 		revision, _ := strconv.Atoi(labels["oc.revision"])
 		kind := labels["oc.kind"]
 		if kind != "database" {

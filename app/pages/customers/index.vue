@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Plus, RefreshCw } from '@lucide/vue'
+import { Plus } from '@lucide/vue'
 import type { ApiCustomer, Paginated } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
 
@@ -84,10 +84,7 @@ async function addCustomer() {
         </p>
       </div>
       <div class="flex gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-          Refresh
-        </UiButton>
+        <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <UiButton @click="showAddForm = true">
           <Plus :size="15" aria-hidden="true" />
           Tambah customer

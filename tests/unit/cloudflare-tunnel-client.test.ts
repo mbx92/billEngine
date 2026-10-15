@@ -15,7 +15,7 @@ describe('Cloudflare Tunnel client', () => {
         result: [
           {
             id: 'f70ff985-a4ef-4643-bbbc-4a0ed4fc8415',
-            name: 'coolify-edge',
+            name: 'platform-edge',
             status: 'healthy',
             config_src: 'cloudflare',
           },
@@ -27,7 +27,7 @@ describe('Cloudflare Tunnel client', () => {
     const result = await new CloudflareTunnelClient('secret', 'account-1', apiBase).listTunnels()
 
     expect(result).toHaveLength(1)
-    expect(result[0]?.name).toBe('coolify-edge')
+    expect(result[0]?.name).toBe('platform-edge')
     expect(request).toHaveBeenCalledWith(
       `${apiBase}/accounts/account-1/cfd_tunnel?is_deleted=false&per_page=1000`,
       expect.objectContaining({

@@ -9,12 +9,12 @@ import {
   Pencil,
   Play,
   Plus,
-  RefreshCw,
   RotateCw,
   Trash2,
   X,
 } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
+import { copyText } from '~/lib/clipboard'
 
 definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Applications · OC Infrastructure' })
@@ -71,6 +71,9 @@ interface InfrastructureResource {
   nodeId: string
   nodeName: string
   customerId: string | null
+  applicationId: string | null
+  releaseId: string | null
+  releasePolicy: 'manual' | 'track_latest'
   externalId: string
   kind: 'application' | 'database' | 'volume'
   name: string
@@ -81,6 +84,9 @@ interface InfrastructureResource {
   observedRevision: number
   imageReference: string | null
   imageDigest: string | null
+  routeHostname: string | null
+  routeStatus: 'pending' | 'configuring' | 'active' | 'failed' | 'disabled' | null
+  billingGateEnabled: boolean | null
   desiredSpec: ApplicationSpec
   lastObservedAt: string | null
   createdAt: string
@@ -103,6 +109,7 @@ interface RevealedCredentials {
 }
 
 const format = useFormat()
+const toast = useToast()
 const showCreateForm = ref(false)
 const editingResource = ref<InfrastructureResource | null>(null)
 const pendingDelete = ref<InfrastructureResource | null>(null)
@@ -407,10 +414,13 @@ function toggleSecretVisibility(key: string) {
 
 async function copyCredential(key: string, value: string) {
   try {
-    await navigator.clipboard.writeText(value)
+    await copyText(value)
     credentialMessage.value = `${key} disalin ke clipboard.`
+    toast.success(`${key} berhasil disalin.`)
   } catch {
-    credentialMessage.value = 'Browser tidak dapat menyalin credential. Tampilkan lalu salin manual.'
+    credentialMessage.value =
+      'Browser tidak dapat menyalin credential. Tampilkan lalu salin manual.'
+    toast.error('Browser tidak dapat menyalin credential. Salin secara manual.')
   }
 }
 </script>
@@ -429,10 +439,7 @@ async function copyCredential(key: string, value: string) {
         </p>
       </div>
       <div class="flex gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refreshAll">
-          <RefreshCw :size="15" aria-hidden="true" />
-          Refresh
-        </UiButton>
+        <UiRefreshButton :action="refreshAll" :pending="status === 'pending'" />
         <UiButton :disabled="availableNodes.length === 0" @click="openCreateForm">
           <Plus :size="15" aria-hidden="true" />
           Deploy image
@@ -529,6 +536,22 @@ async function copyCredential(key: string, value: string) {
                     <span class="block max-w-72 truncate font-mono text-[11px] text-muted">
                       {{ resource.imageReference || resource.externalId }}
                     </span>
+                    <span
+                      v-if="resource.applicationId"
+                      class="mt-1 block text-[10px] font-semibold tracking-wide text-brand uppercase"
+                    >
+                      Application ·
+                      {{ resource.releasePolicy === 'track_latest' ? 'track latest' : 'manual' }}
+                    </span>
+                    <a
+                      v-if="resource.routeHostname"
+                      class="mt-1 block max-w-72 truncate font-mono text-[11px] text-brand hover:underline"
+                      :href="`https://${resource.routeHostname}`"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {{ resource.routeHostname }} · {{ resource.routeStatus }}
+                    </a>
                   </div>
                 </div>
               </td>
@@ -841,7 +864,11 @@ async function copyCredential(key: string, value: string) {
                 <UiButton
                   variant="secondary"
                   size="sm"
-                  :aria-label="visibleSecretKeys.includes(String(key)) ? 'Sembunyikan secret' : 'Tampilkan secret'"
+                  :aria-label="
+                    visibleSecretKeys.includes(String(key))
+                      ? 'Sembunyikan secret'
+                      : 'Tampilkan secret'
+                  "
                   @click="toggleSecretVisibility(String(key))"
                 >
                   <EyeOff v-if="visibleSecretKeys.includes(String(key))" :size="14" />

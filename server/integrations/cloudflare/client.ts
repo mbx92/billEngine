@@ -81,7 +81,7 @@ export class CloudflareClient {
   /**
    * Returns the proxied CNAME target used by `*.{platformDomain}` (usually
    * `<tunnel-id>.cfargotunnel.com`). Platform app hostnames must use the same target
-   * so they hit the Coolify Traefik wildcard tunnel route.
+   * so they hit the platform reverse-proxy wildcard tunnel route.
    */
   async resolveWildcardTunnelTarget(platformDomain: string): Promise<string | null> {
     const wildcard = `*.${platformDomain.trim().toLowerCase()}`
@@ -112,13 +112,10 @@ export class CloudflareClient {
       return { id: parsed.id, name: parsed.name, content: parsed.content, changed: true as const }
     }
 
-    const created = await this.rawRequest(
-      `/zones/${encodeURIComponent(this.zoneId)}/dns_records`,
-      {
-        method: 'POST',
-        body: { type: 'CNAME', name, content, proxied: true, ttl: 1 },
-      },
-    )
+    const created = await this.rawRequest(`/zones/${encodeURIComponent(this.zoneId)}/dns_records`, {
+      method: 'POST',
+      body: { type: 'CNAME', name, content, proxied: true, ttl: 1 },
+    })
     const parsed = apiEnvelopeSchema(dnsRecordSchema).parse(created).result
     return { id: parsed.id, name: parsed.name, content: parsed.content, changed: true as const }
   }

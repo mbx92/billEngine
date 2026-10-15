@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
 import type { ApiDashboard } from '#shared/types/api'
 
 definePageMeta({ middleware: 'auth' })
@@ -33,7 +32,7 @@ const stats = computed(() => {
       tone: 'warning' as const,
     },
     {
-      label: 'Coolify apps',
+      label: 'Applications',
       value: value ? format.count(value.resources.total) : '—',
       detail: value ? `${format.count(value.resources.running)} running` : '',
     },
@@ -49,12 +48,9 @@ const stats = computed(() => {
           Control plane / overview
         </p>
         <h1 class="text-2xl font-semibold tracking-tight">Infrastructure Overview</h1>
-        <p class="mt-2 text-sm text-muted">Commercial health and the last known Coolify state.</p>
+        <p class="mt-2 text-sm text-muted">Commercial health and OC Agent infrastructure state.</p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-        <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-        Refresh
-      </UiButton>
+      <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>
 
     <div
@@ -79,8 +75,8 @@ const stats = computed(() => {
       <UiCard :padded="false" class="overflow-hidden">
         <div class="flex h-12 items-center justify-between border-b px-5">
           <div>
-            <h2 class="text-sm font-semibold">Coolify resources</h2>
-            <p class="text-[11px] text-muted">Cached infrastructure state</p>
+            <h2 class="text-sm font-semibold">Infrastructure resources</h2>
+            <p class="text-[11px] text-muted">Last observed agent state</p>
           </div>
           <UiBadge :tone="overview?.resources.lastSyncedAt ? 'success' : 'neutral'" dot>
             {{ overview?.resources.lastSyncedAt ? 'Synced' : 'Not synced' }}
@@ -156,7 +152,7 @@ const stats = computed(() => {
             </div>
           </div>
           <p class="mt-4 text-[11px] text-muted">
-            “Unlimited” berarti aplikasi belum memiliki limit CPU/memory di Coolify.
+            Nilai kapasitas dihitung dari limit CPU dan memory pada resource yang dikelola agent.
           </p>
         </UiCard>
 

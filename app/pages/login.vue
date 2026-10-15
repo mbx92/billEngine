@@ -51,9 +51,7 @@ async function submit() {
     </div>
     <UiCard>
       <h1 class="text-xl font-semibold tracking-tight">Masuk</h1>
-      <p class="mt-2 text-sm leading-6 text-muted">
-        Masuk dengan akun admin atau customer portal. Kredensial Coolify tidak diterima di sini.
-      </p>
+      <p class="mt-2 text-sm leading-6 text-muted">Masuk dengan akun admin atau customer portal.</p>
       <form class="mt-6 space-y-4" @submit.prevent="submit">
         <UiInput
           v-model="email"

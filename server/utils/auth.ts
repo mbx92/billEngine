@@ -15,7 +15,7 @@ function createAuth() {
   }
 
   return betterAuth({
-    appName: 'Coolify Billing Platform',
+    appName: 'OC Infrastructure Platform',
     baseURL: config.betterAuthUrl,
     // `nuxt dev --host` can be opened through any local interface, while the
     // configured base URL usually remains localhost. Trust the actual dev

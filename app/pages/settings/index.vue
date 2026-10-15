@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RefreshCw, Save } from '@lucide/vue'
+import { Save } from '@lucide/vue'
 import type { ApiBillingSettings } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
 
@@ -93,14 +93,11 @@ async function reloadSettings() {
           Identitas perusahaan dan default billing untuk invoice yang dibuat setelah perubahan.
         </p>
       </div>
-      <UiButton
-        variant="secondary"
-        :disabled="status === 'pending' || saving"
-        @click="reloadSettings"
-      >
-        <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-        Muat ulang
-      </UiButton>
+      <UiRefreshButton
+        :action="reloadSettings"
+        :pending="status === 'pending' || saving"
+        label="Muat ulang"
+      />
     </header>
 
     <p
@@ -170,7 +167,7 @@ async function reloadSettings() {
             </div>
             <p class="mt-1 max-w-2xl text-xs leading-5 text-muted">
               Menampilkan interstitial selama grace period dan memblokir trafik web setelah grace
-              berakhir. Resource Coolify tetap berjalan; middleware Traefik harus dipasang terpisah.
+              berakhir. Resource tetap berjalan; middleware reverse proxy harus dipasang terpisah.
             </p>
           </div>
           <label class="inline-flex cursor-pointer items-center gap-3 self-start">

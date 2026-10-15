@@ -11,11 +11,15 @@ const tone = computed(
       ({
         running: 'success',
         active: 'success',
+        pending: 'info',
         stopped: 'neutral',
         inactive: 'neutral',
         restarting: 'info',
         suspended: 'warning',
         degraded: 'warning',
+        deleting: 'warning',
+        deleted: 'neutral',
+        failed: 'danger',
         cancelled: 'danger',
         unknown: 'neutral',
       }) as const

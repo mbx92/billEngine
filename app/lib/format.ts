@@ -41,7 +41,7 @@ export function formatCount(value: number): string {
   return new Intl.NumberFormat('id-ID').format(value)
 }
 
-/** Coolify reports CPU limits as fractional cores, e.g. "1.500". */
+/** CPU limits are represented as fractional cores, e.g. "1.500". */
 export function formatCpuCores(value: string | null | undefined): string {
   if (!value) return '—'
   const numeric = Number(value)

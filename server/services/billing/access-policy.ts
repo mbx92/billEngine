@@ -43,24 +43,6 @@ export function normalizeRequestHost(value: string | null | undefined): string |
   return first.replace(/:\d+$/, '').replace(/\.$/, '') || null
 }
 
-export function hostsFromCoolifyFqdn(value: string | null): string[] {
-  if (!value) return []
-
-  return value
-    .split(',')
-    .map((entry) => entry.trim())
-    .flatMap((entry) => {
-      if (!entry) return []
-      try {
-        const url = new URL(entry.includes('://') ? entry : `https://${entry}`)
-        const host = normalizeRequestHost(url.host)
-        return host ? [host] : []
-      } catch {
-        return []
-      }
-    })
-}
-
 export function safeReturnPath(value: string | null | undefined): string {
   if (!value || !value.startsWith('/') || value.startsWith('//') || /[\r\n]/.test(value)) return '/'
   return value.slice(0, 2_048)

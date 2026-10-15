@@ -16,7 +16,6 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core'
 import { users } from './auth'
-import { coolifyResources } from './coolify'
 import { customers } from './customers'
 import { billingCycle, serviceStatus } from './enums'
 import {
@@ -24,7 +23,8 @@ import {
   infrastructureOperations,
   infrastructureResources,
 } from './infrastructure'
-import type { DatabaseMode } from './provisioning'
+
+export type DatabaseMode = 'none' | 'shared' | 'dedicated'
 
 export const plans = pgTable(
   'plans',
@@ -133,13 +133,9 @@ export const serviceResources = pgTable(
     serviceId: uuid('service_id')
       .notNull()
       .references(() => services.id, { onDelete: 'restrict' }),
-    resourceId: uuid('resource_id')
+    resourceId: uuid('infrastructure_resource_id')
       .notNull()
-      .references(() => coolifyResources.id, { onDelete: 'restrict' }),
-    infrastructureResourceId: uuid('infrastructure_resource_id').references(
-      () => infrastructureResources.id,
-      { onDelete: 'restrict' },
-    ),
+      .references(() => infrastructureResources.id, { onDelete: 'restrict' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   },
@@ -147,7 +143,6 @@ export const serviceResources = pgTable(
     uniqueIndex('service_resources_service_resource_uidx').on(table.serviceId, table.resourceId),
     index('service_resources_service_id_idx').on(table.serviceId),
     index('service_resources_resource_id_idx').on(table.resourceId),
-    index('service_resources_infrastructure_resource_id_idx').on(table.infrastructureResourceId),
   ],
 )
 

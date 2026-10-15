@@ -1,8 +1,9 @@
 {
   "name": "oc-infrastructure-platform",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "npm@10.9.3",
   "scripts": {
     "build": "nuxt build",
     "dev": "nuxt dev --host 0.0.0.0",
@@ -33,7 +34,7 @@
     "db:create-admin": "tsx server/database/create-admin.ts"
   },
   "dependencies": {
-    "@lucide/vue": "^1.48.0",
+    "@lucide/vue": "1.48.0",
     "better-auth": "^1.7.6",
     "drizzle-orm": "^0.45.3",
     "h3": "^1.15.11",

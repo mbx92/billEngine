@@ -62,7 +62,7 @@ describe('Cloudflare client', () => {
                 id: 'dns-wild',
                 type: 'CNAME',
                 name: '*.ocnetworks.web.id',
-                content: 'coolify-tunnel.cfargotunnel.com',
+                content: 'platform-tunnel.cfargotunnel.com',
                 proxied: true,
               },
             ],
@@ -97,7 +97,7 @@ describe('Cloudflare client', () => {
               id: 'dns-old',
               type: 'CNAME',
               name: 'digarasi.ocnetworks.web.id',
-              content: 'coolify-tunnel.cfargotunnel.com',
+              content: 'platform-tunnel.cfargotunnel.com',
               proxied: true,
             },
           }),
@@ -112,13 +112,13 @@ describe('Cloudflare client', () => {
       'https://api.cloudflare.test/client/v4',
     )
     const target = await client.resolveWildcardTunnelTarget('ocnetworks.web.id')
-    expect(target).toBe('coolify-tunnel.cfargotunnel.com')
+    expect(target).toBe('platform-tunnel.cfargotunnel.com')
 
     const upserted = await client.upsertProxiedCname(
       'digarasi.ocnetworks.web.id',
-      'coolify-tunnel.cfargotunnel.com',
+      'platform-tunnel.cfargotunnel.com',
     )
-    expect(upserted).toMatchObject({ changed: true, content: 'coolify-tunnel.cfargotunnel.com' })
+    expect(upserted).toMatchObject({ changed: true, content: 'platform-tunnel.cfargotunnel.com' })
     expect(request).toHaveBeenLastCalledWith(
       'https://api.cloudflare.test/client/v4/zones/zone-1/dns_records/dns-old',
       expect.objectContaining({
@@ -126,7 +126,7 @@ describe('Cloudflare client', () => {
         body: JSON.stringify({
           type: 'CNAME',
           name: 'digarasi.ocnetworks.web.id',
-          content: 'coolify-tunnel.cfargotunnel.com',
+          content: 'platform-tunnel.cfargotunnel.com',
           proxied: true,
           ttl: 1,
         }),

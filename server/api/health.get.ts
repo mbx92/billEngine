@@ -1,5 +1,5 @@
 export default defineEventHandler(() => ({
   status: 'ok',
-  service: 'coolify-billing-platform',
+  service: 'oc-infrastructure-platform',
   timestamp: new Date().toISOString(),
 }))

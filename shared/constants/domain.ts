@@ -10,10 +10,14 @@ export const BILLING_CYCLES = [
 ] as const
 export const RESOURCE_CLASSIFICATIONS = ['billable', 'internal', 'ignored'] as const
 export const RESOURCE_STATUSES = [
+  'pending',
   'running',
   'stopped',
   'restarting',
   'degraded',
+  'deleting',
+  'deleted',
+  'failed',
   'unknown',
 ] as const
 export const INVOICE_STATUSES = ['draft', 'unpaid', 'paid', 'overdue', 'cancelled'] as const

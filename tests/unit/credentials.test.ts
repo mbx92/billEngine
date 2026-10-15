@@ -1,29 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  decryptCredential,
   decryptInfrastructureCredential,
-  encryptCredential,
   encryptInfrastructureCredential,
 } from '../../server/utils/credentials'
 
-describe('stored Coolify credentials', () => {
+describe('stored infrastructure credentials', () => {
   afterEach(() => vi.unstubAllGlobals())
-
-  it('encrypts and decrypts API tokens without storing plaintext', () => {
-    vi.stubGlobal('useRuntimeConfig', () => ({
-      coolifyCredentialsKey: 'a-dedicated-test-key-that-is-long-enough',
-    }))
-
-    const encrypted = encryptCredential('coolify-api-token')
-
-    expect(encrypted).not.toContain('coolify-api-token')
-    expect(decryptCredential(encrypted)).toBe('coolify-api-token')
-  })
 
   it('uses the dedicated infrastructure key when configured', () => {
     vi.stubGlobal('useRuntimeConfig', () => ({
       infraCredentialsKey: 'infrastructure-key',
-      coolifyCredentialsKey: 'coolify-key',
+      betterAuthSecret: 'application-fallback-key',
     }))
 
     const encrypted = encryptInfrastructureCredential('database-password')
@@ -35,7 +22,7 @@ describe('stored Coolify credentials', () => {
     let dedicatedKey = ''
     vi.stubGlobal('useRuntimeConfig', () => ({
       infraCredentialsKey: dedicatedKey,
-      coolifyCredentialsKey: 'legacy-key',
+      betterAuthSecret: 'application-fallback-key',
     }))
 
     const encrypted = encryptInfrastructureCredential('legacy-database-password')

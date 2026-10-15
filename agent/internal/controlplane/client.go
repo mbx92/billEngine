@@ -48,6 +48,7 @@ type HeartbeatRequest struct {
 	DockerVersion   string            `json:"dockerVersion"`
 	ComposeVersion  string            `json:"composeVersion"`
 	Capacity        platform.Capacity `json:"capacity"`
+	Gateway         docker.Gateway    `json:"gateway"`
 }
 
 type InventoryRequest struct {
@@ -77,7 +78,14 @@ type OperationStatusRequest struct {
 }
 
 type OperationSecrets struct {
-	Secrets map[string]string `json:"secrets"`
+	Secrets  map[string]string   `json:"secrets"`
+	Registry *RegistryCredential `json:"registry"`
+}
+
+type RegistryCredential struct {
+	Host     string `json:"host"`
+	Username string `json:"username"`
+	Token    string `json:"token"`
 }
 
 func New(baseURL string, client *http.Client) *Client {

@@ -1,6 +1,7 @@
-# Coolify Billing Platform
+# OC Infrastructure Platform
 
-Nuxt 4 billing control plane layered on top of Coolify. Coolify remains the infrastructure source of truth; this application owns customers, services, invoices, payments, and audit history.
+Nuxt 4 billing and infrastructure control plane backed by OC Agent. The application owns customers,
+services, invoices, releases, deployment templates, resources, operations, and audit history.
 
 ## Local development
 
@@ -39,12 +40,12 @@ npm run db:backup
 npm run test:e2e
 ```
 
-## Application provisioning
+## Application deployments
 
-The **Infrastructure → Provisioning** page creates Coolify applications from reusable deployment
-blueprints and tracks create, environment, domain, deploy, health, and SSL stages in a retryable
-background job. See [docs/PROVISIONING.md](docs/PROVISIONING.md) for prerequisites and supported
-source types.
+GitHub Actions publishes an immutable container image and registers it as an Application Release.
+The **Infrastructure → Templates** page deploys that release to an enrolled Ubuntu server. The
+**Infrastructure → Deployments** page shows the resulting operation queue and execution history,
+while **Resources** shows the desired and last-observed runtime state.
 
 ## Cloudflare Tunnel management
 
@@ -52,7 +53,8 @@ The **Infrastructure → Tunnels** page shows tunnel health and manages public-h
 for remotely managed Cloudflare Tunnels. See
 [docs/CLOUDFLARE-TUNNELS.md](docs/CLOUDFLARE-TUNNELS.md) for token permissions and routing safety.
 
-Do not use a production database for local development. Coolify tokens, auth secrets, and database credentials must remain in server-side environment variables.
+Do not use a production database for local development. Registry tokens, auth secrets, and database
+credentials must remain in server-side environment variables.
 
 ## Production deployment
 
@@ -109,24 +111,19 @@ user's access revokes all of that user's active sessions.
 Plans can define structured infrastructure targets: resource count, aggregate
 CPU cores, and aggregate RAM. These values are snapshotted onto a service when
 the service is created or its plan is saved again. The Services page compares
-that contract with the latest Coolify resource limits and marks it as matched,
+that contract with the latest infrastructure resource limits and marks it as matched,
 under-allocated, over-allocated, mixed, unknown, or not configured.
 
 The **Apply plan to infrastructure** action previews the exact changes, divides
 the aggregate CPU/RAM quota deterministically across linked applications, and
-then updates the applications through the Coolify API. Applying is blocked when
+then queues update operations for OC Agent. Applying is blocked when
 the linked resource count differs from the plan or an unsupported resource type
-is present. Running applications can be restarted after the update so Coolify
-recreates their containers with the new limits; stopped applications use the
+is present. Running applications are redeployed by the agent with the new limits; stopped applications use the
 new limits on their next start.
 
-Every apply uses a preview fingerprint to reject stale changes, synchronizes
-the affected Coolify server for verification, and writes both an audit entry
-and a job result. Partial failures remain visible per resource. Automatic apply
-during a normal sync is intentionally disabled: sync refreshes actual state,
-while changing production limits always requires an explicit admin confirmation.
-The current write path supports Coolify applications; database and compose
-service resource writes remain unsupported.
+Every apply uses a preview fingerprint to reject stale changes and writes both an audit entry and a
+job result. Partial scheduling failures remain visible per resource. Changing production limits
+always requires explicit admin confirmation.
 
 ## Monitoring and backups
 
@@ -148,15 +145,9 @@ docker build --target backup -t billengine-backup .
 docker run --rm --env-file .env -v /srv/billengine-backups:/backups billengine-backup
 ```
 
-Schedule that container externally (for example, daily in Coolify), copy the
+Schedule that container externally, copy the
 backup off-host, and regularly test restoration with `pg_restore` against a
 non-production database. Backup creation fails rather than deleting unrelated
 files; retention only removes older `billengine-*.dump` files in `BACKUP_DIR`.
 
 Architecture and product decisions live in [`docs/`](./docs/).
-
-## Overdue access gate
-
-An opt-in Traefik ForwardAuth gate can show an overdue interstitial while a
-customer application remains online. Setup, rollout safeguards, and local test
-commands are documented in [`docs/BILLING-GATE.md`](./docs/BILLING-GATE.md).

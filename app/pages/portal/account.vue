@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
-
 definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Akun · Portal' })
 
@@ -19,9 +17,7 @@ const { portal, status, error, refresh } = await usePortalSummary()
           Data yang tercatat pada invoice Anda. Hubungi admin jika ada yang perlu diubah.
         </p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-        <RefreshCw :size="15" aria-hidden="true" /> Refresh
-      </UiButton>
+      <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>
 
     <UiEmptyState
@@ -72,8 +68,8 @@ const { portal, status, error, refresh } = await usePortalSummary()
       </dl>
 
       <p class="mt-4 text-xs leading-5 text-muted">
-        Perubahan nama, alamat, atau NPWP memengaruhi invoice berikutnya. Invoice yang sudah
-        terbit tetap memakai snapshot saat diterbitkan.
+        Perubahan nama, alamat, atau NPWP memengaruhi invoice berikutnya. Invoice yang sudah terbit
+        tetap memakai snapshot saat diterbitkan.
       </p>
     </UiCard>
   </div>

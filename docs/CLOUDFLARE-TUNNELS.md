@@ -29,6 +29,6 @@ Locally managed tunnels are shown as read-only because their ingress configurati
 The page changes Tunnel ingress only. DNS remains explicit: point each public hostname to the
 displayed `<tunnel-uuid>.cfargotunnel.com` target, normally as a proxied CNAME in Cloudflare DNS.
 
-For the Coolify proxy topology documented in `BILLING-GATE.md`, use
+For the platform reverse-proxy topology, use
 `https://localhost:443` as the origin and enable **No TLS Verify**. Exact routes should remain above
 the wildcard route, while the catch-all response stays last.

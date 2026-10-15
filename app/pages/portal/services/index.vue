@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
 import { billingCycleUnit } from '#shared/utils/billing-display'
 
 definePageMeta({ middleware: 'auth' })
@@ -20,9 +19,7 @@ const { format, services, status, error, refresh } = await usePortalSummary()
           Langganan, paket, dan jadwal tagihan berikutnya pada akun Anda.
         </p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-        <RefreshCw :size="15" aria-hidden="true" /> Refresh
-      </UiButton>
+      <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>
 
     <div v-if="status === 'pending'" class="grid gap-4 md:grid-cols-2">

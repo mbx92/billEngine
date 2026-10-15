@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ClockAlert, Plus, RefreshCw, Zap } from '@lucide/vue'
+import { ClockAlert, Plus, Zap } from '@lucide/vue'
 import type { InvoiceStatus } from '#shared/constants/domain'
 import type { ApiInvoiceListResponse, ApiRecurringRunResult } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
@@ -128,15 +128,12 @@ async function manualInvoiceCreated(invoice: { id: string; invoiceNumber: string
           Manual invoice
         </UiButton>
         <div class="flex flex-wrap justify-end gap-2">
-          <UiButton
+          <UiRefreshButton
+            :action="refresh"
+            :pending="status === 'pending'"
             variant="ghost"
             size="sm"
-            :disabled="status === 'pending'"
-            @click="refresh()"
-          >
-            <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
-            Refresh
-          </UiButton>
+          />
           <UiButton variant="secondary" size="sm" :disabled="busy !== null" @click="markOverdue()">
             <ClockAlert :size="14" :stroke-width="1.8" aria-hidden="true" />
             {{ busy === 'overdue' ? 'Memproses…' : 'Mark overdue' }}

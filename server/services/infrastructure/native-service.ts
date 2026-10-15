@@ -16,6 +16,10 @@ export class NativeInfrastructureService {
     return this.repository.listResources()
   }
 
+  listOperations(limit?: number) {
+    return this.repository.listOperations(limit)
+  }
+
   async createApplication(
     input: CreateApplicationResourceInput,
     actorUserId: string,

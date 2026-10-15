@@ -12,6 +12,7 @@ import {
   ShieldCheck,
 } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
+import { copyText } from '~/lib/clipboard'
 
 definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Database Clusters · Billing Infra' })
@@ -133,6 +134,7 @@ const revealedCredential = ref<RevealedDatabaseCredential | null>(null)
 const busyAllocationIds = ref<string[]>([])
 const actionMessage = ref<string | null>(null)
 const actionError = ref<string | null>(null)
+const toast = useToast()
 const form = reactive({ resourceId: '', name: '', defaultConnectionLimit: 20 })
 const provisionForm = reactive({
   clusterId: '',
@@ -314,8 +316,12 @@ async function runAllocationAction(
 }
 
 async function copyValue(value: string) {
-  await navigator.clipboard.writeText(value)
-  actionMessage.value = 'Nilai disalin ke clipboard.'
+  try {
+    await copyText(value)
+    toast.success('Nilai berhasil disalin ke clipboard.')
+  } catch {
+    toast.error('Browser tidak dapat menyalin nilai. Salin secara manual.')
+  }
 }
 
 function supportsActivation(version: string | null) {
@@ -377,9 +383,7 @@ function statusTone(clusterStatus: ClusterStatus) {
         </p>
       </div>
       <div class="flex gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" /> Refresh
-        </UiButton>
+        <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <UiButton :disabled="!overview?.candidates.some(candidateReady)" @click="openActivation()">
           <Plus :size="15" /> Activate cluster
         </UiButton>

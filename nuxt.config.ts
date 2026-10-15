@@ -76,11 +76,11 @@ export default defineNuxtConfig({
     databaseUrl: developmentEnv.DATABASE_URL || '',
     betterAuthSecret: developmentEnv.BETTER_AUTH_SECRET || '',
     betterAuthUrl: developmentEnv.BETTER_AUTH_URL || '',
-    coolifyApiUrl: developmentEnv.COOLIFY_API_URL || '',
-    coolifyApiToken: developmentEnv.COOLIFY_API_TOKEN || '',
-    coolifyCredentialsKey: developmentEnv.COOLIFY_CREDENTIALS_KEY || '',
     infraCredentialsKey: developmentEnv.INFRA_CREDENTIALS_KEY || '',
+    releaseWebhookSecret: developmentEnv.RELEASE_WEBHOOK_SECRET || '',
     agentArtifactDirectory: developmentEnv.AGENT_ARTIFACT_DIRECTORY || 'dist',
+    infrastructureGatewayImage:
+      developmentEnv.INFRASTRUCTURE_GATEWAY_IMAGE || 'traefik:v3.7.14',
     cloudflareApiToken: developmentEnv.CLOUDFLARE_API_TOKEN || '',
     cloudflareZoneId: developmentEnv.CLOUDFLARE_ZONE_ID || '',
     cloudflareAccountId: developmentEnv.CLOUDFLARE_ACCOUNT_ID || '',
@@ -111,6 +111,8 @@ export default defineNuxtConfig({
       'http://host.docker.internal:8010/api/billing-gate/check',
     public: {
       appUrl: developmentEnv.APP_URL || 'http://localhost:3000',
+      agentControlPlaneUrl: developmentEnv.AGENT_CONTROL_PLANE_URL || '',
+      platformDomain: developmentEnv.PLATFORM_DOMAIN || 'ocnetworks.web.id',
       billingTimezone: developmentEnv.BILLING_TIMEZONE || 'Asia/Makassar',
       companyName: developmentEnv.COMPANY_NAME || 'Billing Infra',
       companyEmail: developmentEnv.COMPANY_EMAIL || '',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Plus, RefreshCw } from '@lucide/vue'
+import { Plus } from '@lucide/vue'
 import type { PaymentStatus } from '#shared/constants/domain'
 import type { ApiPaymentInvoiceOption, ApiPaymentListResponse } from '#shared/types/api'
 import { apiErrorMessage } from '~/lib/api-error'
@@ -151,10 +151,7 @@ async function recordPayment() {
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refreshAll()">
-          <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-          Refresh
-        </UiButton>
+        <UiRefreshButton :action="refreshAll" :pending="status === 'pending'" />
         <UiButton :disabled="invoiceOptions.length === 0" @click="openRecordForm()">
           <Plus :size="15" :stroke-width="1.8" aria-hidden="true" />
           Catat payment

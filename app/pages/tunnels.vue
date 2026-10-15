@@ -211,13 +211,10 @@ function statusTone(value: CloudflareTunnelStatus) {
         <h1 class="text-2xl font-semibold tracking-tight text-ink">Cloudflare Tunnels</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">
           Pantau tunnel dan kelola public hostname yang mengarahkan trafik Cloudflare ke origin
-          Coolify.
+          aplikasi.
         </p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refreshAll">
-        <RefreshCw :size="15" :class="{ 'animate-spin': status === 'pending' }" />
-        Refresh
-      </UiButton>
+      <UiRefreshButton :action="refreshAll" :pending="status === 'pending'" />
     </header>
 
     <p
@@ -471,7 +468,7 @@ function statusTone(value: CloudflareTunnelStatus) {
             <span class="block text-sm font-semibold text-ink">No TLS Verify</span>
             <span class="mt-1 block text-xs leading-5 text-muted">
               Gunakan hanya jika origin HTTPS memakai sertifikat untuk hostname publik, misalnya
-              proxy Coolify di https://localhost:443.
+              reverse proxy lokal di https://localhost:443.
             </span>
           </span>
         </label>

@@ -1,14 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import type { ServiceStatus } from '../../../shared/constants/domain'
-import type { CoolifyClient } from '../../integrations/coolify/client'
-import { clientForCoolifyConnection } from '../../integrations/coolify/connection'
 import { useDatabase, type Database } from '../../database/client'
 import { InfrastructureRepository } from '../../repositories/infrastructure'
+import { NativeInfrastructureRepository } from '../../repositories/native-infrastructure'
 import { DomainError } from '../../utils/errors'
-
-type ClientFactory = (connection: {
-  baseUrl: string
-  tokenEncrypted: string | null
-}) => CoolifyClient
+import { NativeInfrastructureService } from './native-service'
 
 export interface InfrastructureLifecycleOperation {
   affectedCount: number
@@ -16,75 +12,61 @@ export interface InfrastructureLifecycleOperation {
 }
 
 export class InfrastructureLifecycleService {
+  private readonly native: NativeInfrastructureService
+
   constructor(
     database: Database = useDatabase(),
     private readonly repository = new InfrastructureRepository(database),
-    private readonly clientFactory: ClientFactory = clientForCoolifyConnection,
-  ) {}
+  ) {
+    this.native = new NativeInfrastructureService(new NativeInfrastructureRepository(database))
+  }
 
   async apply(
     serviceId: string,
     targetStatus: Extract<ServiceStatus, 'active' | 'suspended'>,
+    actorUserId: string | null,
   ): Promise<InfrastructureLifecycleOperation> {
+    if (!actorUserId) throw DomainError.invalidState('Actor lifecycle operation tidak tersedia.')
     const target = await this.repository.findServiceTarget(serviceId)
     if (!target) throw DomainError.notFound('Service tidak ditemukan.')
     if (target.resources.length === 0) return noLifecycleOperation()
     if (target.resources.some((resource) => resource.resourceType !== 'application')) {
-      throw DomainError.invalidState(
-        'Suspend otomatis saat ini hanya mendukung Coolify application.',
-      )
+      throw DomainError.invalidState('Suspend otomatis hanya mendukung application resource.')
     }
 
-    const clients = new Map<string, CoolifyClient>()
-    const completed: Array<{ client: CoolifyClient; uuid: string }> = []
+    const action = targetStatus === 'suspended' ? 'application.stop' : 'application.start'
+    const rollbackAction = targetStatus === 'suspended' ? 'application.start' : 'application.stop'
+    const completed: string[] = []
 
-    try {
-      for (const resource of target.resources) {
-        let client = clients.get(resource.serverId)
-        if (!client) {
-          client = this.clientFactory({
-            baseUrl: resource.baseUrl,
-            tokenEncrypted: resource.tokenEncrypted,
-          })
-          clients.set(resource.serverId, client)
-        }
-
-        if (targetStatus === 'suspended') await client.stopApplication(resource.coolifyUuid)
-        else await client.startApplication(resource.coolifyUuid)
-        completed.push({ client, uuid: resource.coolifyUuid })
-      }
-    } catch {
-      const rollbackSucceeded = await compensate(completed, targetStatus)
-      throw DomainError.external(
-        rollbackSucceeded
-          ? 'Coolify gagal mengubah seluruh resource; perubahan yang sempat berjalan sudah dibatalkan.'
-          : 'Coolify gagal mengubah seluruh resource dan rollback tidak lengkap. Periksa resource secara manual.',
+    for (const resource of target.resources) {
+      await this.native.createLifecycleOperation(
+        resource.id,
+        action,
+        actorUserId,
+        `service:${serviceId}:${resource.id}:${randomUUID()}`,
       )
+      completed.push(resource.id)
     }
 
     return {
       affectedCount: completed.length,
-      rollback: () => compensate(completed, targetStatus),
+      rollback: async () => {
+        const results = await Promise.allSettled(
+          completed.map((resourceId) =>
+            this.native.createLifecycleOperation(
+              resourceId,
+              rollbackAction,
+              actorUserId,
+              `service-rollback:${serviceId}:${resourceId}:${randomUUID()}`,
+            ),
+          ),
+        )
+        return results.every((result) => result.status === 'fulfilled')
+      },
     }
   }
 }
 
 function noLifecycleOperation(): InfrastructureLifecycleOperation {
   return { affectedCount: 0, rollback: async () => true }
-}
-
-async function compensate(
-  completed: Array<{ client: CoolifyClient; uuid: string }>,
-  appliedStatus: Extract<ServiceStatus, 'active' | 'suspended'>,
-) {
-  const results = await Promise.allSettled(
-    [...completed]
-      .reverse()
-      .map(({ client, uuid }) =>
-        appliedStatus === 'suspended'
-          ? client.startApplication(uuid)
-          : client.stopApplication(uuid),
-      ),
-  )
-  return results.every((result) => result.status === 'fulfilled')
 }

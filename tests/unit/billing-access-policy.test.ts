@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  hostsFromCoolifyFqdn,
   normalizeRequestHost,
   overdueAccessWindow,
   safeReturnPath,
@@ -27,12 +26,8 @@ describe('billing access policy', () => {
     expect(overdueAccessWindow('2026-09-10', '2026-09-11', 0)?.state).toBe('blocked')
   })
 
-  it('normalizes forwarded hosts and Coolify domain lists exactly', () => {
+  it('normalizes forwarded hosts exactly', () => {
     expect(normalizeRequestHost('App.Example.test:443')).toBe('app.example.test')
-    expect(hostsFromCoolifyFqdn('https://app.example.test, api.example.test/path')).toEqual([
-      'app.example.test',
-      'api.example.test',
-    ])
   })
 
   it('rejects unsafe return paths', () => {

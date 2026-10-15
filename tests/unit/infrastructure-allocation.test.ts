@@ -15,7 +15,7 @@ const runningResource = (
 })
 
 describe('infrastructure allocation compliance', () => {
-  it('matches aggregate Coolify limits to the service plan snapshot', () => {
+  it('matches aggregate infrastructure limits to the service plan snapshot', () => {
     const result = evaluateInfrastructureAllocation(
       { resourceCount: 2, cpuCores: '2.5', memoryBytes: 3_221_225_472n },
       [runningResource('one', '1', '1073741824'), runningResource('two', '1.5', '2147483648')],

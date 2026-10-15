@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
 import type { ApiActivityListResponse } from '#shared/types/api'
 
 definePageMeta({ middleware: 'auth' })
@@ -31,10 +30,7 @@ const meta = computed(() => data.value?.meta)
           changes.
         </p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-        <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-        Refresh
-      </UiButton>
+      <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>
 
     <div class="grid gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">

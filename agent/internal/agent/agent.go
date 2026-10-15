@@ -18,7 +18,7 @@ import (
 	"github.com/mbx92/billEngine/agent/internal/platform"
 )
 
-const Version = "0.5.0"
+const Version = "0.7.0"
 
 type Agent struct {
 	config config.Config
@@ -62,6 +62,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	a.logger.Info("agent started", "node_id", identity.NodeID, "node_name", identity.NodeName, "version", Version)
 	heartbeat := func() error {
+		gateway := docker.InspectGateway(ctx)
 		return client.Heartbeat(ctx, identity.Credential, controlplane.HeartbeatRequest{
 			AgentVersion:    Version,
 			ProtocolVersion: controlplane.ProtocolVersion,
@@ -70,6 +71,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			DockerVersion:   host.DockerVersion,
 			ComposeVersion:  host.ComposeVersion,
 			Capacity:        host.Capacity,
+			Gateway:         gateway,
 		})
 	}
 	reportInventory := func() error {
@@ -99,10 +101,11 @@ func (a *Agent) Run(ctx context.Context) error {
 				ErrorCode: "secret_delivery_failed", ErrorMessage: "operation secrets could not be retrieved",
 			})
 		}
-		result, executionErr := executor.ExecuteWithSecrets(
+		result, executionErr := executor.ExecuteWithOperationSecrets(
 			ctx,
 			*operation,
 			resolvedSecrets.Secrets,
+			resolvedSecrets.Registry,
 			a.config.SecretDirectory,
 		)
 		revision := operation.ExpectedResourceRevision

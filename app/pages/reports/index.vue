@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Download, RefreshCw } from '@lucide/vue'
+import { Download } from '@lucide/vue'
 import type { ApiReportSummary } from '#shared/types/api'
 
 definePageMeta({ middleware: 'auth' })
@@ -33,9 +33,7 @@ const exportUrl = computed(() => {
         <p class="mt-2 text-sm text-muted">Invoice, collection, dan outstanding per periode.</p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" aria-hidden="true" /> Refresh
-        </UiButton>
+        <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <a
           :href="exportUrl"
           class="focus-ring inline-flex h-10 items-center gap-2 rounded-md border border-brand bg-brand px-4 text-sm font-semibold text-[#071109]"

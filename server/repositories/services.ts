@@ -3,15 +3,13 @@ import type { CreateServiceInput, UpdateServiceInput } from '../../shared/schema
 import type { ApiService, ApiServiceOptions, ApiServiceResourceLink } from '../../shared/types/api'
 import { useDatabase, type Database, type Transaction } from '../database/client'
 import {
-  coolifyResources,
-  coolifyServers,
   customers,
-  databaseClusters,
   infrastructureDatabaseClusters,
+  infrastructureNodes,
+  infrastructureResources,
   infrastructureServiceDatabases,
   serviceBillingRuns,
   serviceResources,
-  serviceDatabases,
   services,
 } from '../database/schema'
 import { PlanRepository, type PlanRecord } from './plans'
@@ -230,20 +228,19 @@ export class ServiceRepository {
         .orderBy(asc(customers.name)),
       this.database
         .select({
-          id: coolifyResources.id,
-          name: coolifyResources.name,
-          status: coolifyResources.status,
-          serverName: coolifyServers.name,
-          projectName: coolifyResources.projectName,
-          environmentName: coolifyResources.environmentName,
-          limitsCpus: coolifyResources.limitsCpus,
-          limitsMemoryBytes: coolifyResources.limitsMemoryBytes,
+          id: infrastructureResources.id,
+          name: infrastructureResources.name,
+          status: infrastructureResources.observedState,
+          serverName: infrastructureNodes.name,
+          environmentName: infrastructureNodes.environment,
+          desiredSpec: infrastructureResources.desiredSpec,
         })
-        .from(coolifyResources)
-        .innerJoin(coolifyServers, eq(coolifyServers.id, coolifyResources.coolifyServerId))
+        .from(infrastructureResources)
+        .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
         .where(
           and(
-            eq(coolifyResources.classification, 'billable'),
+            eq(infrastructureResources.classification, 'billable'),
+            isNull(infrastructureResources.deletedAt),
             notExists(
               this.database
                 .select({ id: serviceResources.id })
@@ -251,22 +248,27 @@ export class ServiceRepository {
                 .innerJoin(services, eq(services.id, serviceResources.serviceId))
                 .where(
                   and(
-                    eq(serviceResources.resourceId, coolifyResources.id),
+                    eq(serviceResources.resourceId, infrastructureResources.id),
                     ne(services.status, 'cancelled'),
                   ),
                 ),
             ),
           ),
         )
-        .orderBy(asc(coolifyServers.name), asc(coolifyResources.name)),
+        .orderBy(asc(infrastructureNodes.name), asc(infrastructureResources.name)),
     ])
 
     return {
       plans: planRows,
       customers: customerRows,
       resources: resourceRows.map((resource) => ({
-        ...resource,
-        limitsMemoryBytes: resource.limitsMemoryBytes?.toString() ?? null,
+        id: resource.id,
+        name: resource.name,
+        status: resource.status,
+        serverName: resource.serverName,
+        projectName: null,
+        environmentName: resource.environmentName,
+        ...resourceLimits(resource.desiredSpec),
       })),
     }
   }
@@ -297,10 +299,14 @@ export class ServiceRepository {
   async findEligibleResourceIds(transaction: QueryExecutor, ids: string[]) {
     if (ids.length === 0) return []
     const rows = await transaction
-      .select({ id: coolifyResources.id })
-      .from(coolifyResources)
+      .select({ id: infrastructureResources.id })
+      .from(infrastructureResources)
       .where(
-        and(inArray(coolifyResources.id, ids), eq(coolifyResources.classification, 'billable')),
+        and(
+          inArray(infrastructureResources.id, ids),
+          eq(infrastructureResources.classification, 'billable'),
+          isNull(infrastructureResources.deletedAt),
+        ),
       )
     return rows.map((row) => row.id)
   }
@@ -471,14 +477,16 @@ export class ServiceRepository {
     const rows = await this.database
       .select({
         serviceId: serviceResources.serviceId,
-        resourceId: coolifyResources.id,
-        name: coolifyResources.name,
-        status: coolifyResources.status,
-        limitsCpus: coolifyResources.limitsCpus,
-        limitsMemoryBytes: coolifyResources.limitsMemoryBytes,
+        resourceId: infrastructureResources.id,
+        name: infrastructureResources.name,
+        status: infrastructureResources.observedState,
+        desiredSpec: infrastructureResources.desiredSpec,
       })
       .from(serviceResources)
-      .innerJoin(coolifyResources, eq(coolifyResources.id, serviceResources.resourceId))
+      .innerJoin(
+        infrastructureResources,
+        eq(infrastructureResources.id, serviceResources.resourceId),
+      )
       .where(inArray(serviceResources.serviceId, serviceIds))
 
     for (const row of rows) {
@@ -487,8 +495,7 @@ export class ServiceRepository {
         id: row.resourceId,
         name: row.name,
         status: row.status,
-        limitsCpus: row.limitsCpus,
-        limitsMemoryBytes: row.limitsMemoryBytes?.toString() ?? null,
+        ...resourceLimits(row.desiredSpec),
       })
       links.set(row.serviceId, existing)
     }
@@ -499,31 +506,6 @@ export class ServiceRepository {
   private async findDatabaseLinks(serviceIds: string[]) {
     const links = new Map<string, ApiService['database']>()
     if (serviceIds.length === 0) return links
-
-    const rows = await this.database
-      .select({ allocation: serviceDatabases, clusterName: databaseClusters.name })
-      .from(serviceDatabases)
-      .innerJoin(databaseClusters, eq(databaseClusters.id, serviceDatabases.databaseClusterId))
-      .where(
-        and(inArray(serviceDatabases.serviceId, serviceIds), isNull(serviceDatabases.deletedAt)),
-      )
-
-    for (const { allocation, clusterName } of rows) {
-      links.set(allocation.serviceId, {
-        id: allocation.id,
-        serviceId: allocation.serviceId,
-        databaseClusterId: allocation.databaseClusterId,
-        clusterName,
-        databaseName: allocation.databaseName,
-        roleName: allocation.roleName,
-        status: allocation.status,
-        lastError: allocation.lastError,
-        sqlImportedAt: allocation.sqlImportedAt?.toISOString() ?? null,
-        retentionUntil: allocation.retentionUntil?.toISOString() ?? null,
-        createdAt: allocation.createdAt.toISOString(),
-        updatedAt: allocation.updatedAt.toISOString(),
-      })
-    }
 
     const nativeRows = await this.database
       .select({
@@ -560,4 +542,20 @@ export class ServiceRepository {
     }
     return links
   }
+}
+
+function resourceLimits(desiredSpec: Record<string, unknown>) {
+  const limits = (desiredSpec as { limits?: { cpuMilli?: number; memoryBytes?: string } }).limits
+  return {
+    limitsCpus: limits?.cpuMilli === undefined ? null : milliToDecimal(limits.cpuMilli),
+    limitsMemoryBytes: limits?.memoryBytes ?? null,
+  }
+}
+
+function milliToDecimal(value: number) {
+  const whole = Math.floor(value / 1000)
+  const fraction = String(value % 1000)
+    .padStart(3, '0')
+    .replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : String(whole)
 }

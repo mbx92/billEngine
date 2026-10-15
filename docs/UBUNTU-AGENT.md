@@ -11,10 +11,12 @@ mengirim status dan hasil melalui HTTPS. Server hanya memerlukan akses keluar ke
 port `443`; tidak ada port agent yang perlu dibuka ke internet. Detail keputusan
 transport ada di [ADR-001](./adr/001-agent-transport.md).
 
-Versi awal ini mengeksekusi aplikasi berbasis image untuk operasi ensure, start,
-stop, restart, redeploy, dan delete. Build source, secret envelope, route
-Traefik, dan backup belum diaktifkan; operation terkait ditolak sebagai
-`unsupported`.
+Versi ini mengeksekusi aplikasi berbasis image untuk operasi ensure, start,
+stop, restart, redeploy, dan delete. Setelah enrollment, control plane otomatis
+mengantrekan `gateway.ensure`; agent menjalankan satu container Traefik bernama
+`oc-gateway` pada network `oc-private`, tanpa membuka dashboard administrasi.
+Build source dan backup belum diaktifkan; operation terkait masih ditolak
+sebagai `unsupported`.
 
 ## Build
 
@@ -69,6 +71,11 @@ memasang unit `systemd`, dan menjalankan agent.
 Untuk percobaan pada LAN development tanpa HTTPS, opt-in harus diberikan secara
 eksplisit:
 
+Atur `NUXT_PUBLIC_AGENT_CONTROL_PLANE_URL` ke URL IP yang dapat dijangkau node,
+misalnya `http://10.5.80.141:3000`. Halaman enrollment akan memakai URL ini
+untuk environment `development` dan menambahkan `--allow-insecure-http` secara
+otomatis.
+
 ```bash
 curl -fsSL 'http://10.5.80.141:3000/install/oc-agent.sh' | \
   sudo bash -s -- --url 'http://10.5.80.141:3000' --allow-insecure-http
@@ -114,7 +121,22 @@ docker compose version
 ```
 
 File identity harus bermode `600` dan dimiliki `oc-agent`. Node harus muncul pada
-`GET /api/infrastructure/nodes` dengan status `online` serta heartbeat terbaru.
+`GET /api/infrastructure/nodes` dengan status `online`, heartbeat terbaru, dan
+`gatewayStatus` bernilai `healthy`. Proses bootstrap dapat dipantau pada halaman
+**Deployments** sebagai operation `gateway.ensure`.
+
+Traefik memakai port host `80` dan `443`. Pastikan port tersebut belum digunakan
+service lain. Image dapat dipin melalui `NUXT_INFRASTRUCTURE_GATEWAY_IMAGE`; nilai
+default adalah `traefik:v3.7.14`. Konfigurasi route dinamis disimpan di
+`/var/lib/oc-agent/gateway/dynamic` dan dibaca read-only oleh container gateway.
+
+Deployment template aplikasi membuat hostname `<subdomain>.<platform-domain>`.
+Setelah `application.ensure` berhasil, control plane mengantrekan
+`route.configure`; agent menulis konfigurasi file provider Traefik secara
+atomik. Untuk resource billable, route memasang ForwardAuth ke
+`NUXT_BILLING_GATE_INTERNAL_URL` dengan shared key yang dikirim hanya melalui
+endpoint operation secret. Siapkan DNS wildcard `*.platform-domain` dan arahkan
+Cloudflare Tunnel ke HTTP port `80` node agar hostname publik mencapai gateway.
 
 ## Membuat aplikasi berbasis image
 
@@ -170,6 +192,8 @@ database dan role yang tervalidasi. Tidak ada arbitrary shell atau koneksi
 PostgreSQL langsung dari control plane.
 
 Provisioning database per service membutuhkan agent `0.5.0` atau lebih baru.
+Pull image dari private registry yang dikelola melalui Applications membutuhkan agent `0.6.0`
+atau lebih baru.
 Action `database.service.ensure` membuat database dan role secara idempotent
 melalui `psql` stdin di container PostgreSQL. Password hanya tersedia sebagai
 operation secret selama operation aktif, tidak masuk payload, command arguments,

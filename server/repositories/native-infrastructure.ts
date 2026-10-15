@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, asc, eq, inArray, isNull, lt, lte } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, lt, lte } from 'drizzle-orm'
 import type {
   CreateApplicationResourceInput,
   OperationStatusUpdateInput,
@@ -14,6 +14,7 @@ import {
   infrastructureResources,
   infrastructureServiceDatabases,
   resourceObservations,
+  resourceRoutes,
   resourceSecretReferences,
   resourceVolumes,
 } from '../database/schema'
@@ -162,6 +163,9 @@ export class NativeInfrastructureRepository {
         nodeId: infrastructureResources.nodeId,
         nodeName: infrastructureNodes.name,
         customerId: infrastructureResources.customerId,
+        applicationId: infrastructureResources.applicationId,
+        releaseId: infrastructureResources.releaseId,
+        releasePolicy: infrastructureResources.releasePolicy,
         externalId: infrastructureResources.externalId,
         kind: infrastructureResources.kind,
         name: infrastructureResources.name,
@@ -172,6 +176,9 @@ export class NativeInfrastructureRepository {
         observedRevision: infrastructureResources.observedRevision,
         imageReference: infrastructureResources.imageReference,
         imageDigest: infrastructureResources.imageDigest,
+        routeHostname: resourceRoutes.hostname,
+        routeStatus: resourceRoutes.observedStatus,
+        billingGateEnabled: resourceRoutes.billingGateEnabled,
         desiredSpec: infrastructureResources.desiredSpec,
         lastObservedAt: infrastructureResources.lastObservedAt,
         createdAt: infrastructureResources.createdAt,
@@ -179,12 +186,57 @@ export class NativeInfrastructureRepository {
       })
       .from(infrastructureResources)
       .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
+      .leftJoin(resourceRoutes, eq(resourceRoutes.resourceId, infrastructureResources.id))
       .where(isNull(infrastructureResources.deletedAt))
       .orderBy(asc(infrastructureResources.name))
 
     return rows.map((row) => ({
       ...row,
       lastObservedAt: row.lastObservedAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }))
+  }
+
+  async listOperations(limit = 100) {
+    const rows = await this.database
+      .select({
+        id: infrastructureOperations.id,
+        nodeId: infrastructureOperations.nodeId,
+        nodeName: infrastructureNodes.name,
+        nodeEnvironment: infrastructureNodes.environment,
+        resourceId: infrastructureOperations.resourceId,
+        resourceName: infrastructureResources.name,
+        resourceKind: infrastructureResources.kind,
+        action: infrastructureOperations.action,
+        status: infrastructureOperations.status,
+        correlationId: infrastructureOperations.correlationId,
+        attemptCount: infrastructureOperations.attemptCount,
+        maxAttempts: infrastructureOperations.maxAttempts,
+        nextAttemptAt: infrastructureOperations.nextAttemptAt,
+        expiresAt: infrastructureOperations.expiresAt,
+        startedAt: infrastructureOperations.startedAt,
+        completedAt: infrastructureOperations.completedAt,
+        errorCode: infrastructureOperations.errorCode,
+        errorMessage: infrastructureOperations.errorMessage,
+        createdAt: infrastructureOperations.createdAt,
+        updatedAt: infrastructureOperations.updatedAt,
+      })
+      .from(infrastructureOperations)
+      .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureOperations.nodeId))
+      .leftJoin(
+        infrastructureResources,
+        eq(infrastructureResources.id, infrastructureOperations.resourceId),
+      )
+      .orderBy(desc(infrastructureOperations.createdAt))
+      .limit(limit)
+
+    return rows.map((row) => ({
+      ...row,
+      nextAttemptAt: row.nextAttemptAt.toISOString(),
+      expiresAt: row.expiresAt.toISOString(),
+      startedAt: row.startedAt?.toISOString() ?? null,
+      completedAt: row.completedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     }))
@@ -421,6 +473,7 @@ export class NativeInfrastructureRepository {
     nextAttemptAt?: Date,
   ) {
     const now = new Date()
+    const billingGateInternalUrl = String(useRuntimeConfig().billingGateInternalUrl || '')
     return this.database.transaction(async (transaction) => {
       const [operation] = await transaction
         .select()
@@ -460,7 +513,36 @@ export class NativeInfrastructureRepository {
         .where(eq(infrastructureOperations.id, operation.id))
         .returning()
 
-      if (status === 'succeeded' && operation.resourceId) {
+      if (operation.action === 'gateway.ensure') {
+        const gatewayStatus =
+          status === 'succeeded'
+            ? ('healthy' as const)
+            : status === 'failed'
+              ? ('failed' as const)
+              : ('installing' as const)
+        await transaction
+          .update(infrastructureNodes)
+          .set({
+            gatewayStatus,
+            gatewayVersion:
+              typeof input.result?.image === 'string' ? input.result.image : undefined,
+            gatewayContainerId:
+              typeof input.result?.containerId === 'string'
+                ? input.result.containerId
+                : undefined,
+            gatewayLastObservedAt: now,
+            gatewayLastError:
+              gatewayStatus === 'healthy' ? null : (input.errorMessage ?? null),
+            updatedAt: now,
+          })
+          .where(eq(infrastructureNodes.id, nodeId))
+      }
+
+      if (
+        status === 'succeeded' &&
+        operation.resourceId &&
+        operation.action.startsWith('application.')
+      ) {
         const state = operationState(operation.action)
         const revision = input.observedRevision ?? operation.expectedResourceRevision ?? 0
         await transaction
@@ -486,6 +568,90 @@ export class NativeInfrastructureRepository {
           snapshot: input.result ?? {},
           observedAt: now,
         })
+
+        if (['application.ensure', 'application.redeploy'].includes(operation.action)) {
+          const routes = await transaction
+            .select()
+            .from(resourceRoutes)
+            .where(eq(resourceRoutes.resourceId, operation.resourceId))
+          for (const route of routes) {
+            if (route.desiredStatus === 'disabled') continue
+            await transaction
+              .insert(infrastructureOperations)
+              .values({
+                nodeId,
+                resourceId: operation.resourceId,
+                actorUserId: operation.actorUserId,
+                idempotencyKey: `route.configure:${route.id}:${revision}`,
+                correlationId: operation.correlationId,
+                action: 'route.configure',
+                expiresAt: new Date(now.getTime() + 15 * 60_000),
+                payload: {
+                  routeId: route.id,
+                  resourceId: operation.resourceId,
+                  hostname: route.hostname,
+                  targetPort: route.targetPort,
+                  billingGateEnabled: route.billingGateEnabled,
+                  billingGateUrl: route.billingGateEnabled
+                    ? billingGateInternalUrl
+                    : undefined,
+                },
+              })
+              .onConflictDoNothing({ target: infrastructureOperations.idempotencyKey })
+            await transaction
+              .update(resourceRoutes)
+              .set({ desiredStatus: 'configuring', updatedAt: now })
+              .where(eq(resourceRoutes.id, route.id))
+          }
+        }
+        if (operation.action === 'application.delete') {
+          const routes = await transaction
+            .select({ id: resourceRoutes.id })
+            .from(resourceRoutes)
+            .where(eq(resourceRoutes.resourceId, operation.resourceId))
+          for (const route of routes) {
+            await transaction
+              .insert(infrastructureOperations)
+              .values({
+                nodeId,
+                resourceId: operation.resourceId,
+                actorUserId: operation.actorUserId,
+                idempotencyKey: `route.delete:${route.id}:${revision}`,
+                correlationId: operation.correlationId,
+                action: 'route.delete',
+                expiresAt: new Date(now.getTime() + 15 * 60_000),
+                payload: { routeId: route.id },
+              })
+              .onConflictDoNothing({ target: infrastructureOperations.idempotencyKey })
+            await transaction
+              .update(resourceRoutes)
+              .set({ desiredStatus: 'disabled', observedStatus: 'configuring', updatedAt: now })
+              .where(eq(resourceRoutes.id, route.id))
+          }
+        }
+      }
+      if (
+        ['route.configure', 'route.delete'].includes(operation.action) &&
+        (status === 'succeeded' || status === 'failed')
+      ) {
+        const routeId =
+          typeof operation.payload.routeId === 'string' ? operation.payload.routeId : null
+        if (routeId) {
+          if (operation.action === 'route.delete' && status === 'succeeded') {
+            await transaction.delete(resourceRoutes).where(eq(resourceRoutes.id, routeId))
+          } else {
+            await transaction
+              .update(resourceRoutes)
+              .set({
+                desiredStatus: status === 'succeeded' ? 'active' : 'failed',
+                observedStatus: status === 'succeeded' ? 'active' : 'failed',
+                lastError: status === 'succeeded' ? null : (input.errorMessage ?? 'Route gagal.'),
+                lastObservedAt: now,
+                updatedAt: now,
+              })
+              .where(eq(resourceRoutes.id, routeId))
+          }
+        }
       }
       if (
         operation.action === 'database.cluster.activate' &&

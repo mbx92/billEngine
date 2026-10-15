@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +96,19 @@ type serviceDatabasePayload struct {
 	NetworkAlias          string `json:"networkAlias"`
 }
 
+type gatewayPayload struct {
+	Image string `json:"image"`
+}
+
+type routePayload struct {
+	RouteID            string `json:"routeId"`
+	ResourceID         string `json:"resourceId"`
+	Hostname           string `json:"hostname"`
+	TargetPort         int    `json:"targetPort"`
+	BillingGateEnabled bool   `json:"billingGateEnabled"`
+	BillingGateURL     string `json:"billingGateUrl"`
+}
+
 var (
 	uuidPattern               = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	slugPattern               = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,159}$`)
@@ -103,6 +117,7 @@ var (
 )
 
 const managedNetworkName = "oc-private"
+const gatewayContainerName = "oc-gateway"
 
 func Execute(ctx context.Context, operation controlplane.Operation) (map[string]any, *Error) {
 	return ExecuteWithSecrets(ctx, operation, nil, "/var/lib/oc-agent/secrets")
@@ -123,7 +138,7 @@ func ExecuteWithInput(
 	run CommandRunner,
 	runInput InputCommandRunner,
 ) (map[string]any, *Error) {
-	return executeWithInput(ctx, operation, secrets, "/var/lib/oc-agent/secrets", run, runInput)
+	return executeWithInput(ctx, operation, secrets, nil, "/var/lib/oc-agent/secrets", run, runInput)
 }
 
 func ExecuteWithSecrets(
@@ -132,10 +147,21 @@ func ExecuteWithSecrets(
 	secrets map[string]string,
 	secretDirectory string,
 ) (map[string]any, *Error) {
+	return ExecuteWithOperationSecrets(ctx, operation, secrets, nil, secretDirectory)
+}
+
+func ExecuteWithOperationSecrets(
+	ctx context.Context,
+	operation controlplane.Operation,
+	secrets map[string]string,
+	registry *controlplane.RegistryCredential,
+	secretDirectory string,
+) (map[string]any, *Error) {
 	return executeWithInput(
 		ctx,
 		operation,
 		secrets,
+		registry,
 		secretDirectory,
 		runCommand,
 		runCommandWithInput,
@@ -153,6 +179,7 @@ func executeWith(
 		ctx,
 		operation,
 		secrets,
+		nil,
 		secretDirectory,
 		run,
 		func(ctx context.Context, input []byte, name string, args ...string) ([]byte, error) {
@@ -168,13 +195,20 @@ func executeWithInput(
 	ctx context.Context,
 	operation controlplane.Operation,
 	secrets map[string]string,
+	registry *controlplane.RegistryCredential,
 	secretDirectory string,
 	run CommandRunner,
 	runInput InputCommandRunner,
 ) (map[string]any, *Error) {
 	switch operation.Action {
+	case "gateway.ensure":
+		return ensureGateway(ctx, operation, secretDirectory, run)
+	case "route.configure":
+		return configureRoute(ctx, operation, secrets, secretDirectory, run)
+	case "route.delete":
+		return deleteRoute(ctx, operation, secretDirectory, run)
 	case "application.ensure", "application.redeploy":
-		return ensureApplication(ctx, operation, secrets, secretDirectory, run)
+		return ensureApplication(ctx, operation, secrets, registry, secretDirectory, run, runInput)
 	case "application.start", "application.stop", "application.restart", "application.delete":
 		return lifecycle(ctx, operation, secretDirectory, run)
 	case "database.cluster.activate":
@@ -184,6 +218,222 @@ func executeWithInput(
 	default:
 		return nil, &Error{Code: "unsupported", Message: "agent action is not supported"}
 	}
+}
+
+func deleteRoute(
+	ctx context.Context,
+	operation controlplane.Operation,
+	secretDirectory string,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	var payload struct {
+		RouteID string `json:"routeId"`
+	}
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil || !uuidPattern.MatchString(payload.RouteID) {
+		return nil, invalidSpec("invalid route delete payload")
+	}
+	if !filepath.IsAbs(secretDirectory) {
+		return nil, invalidSpec("agent data directory must be absolute")
+	}
+	routeName := "route-" + strings.ReplaceAll(payload.RouteID, "-", "")
+	path := filepath.Join(filepath.Dir(secretDirectory), "gateway", "dynamic", routeName+".json")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, &Error{Code: "route_delete_failed", Message: "route configuration could not be removed", Retryable: true}
+	}
+	if _, err := run(ctx, "docker", "exec", gatewayContainerName, "traefik", "healthcheck", "--ping"); err != nil {
+		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik did not accept the route deletion", Retryable: true}
+	}
+	return map[string]any{"routeId": payload.RouteID, "deleted": true}, nil
+}
+
+func configureRoute(
+	ctx context.Context,
+	operation controlplane.Operation,
+	secrets map[string]string,
+	secretDirectory string,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	var payload routePayload
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil {
+		return nil, invalidSpec("invalid route payload")
+	}
+	hostnamePattern := regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+	if !uuidPattern.MatchString(payload.RouteID) || !uuidPattern.MatchString(payload.ResourceID) ||
+		!hostnamePattern.MatchString(payload.Hostname) || payload.TargetPort < 1 || payload.TargetPort > 65535 {
+		return nil, invalidSpec("invalid route identity, hostname, or target port")
+	}
+	if !filepath.IsAbs(secretDirectory) {
+		return nil, invalidSpec("agent data directory must be absolute")
+	}
+
+	routeName := "route-" + strings.ReplaceAll(payload.RouteID, "-", "")
+	middlewares := []string{}
+	dynamicMiddlewares := map[string]any{}
+	if payload.BillingGateEnabled {
+		billingURL, err := url.ParseRequestURI(payload.BillingGateURL)
+		if err != nil || (billingURL.Scheme != "http" && billingURL.Scheme != "https") || billingURL.Host == "" {
+			return nil, invalidSpec("billing gate URL is invalid")
+		}
+		sharedKey := secrets["BILLING_GATE_SHARED_KEY"]
+		if sharedKey == "" {
+			return nil, &Error{Code: "secret_unavailable", Message: "billing gate shared key is unavailable", Retryable: true}
+		}
+		headerMiddleware := routeName + "-billing-key"
+		authMiddleware := routeName + "-billing-auth"
+		middlewares = append(middlewares, headerMiddleware, authMiddleware)
+		dynamicMiddlewares[headerMiddleware] = map[string]any{
+			"headers": map[string]any{"customRequestHeaders": map[string]string{"X-Billing-Gate-Key": sharedKey}},
+		}
+		dynamicMiddlewares[authMiddleware] = map[string]any{
+			"forwardAuth": map[string]any{
+				"address":            payload.BillingGateURL,
+				"trustForwardHeader": true,
+			},
+		}
+	}
+
+	router := map[string]any{
+		"rule":        fmt.Sprintf("Host(`%s`)", payload.Hostname),
+		"entryPoints": []string{"web"},
+		"service":     routeName,
+	}
+	if len(middlewares) > 0 {
+		router["middlewares"] = middlewares
+	}
+	configuration := map[string]any{
+		"http": map[string]any{
+			"routers": map[string]any{routeName: router},
+			"services": map[string]any{
+				routeName: map[string]any{
+					"loadBalancer": map[string]any{
+						"servers": []map[string]string{{"url": fmt.Sprintf("http://%s:%d", containerName(payload.ResourceID), payload.TargetPort)}},
+					},
+				},
+			},
+			"middlewares": dynamicMiddlewares,
+		},
+	}
+	contents, err := json.Marshal(configuration)
+	if err != nil {
+		return nil, invalidSpec("route configuration could not be encoded")
+	}
+	dynamicDirectory := filepath.Join(filepath.Dir(secretDirectory), "gateway", "dynamic")
+	if err := os.MkdirAll(dynamicDirectory, 0o700); err != nil {
+		return nil, &Error{Code: "route_write_failed", Message: "route directory could not be created", Retryable: true}
+	}
+	path := filepath.Join(dynamicDirectory, routeName+".json")
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, contents, 0o600); err != nil {
+		return nil, &Error{Code: "route_write_failed", Message: "route configuration could not be written", Retryable: true}
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return nil, &Error{Code: "route_write_failed", Message: "route configuration could not be activated", Retryable: true}
+	}
+	if _, err := run(ctx, "docker", "exec", gatewayContainerName, "traefik", "healthcheck", "--ping"); err != nil {
+		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik did not accept the route configuration", Retryable: true}
+	}
+	return map[string]any{"routeId": payload.RouteID, "hostname": payload.Hostname, "active": true}, nil
+}
+
+func ensureGateway(
+	ctx context.Context,
+	operation controlplane.Operation,
+	secretDirectory string,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	var payload gatewayPayload
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil {
+		return nil, invalidSpec("invalid gateway payload")
+	}
+	if payload.Image == "" || strings.HasPrefix(payload.Image, "-") || strings.ContainsAny(payload.Image, " \t\r\n") {
+		return nil, invalidSpec("invalid gateway image")
+	}
+	if !filepath.IsAbs(secretDirectory) {
+		return nil, invalidSpec("agent data directory must be absolute")
+	}
+	if networkErr := ensureManagedNetwork(ctx, run); networkErr != nil {
+		return nil, networkErr
+	}
+
+	dynamicDirectory := filepath.Join(filepath.Dir(secretDirectory), "gateway", "dynamic")
+	if err := os.MkdirAll(dynamicDirectory, 0o700); err != nil {
+		return nil, &Error{Code: "gateway_config_failed", Message: "gateway configuration directory could not be created", Retryable: true}
+	}
+
+	existingImage, inspectErr := run(ctx, "docker", "inspect", "--format", "{{.Config.Image}}", gatewayContainerName)
+	hasExisting := inspectErr == nil && strings.TrimSpace(string(existingImage)) != ""
+	if inspectErr != nil && !strings.Contains(strings.ToLower(string(existingImage)), "no such object") {
+		return nil, commandError("gateway_inspect_failed", inspectErr, true)
+	}
+	if hasExisting {
+		component, componentErr := run(ctx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.component"}}`, gatewayContainerName)
+		if componentErr != nil || strings.TrimSpace(string(component)) != "gateway" {
+			return nil, &Error{Code: "ownership_conflict", Message: "existing oc-gateway container is not managed by OC Agent"}
+		}
+		if strings.TrimSpace(string(existingImage)) != payload.Image {
+			if _, err := run(ctx, "docker", "rm", "--force", gatewayContainerName); err != nil {
+				return nil, commandError("gateway_replace_failed", err, true)
+			}
+			hasExisting = false
+		}
+	}
+
+	if !hasExisting {
+		if _, err := run(ctx, "docker", "pull", payload.Image); err != nil {
+			return nil, commandError("gateway_pull_failed", err, true)
+		}
+		args := []string{
+			"create", "--name", gatewayContainerName,
+			"--network", managedNetworkName,
+			"--label", "oc.managed=true",
+			"--label", "oc.component=gateway",
+			"--restart", "unless-stopped",
+			"--publish", "80:80",
+			"--publish", "443:443",
+			"--mount", fmt.Sprintf("type=bind,src=%s,dst=/etc/traefik/dynamic,readonly", dynamicDirectory),
+			"--health-cmd", "traefik healthcheck --ping",
+			"--health-interval", "10s",
+			"--health-timeout", "3s",
+			"--health-retries", "3",
+			payload.Image,
+			"--api.dashboard=false",
+			"--ping=true",
+			"--ping.entrypoint=management",
+			"--entryPoints.web.address=:80",
+			"--entryPoints.websecure.address=:443",
+			"--entryPoints.management.address=:8082",
+			"--providers.file.directory=/etc/traefik/dynamic",
+			"--providers.file.watch=true",
+			"--log.level=INFO",
+		}
+		if _, err := run(ctx, "docker", args...); err != nil {
+			return nil, commandError("gateway_create_failed", err, false)
+		}
+	}
+
+	state, stateErr := run(ctx, "docker", "inspect", "--format", "{{.State.Status}}", gatewayContainerName)
+	if stateErr != nil {
+		return nil, commandError("gateway_inspect_failed", stateErr, true)
+	}
+	if strings.TrimSpace(string(state)) != "running" {
+		if _, err := run(ctx, "docker", "start", gatewayContainerName); err != nil {
+			return nil, commandError("gateway_start_failed", err, true)
+		}
+	}
+	if _, err := run(ctx, "docker", "exec", gatewayContainerName, "traefik", "healthcheck", "--ping"); err != nil {
+		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik is running but its health check is not ready", Retryable: true}
+	}
+	containerID, err := run(ctx, "docker", "inspect", "--format", "{{.Id}}", gatewayContainerName)
+	if err != nil {
+		return nil, commandError("gateway_inspect_failed", err, true)
+	}
+	return map[string]any{
+		"containerId":   strings.TrimSpace(string(containerID)),
+		"containerName": gatewayContainerName,
+		"image":         payload.Image,
+		"healthy":       true,
+	}, nil
 }
 
 func ensureServiceDatabase(
@@ -354,8 +604,10 @@ func ensureApplication(
 	ctx context.Context,
 	operation controlplane.Operation,
 	secrets map[string]string,
+	registry *controlplane.RegistryCredential,
 	secretDirectory string,
 	run CommandRunner,
+	runInput InputCommandRunner,
 ) (map[string]any, *Error) {
 	var payload applicationPayload
 	if err := json.Unmarshal(operation.Payload, &payload); err != nil {
@@ -402,8 +654,15 @@ func ensureApplication(
 		}
 	}
 
-	if _, err := run(ctx, "docker", "pull", payload.Spec.Source.Reference); err != nil {
-		return nil, commandError("image_pull_failed", err, true)
+	if pullErr := pullImage(
+		ctx,
+		payload.Spec.Source.Reference,
+		registry,
+		secretDirectory,
+		run,
+		runInput,
+	); pullErr != nil {
+		return nil, pullErr
 	}
 	for _, volume := range payload.Spec.Volumes {
 		if !slugPattern.MatchString(volume.Name) || !strings.HasPrefix(volume.MountTarget, "/") {
@@ -427,7 +686,70 @@ func ensureApplication(
 	if _, err := run(ctx, "docker", "start", containerName); err != nil {
 		return nil, commandError("container_start_failed", err, true)
 	}
-	return map[string]any{"externalId": containerID, "containerName": containerName}, nil
+	result := map[string]any{"externalId": containerID, "containerName": containerName}
+	if separator := strings.LastIndex(payload.Spec.Source.Reference, "@sha256:"); separator >= 0 {
+		result["imageDigest"] = payload.Spec.Source.Reference[separator+1:]
+	}
+	return result, nil
+}
+
+func pullImage(
+	ctx context.Context,
+	reference string,
+	registry *controlplane.RegistryCredential,
+	secretDirectory string,
+	run CommandRunner,
+	runInput InputCommandRunner,
+) *Error {
+	if registry == nil {
+		if _, err := run(ctx, "docker", "pull", reference); err != nil {
+			return commandError("image_pull_failed", err, true)
+		}
+		return nil
+	}
+	if registry.Host == "" || registry.Username == "" || registry.Token == "" ||
+		!strings.HasPrefix(reference, registry.Host+"/") {
+		return invalidSpec("registry credential does not match the image reference")
+	}
+	if secretDirectory == "" || !filepath.IsAbs(secretDirectory) {
+		return invalidSpec("secret directory must be absolute")
+	}
+	if err := os.MkdirAll(secretDirectory, 0o700); err != nil {
+		return &Error{Code: "registry_auth_failed", Message: "registry auth directory could not be created", Retryable: true}
+	}
+	dockerConfigDirectory, err := os.MkdirTemp(secretDirectory, "registry-")
+	if err != nil {
+		return &Error{Code: "registry_auth_failed", Message: "registry auth directory could not be created", Retryable: true}
+	}
+	defer os.RemoveAll(dockerConfigDirectory)
+	if err := os.Chmod(dockerConfigDirectory, 0o700); err != nil {
+		return &Error{Code: "registry_auth_failed", Message: "registry auth directory permissions could not be set", Retryable: true}
+	}
+	if _, err := runInput(
+		ctx,
+		[]byte(registry.Token+"\n"),
+		"docker",
+		"--config",
+		dockerConfigDirectory,
+		"login",
+		registry.Host,
+		"--username",
+		registry.Username,
+		"--password-stdin",
+	); err != nil {
+		return commandError("registry_auth_failed", err, true)
+	}
+	if _, err := run(
+		ctx,
+		"docker",
+		"--config",
+		dockerConfigDirectory,
+		"pull",
+		reference,
+	); err != nil {
+		return commandError("image_pull_failed", err, true)
+	}
+	return nil
 }
 
 func lifecycle(

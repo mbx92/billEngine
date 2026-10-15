@@ -9,7 +9,6 @@ import {
   Pencil,
   Play,
   Plus,
-  RefreshCw,
   Trash2,
 } from '@lucide/vue'
 import type {
@@ -422,14 +421,11 @@ async function applyInfrastructure() {
         </p>
         <h1 class="text-2xl font-semibold tracking-tight text-ink">Services</h1>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">
-          Service customer berdasarkan plan, jadwal billing, dan resource Coolify yang terhubung.
+          Service customer berdasarkan plan, jadwal billing, dan infrastructure resource.
         </p>
       </div>
       <div class="flex gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
-          Refresh
-        </UiButton>
+        <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <UiButton :disabled="plans.length === 0" @click="openServiceDialog">
           <Plus :size="15" aria-hidden="true" />
           Tambah service
@@ -573,9 +569,9 @@ async function applyInfrastructure() {
           </div>
           <p class="text-xs leading-5 text-muted md:col-span-2">
             Service adalah langganan milik customer dan dapat dibuat sebelum aplikasinya ada. Untuk
-            aplikasi baru, buat service ini tanpa resource lalu lanjutkan dari halaman
-            <NuxtLink class="font-semibold text-brand underline" to="/provisioning">
-              Provisioning
+            aplikasi baru, buat service ini tanpa resource lalu deploy dari halaman
+            <NuxtLink class="font-semibold text-brand underline" to="/templates">
+              Templates
             </NuxtLink>
             .
           </p>
@@ -636,14 +632,14 @@ async function applyInfrastructure() {
           <div class="mb-4 rounded-md border border-info/30 bg-info/10 px-4 py-3">
             <p class="text-sm font-semibold text-ink">Langkah ini khusus aplikasi yang sudah ada</p>
             <p class="mt-1 text-xs leading-5 text-muted">
-              Kosongkan pilihan jika aplikasi akan dibuat oleh Provisioning. Resource Coolify yang
-              baru akan dihubungkan ke service ini secara otomatis setelah dibuat.
+              Kosongkan pilihan jika aplikasi belum dideploy. Setelah deployment selesai, edit
+              service untuk menghubungkan resource yang dibuat OC Agent.
             </p>
           </div>
           <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h3 class="text-sm font-semibold text-ink">
-                Hubungkan aplikasi Coolify yang sudah ada
+                Hubungkan application resource yang sudah ada
               </h3>
               <p class="mt-1 text-xs text-muted">
                 Opsional, untuk adopsi atau migrasi. Hanya resource billable yang belum dipakai
@@ -913,7 +909,7 @@ async function applyInfrastructure() {
                 >Restart application yang sedang berjalan</span
               >
               <span class="mt-1 block text-xs leading-5 text-muted">
-                Coolify memerlukan restart atau redeploy agar limit baru aktif pada container.
+                OC Agent akan menjalankan deployment operation agar limit baru aktif pada container.
                 Restart dapat menyebabkan interupsi singkat.
               </span>
             </span>
@@ -938,7 +934,7 @@ async function applyInfrastructure() {
               {{ infrastructureResult.failedCount }} gagal
             </p>
             <p v-if="infrastructureResult.verificationFailed" class="mt-2 text-xs text-warning">
-              Sinkronisasi verifikasi gagal. Jalankan Sync Coolify sebelum mencoba kembali.
+              Verifikasi status agent belum selesai. Periksa halaman Deployments dan Resources.
             </p>
             <ul class="mt-3 space-y-1 text-xs text-muted">
               <li v-for="resource in infrastructureResult.resources" :key="resource.id">
@@ -964,7 +960,7 @@ async function applyInfrastructure() {
             "
             @click="applyInfrastructure"
           >
-            {{ infrastructureApplying ? 'Menerapkan…' : 'Terapkan ke Coolify' }}
+            {{ infrastructureApplying ? 'Menerapkan…' : 'Kirim ke OC Agent' }}
           </UiButton>
         </div>
       </template>
@@ -1067,16 +1063,16 @@ async function applyInfrastructure() {
         </label>
         <p class="mt-3 text-xs text-muted">
           <template v-if="transitionTarget === 'suspended'">
-            Semua Coolify application yang terhubung akan dihentikan tanpa Docker cleanup. Service
+            Semua application resource yang terhubung akan dihentikan tanpa Docker cleanup. Service
             juga berhenti menghasilkan recurring invoice baru.
           </template>
           <template v-else-if="transitionTarget === 'active'">
-            Semua Coolify application yang terhubung akan dijalankan kembali dan recurring billing
+            Semua application resource yang terhubung akan dijalankan kembali dan recurring billing
             akan aktif.
           </template>
           <template v-else>
             Service tidak akan menghasilkan recurring invoice baru. Cancellation bersifat permanen
-            dan aplikasi Coolify akan dihentikan tanpa menghapus resource. Database masuk masa
+            dan application resource akan dihentikan tanpa menghapus resource. Database masuk status
             retensi 30 hari dan tidak langsung dihapus.
           </template>
         </p>
@@ -1107,7 +1103,7 @@ async function applyInfrastructure() {
         class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
       >
         Hanya service berstatus cancelled yang dapat dihapus, dan hanya jika belum pernah
-        ditagihkan. Aplikasi Coolify dan database PostgreSQL tidak dihapus. Tindakan ini tidak
+        ditagihkan. Application resource dan database PostgreSQL tidak dihapus. Tindakan ini tidak
         dapat dibatalkan.
       </div>
       <template #footer>
@@ -1145,7 +1141,7 @@ async function applyInfrastructure() {
         title="Belum ada service"
         :description="
           plans.length
-            ? 'Service adalah unit billing. Buat service untuk menghubungkan customer, plan, dan Coolify resources.'
+            ? 'Service adalah unit billing. Buat service untuk menghubungkan customer, plan, dan infrastructure resources.'
             : 'Buat plan beserta harga dan benefit terlebih dahulu sebelum membuat service.'
         "
       >
@@ -1262,7 +1258,7 @@ async function applyInfrastructure() {
                       v-if="service.status !== 'cancelled'"
                       variant="ghost"
                       size="sm"
-                      title="Terapkan plan ke Coolify"
+                      title="Terapkan plan ke infrastructure"
                       @click="openInfrastructure(service)"
                       ><Cpu :size="14"
                     /></UiButton>

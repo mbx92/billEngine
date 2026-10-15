@@ -13,6 +13,7 @@ import {
   LogOut,
   Menu as MenuIcon,
   Network,
+  Package,
   Rocket,
   Server as ServerIcon,
   Settings as SettingsIcon,
@@ -47,9 +48,10 @@ const primaryNavigation = [
   { label: 'Payments', to: '/payments', icon: CreditCard },
 ] as const
 const infrastructureNavigation = [
+  { label: 'Applications', to: '/applications', icon: Package },
   { label: 'Resources', to: '/resources', icon: Boxes },
   { label: 'Templates', to: '/templates', icon: FileCode2 },
-  { label: 'Provisioning', to: '/provisioning', icon: Rocket },
+  { label: 'Deployments', to: '/deployments', icon: Rocket },
   { label: 'Database Clusters', to: '/database-clusters', icon: Database },
   { label: 'Tunnels', to: '/tunnels', icon: Network },
   { label: 'Servers', to: '/servers', icon: ServerIcon },

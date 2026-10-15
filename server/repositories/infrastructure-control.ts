@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gt, isNull, lt, ne, or } from 'drizzle-orm'
+import { and, asc, count, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm'
 import type {
   AgentHeartbeatInput,
   AgentInventoryInput,
@@ -9,6 +9,7 @@ import { useDatabase, type Database } from '../database/client'
 import {
   auditLogs,
   infrastructureNodes,
+  infrastructureOperations,
   infrastructureResources,
   nodeEnrollments,
   nodeIdentities,
@@ -25,6 +26,7 @@ export interface ConsumeEnrollmentRecord {
   tokenHash: string
   credentialHash: string
   fingerprint: string
+  gatewayImage: string
   node: Omit<EnrollNodeInput, 'token'>
 }
 
@@ -46,6 +48,11 @@ export class InfrastructureControlRepository {
         architecture: infrastructureNodes.architecture,
         dockerVersion: infrastructureNodes.dockerVersion,
         composeVersion: infrastructureNodes.composeVersion,
+        gatewayStatus: infrastructureNodes.gatewayStatus,
+        gatewayVersion: infrastructureNodes.gatewayVersion,
+        gatewayContainerId: infrastructureNodes.gatewayContainerId,
+        gatewayLastObservedAt: infrastructureNodes.gatewayLastObservedAt,
+        gatewayLastError: infrastructureNodes.gatewayLastError,
         capacityCpuMilli: infrastructureNodes.capacityCpuMilli,
         capacityMemoryBytes: infrastructureNodes.capacityMemoryBytes,
         capacityDiskBytes: infrastructureNodes.capacityDiskBytes,
@@ -84,6 +91,7 @@ export class InfrastructureControlRepository {
         resourceCount: Number(row.resourceCount),
         lastHeartbeatAt: row.lastHeartbeatAt?.toISOString() ?? null,
         lastInventoryAt: row.lastInventoryAt?.toISOString() ?? null,
+        gatewayLastObservedAt: row.gatewayLastObservedAt?.toISOString() ?? null,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
       }
@@ -158,6 +166,8 @@ export class InfrastructureControlRepository {
             ...input.node,
             lastHeartbeatAt: now,
             lastError: null,
+            gatewayStatus: 'pending',
+            gatewayLastError: null,
             updatedAt: now,
           })
           .where(eq(infrastructureNodes.id, nodeId))
@@ -187,6 +197,15 @@ export class InfrastructureControlRepository {
         nodeId,
         credentialHash: input.credentialHash,
         fingerprint: input.fingerprint,
+      })
+
+      await transaction.insert(infrastructureOperations).values({
+        nodeId,
+        actorUserId: enrollment.createdBy,
+        idempotencyKey: `gateway.ensure:${nodeId}:${enrollment.id}`,
+        action: 'gateway.ensure',
+        expiresAt: new Date(now.getTime() + 30 * 60_000),
+        payload: { image: input.gatewayImage },
       })
 
       await transaction
@@ -250,8 +269,9 @@ export class InfrastructureControlRepository {
     return identity
   }
 
-  async recordHeartbeat(nodeId: string, input: AgentHeartbeatInput) {
+  async recordHeartbeat(nodeId: string, input: AgentHeartbeatInput, gatewayImage: string) {
     const now = new Date()
+    const gateway = input.gateway
     const [updated] = await this.database
       .update(infrastructureNodes)
       .set({
@@ -265,6 +285,15 @@ export class InfrastructureControlRepository {
         capacityCpuMilli: input.capacity.cpuMilli,
         capacityMemoryBytes: BigInt(input.capacity.memoryBytes),
         capacityDiskBytes: BigInt(input.capacity.diskBytes),
+        gatewayStatus: gateway?.status,
+        gatewayVersion: gateway?.image,
+        gatewayContainerId: gateway?.containerId,
+        gatewayLastObservedAt: gateway ? now : undefined,
+        gatewayLastError: gateway
+          ? gateway.status === 'healthy'
+            ? null
+            : (gateway.error ?? null)
+          : undefined,
         lastHeartbeatAt: now,
         lastError: null,
         updatedAt: now,
@@ -275,6 +304,32 @@ export class InfrastructureControlRepository {
         status: infrastructureNodes.status,
         isDraining: infrastructureNodes.isDraining,
       })
+
+    if (updated && gateway && gateway.status !== 'healthy') {
+      const [activeGatewayOperation] = await this.database
+        .select({ id: infrastructureOperations.id })
+        .from(infrastructureOperations)
+        .where(
+          and(
+            eq(infrastructureOperations.nodeId, nodeId),
+            eq(infrastructureOperations.action, 'gateway.ensure'),
+            inArray(infrastructureOperations.status, ['queued', 'dispatched', 'running']),
+          ),
+        )
+        .limit(1)
+      if (!activeGatewayOperation) {
+        await this.database
+          .insert(infrastructureOperations)
+          .values({
+            nodeId,
+            idempotencyKey: `gateway.ensure:${nodeId}:bootstrap-v1`,
+            action: 'gateway.ensure',
+            expiresAt: new Date(now.getTime() + 30 * 60_000),
+            payload: { image: gatewayImage },
+          })
+          .onConflictDoNothing({ target: infrastructureOperations.idempotencyKey })
+      }
+    }
 
     return updated ?? null
   }

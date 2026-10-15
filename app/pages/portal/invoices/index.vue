@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
 import type { InvoiceStatus } from '#shared/constants/domain'
 
 definePageMeta({ middleware: 'auth' })
@@ -28,9 +27,7 @@ const filtered = computed(() =>
           Unduh PDF dan cek sisa tagihan untuk setiap invoice akun Anda.
         </p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-        <RefreshCw :size="15" aria-hidden="true" /> Refresh
-      </UiButton>
+      <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>
 
     <UiCard :padded="false">

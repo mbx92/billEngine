@@ -1,0 +1,5 @@
+ALTER TABLE "infrastructure_templates" ADD COLUMN "application_id" uuid;--> statement-breakpoint
+ALTER TABLE "infrastructure_templates" ADD COLUMN "release_policy" varchar(24) DEFAULT 'manual' NOT NULL;--> statement-breakpoint
+ALTER TABLE "infrastructure_templates" ADD CONSTRAINT "infrastructure_templates_application_id_deployable_applications_id_fk" FOREIGN KEY ("application_id") REFERENCES "public"."deployable_applications"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "infrastructure_templates_application_id_idx" ON "infrastructure_templates" USING btree ("application_id");--> statement-breakpoint
+ALTER TABLE "infrastructure_templates" ADD CONSTRAINT "infrastructure_templates_release_policy_check" CHECK ("infrastructure_templates"."release_policy" in ('manual', 'track_latest'));

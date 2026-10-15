@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, ArrowRight, RefreshCw } from '@lucide/vue'
+import { AlertTriangle, ArrowRight } from '@lucide/vue'
 import { billingCycleUnit } from '#shared/utils/billing-display'
 
 definePageMeta({ middleware: 'auth' })
@@ -30,13 +30,9 @@ const displayName = computed(
           Customer portal / ringkasan
         </p>
         <h1 class="text-2xl font-semibold tracking-tight text-ink">{{ displayName }}</h1>
-        <p class="mt-2 text-sm text-muted">
-          Lihat invoice, layanan, dan sisa tagihan akun Anda.
-        </p>
+        <p class="mt-2 text-sm text-muted">Lihat invoice, layanan, dan sisa tagihan akun Anda.</p>
       </div>
-      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-        <RefreshCw :size="15" aria-hidden="true" /> Refresh
-      </UiButton>
+      <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>
 
     <UiEmptyState
@@ -186,9 +182,7 @@ const displayName = computed(
               <div class="text-right">
                 <p class="font-mono text-xs text-ink">
                   {{ format.money(service.priceAmount, service.currency) }}
-                  <span class="text-muted">
-                    / {{ billingCycleUnit(service.billingCycle) }}
-                  </span>
+                  <span class="text-muted"> / {{ billingCycleUnit(service.billingCycle) }} </span>
                 </p>
                 <p class="mt-1 text-[11px] text-muted">
                   {{
