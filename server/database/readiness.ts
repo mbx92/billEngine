@@ -1,7 +1,7 @@
 import type { Pool } from 'pg'
 import migrationJournal from '../../drizzle/migrations/meta/_journal.json'
 
-const REQUIRED_TABLES = [
+export const REQUIRED_TABLES = [
   'users',
   'customers',
   'plans',
@@ -17,6 +17,18 @@ const REQUIRED_TABLES = [
   'provisioning_job_events',
   'database_clusters',
   'service_databases',
+  'infrastructure_nodes',
+  'node_enrollments',
+  'node_identities',
+  'infrastructure_resources',
+  'infrastructure_operations',
+  'resource_observations',
+  'resource_routes',
+  'resource_volumes',
+  'resource_secret_references',
+  'infrastructure_templates',
+  'infrastructure_database_clusters',
+  'infrastructure_service_databases',
 ] as const
 
 const EXPECTED_MIGRATION_COUNT = migrationJournal.entries.length

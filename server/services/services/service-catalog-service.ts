@@ -1,4 +1,4 @@
-import { and, eq, notInArray, sql } from 'drizzle-orm'
+import { and, eq, isNull, notInArray, sql } from 'drizzle-orm'
 import type {
   CreateServiceInput,
   TransitionServiceInput,
@@ -7,6 +7,7 @@ import type {
 import { useDatabase, type Database } from '../../database/client'
 import {
   invoiceItems,
+  infrastructureServiceDatabases,
   provisioningJobs,
   serviceBillingRuns,
   serviceDatabases,
@@ -286,6 +287,22 @@ export class ServiceCatalogService {
       if (runningJob) {
         throw DomainError.invalidState(
           'Provisioning masih berjalan. Tunggu job selesai atau gagal sebelum menghapus service.',
+        )
+      }
+
+      const [nativeDatabase] = await transaction
+        .select({ id: infrastructureServiceDatabases.id })
+        .from(infrastructureServiceDatabases)
+        .where(
+          and(
+            eq(infrastructureServiceDatabases.serviceId, id),
+            isNull(infrastructureServiceDatabases.deletedAt),
+          ),
+        )
+        .limit(1)
+      if (nativeDatabase) {
+        throw DomainError.invalidState(
+          'Service masih memiliki database native. Retire database terlebih dahulu.',
         )
       }
 

@@ -14,15 +14,24 @@ const pending = ref(false)
 async function submit() {
   pending.value = true
   errorMessage.value = ''
-  const { error } = await authClient.signIn.email({ email: email.value, password: password.value })
-  pending.value = false
+  try {
+    const { error } = await authClient.signIn.email({
+      email: email.value,
+      password: password.value,
+    })
 
-  if (error) {
-    errorMessage.value = error.message || 'Sign in gagal.'
-    return
+    if (error) {
+      errorMessage.value = error.message || 'Sign in gagal.'
+      return
+    }
+
+    await navigateTo(typeof route.query.redirect === 'string' ? route.query.redirect : '/')
+  } catch {
+    errorMessage.value =
+      'Tidak dapat terhubung ke server autentikasi. Pastikan development server masih berjalan.'
+  } finally {
+    pending.value = false
   }
-
-  await navigateTo(typeof route.query.redirect === 'string' ? route.query.redirect : '/')
 }
 </script>
 

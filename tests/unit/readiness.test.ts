@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Pool } from 'pg'
-import { checkDatabaseReadiness } from '../../server/database/readiness'
+import migrationJournal from '../../drizzle/migrations/meta/_journal.json'
+import { checkDatabaseReadiness, REQUIRED_TABLES } from '../../server/database/readiness'
 
 function poolWithResponses(...responses: Array<{ rows: unknown[] }>) {
   return {
@@ -10,11 +11,21 @@ function poolWithResponses(...responses: Array<{ rows: unknown[] }>) {
 
 describe('database readiness', () => {
   it('is ready when the database, core tables, and latest migration exist', async () => {
-    const relations = Array.from({ length: 16 }, () => ({ relation_name: 'present' }))
+    const relations = Array.from({ length: REQUIRED_TABLES.length + 1 }, () => ({
+      relation_name: 'present',
+    }))
+    const latestMigration = Math.max(...migrationJournal.entries.map((entry) => entry.when))
     const pool = poolWithResponses(
       { rows: [{ '?column?': 1 }] },
       { rows: relations },
-      { rows: [{ migration_count: '9', latest_migration: '1790859227315' }] },
+      {
+        rows: [
+          {
+            migration_count: String(migrationJournal.entries.length),
+            latest_migration: String(latestMigration),
+          },
+        ],
+      },
     )
 
     await expect(checkDatabaseReadiness(pool)).resolves.toEqual({

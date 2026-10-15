@@ -8,7 +8,7 @@ import type { ProvisioningStatus } from '../../../shared/types/api'
 import { withPostgresAdvisoryLock } from '../../database/advisory-lock'
 import { useDatabase, type Database } from '../../database/client'
 import { clientForCoolifyConnection } from '../../integrations/coolify/connection'
-import { CoolifyClient, CoolifyClientError } from '../../integrations/coolify/client'
+import { CoolifyClientError, type CoolifyClient } from '../../integrations/coolify/client'
 import { normalizeCoolifyApplication } from '../../integrations/coolify/normalize'
 import {
   buildDatabaseUrl,
@@ -81,40 +81,40 @@ export class ProvisioningService {
       const created = await this.repository.createBlueprint(input, actor.userId)
       return { id: created.id, name: created.name, slug: created.slug }
     } catch (error) {
-      if (isUniqueViolation(error)) throw DomainError.conflict('Slug blueprint sudah digunakan.')
+      if (isUniqueViolation(error)) throw DomainError.conflict('Slug template sudah digunakan.')
       throw error
     }
   }
 
   async updateBlueprint(id: string, input: UpdateDeploymentBlueprintInput) {
     const current = await this.repository.findBlueprint(id)
-    if (!current) throw DomainError.notFound('Blueprint tidak ditemukan.')
+    if (!current) throw DomainError.notFound('Template tidak ditemukan.')
     if (await this.repository.hasRunnableBlueprintJob(id)) {
       throw DomainError.invalidState(
-        'Blueprint sedang digunakan job provisioning aktif dan belum dapat diubah.',
+        'Template sedang digunakan job provisioning aktif dan belum dapat diubah.',
       )
     }
     await this.validateBlueprintTarget(input)
     try {
       const updated = await this.repository.updateBlueprint(id, input)
-      if (!updated) throw DomainError.notFound('Blueprint tidak ditemukan.')
+      if (!updated) throw DomainError.notFound('Template tidak ditemukan.')
       return { id: updated.id, name: updated.name, slug: updated.slug }
     } catch (error) {
-      if (isUniqueViolation(error)) throw DomainError.conflict('Slug blueprint sudah digunakan.')
+      if (isUniqueViolation(error)) throw DomainError.conflict('Slug template sudah digunakan.')
       throw error
     }
   }
 
   async deleteBlueprint(id: string) {
     const current = await this.repository.findBlueprint(id)
-    if (!current) throw DomainError.notFound('Blueprint tidak ditemukan.')
+    if (!current) throw DomainError.notFound('Template tidak ditemukan.')
     if ((await this.repository.blueprintJobCount(id)) > 0) {
       throw DomainError.conflict(
-        'Blueprint sudah memiliki riwayat provisioning. Nonaktifkan blueprint untuk menjaga audit job lama.',
+        'Template sudah memiliki riwayat provisioning. Nonaktifkan template untuk menjaga audit job lama.',
       )
     }
     const deleted = await this.repository.deleteBlueprint(id)
-    if (!deleted) throw DomainError.notFound('Blueprint tidak ditemukan.')
+    if (!deleted) throw DomainError.notFound('Template tidak ditemukan.')
     return deleted
   }
 
@@ -144,7 +144,7 @@ export class ProvisioningService {
       this.repository.findActiveService(input.serviceId),
     ])
     if (!blueprintRow?.blueprint.isActive || !blueprintRow.serverActive) {
-      throw DomainError.validation('Blueprint atau koneksi Coolify tidak aktif.')
+      throw DomainError.validation('Template atau koneksi deployment tidak aktif.')
     }
     if (!service) throw DomainError.validation('Service aktif tidak ditemukan.')
 
@@ -152,11 +152,11 @@ export class ProvisioningService {
       throw DomainError.invalidState('Provisioning database dedicated belum tersedia.')
     }
     if (service.databaseMode === 'shared' && !blueprintRow.blueprint.databaseClusterId) {
-      throw DomainError.validation('Blueprint wajib memilih cluster untuk service database shared.')
+      throw DomainError.validation('Template wajib memilih cluster untuk service database shared.')
     }
     if (service.databaseMode === 'none' && blueprintRow.blueprint.databaseClusterId) {
       throw DomainError.validation(
-        'Blueprint menggunakan database shared, tetapi service belum memakai plan dengan mode database shared.',
+        'Template menggunakan database shared, tetapi service belum memakai plan dengan mode database shared.',
       )
     }
     if (service.databaseMode === 'none' && input.sqlImport) {
@@ -252,7 +252,7 @@ export class ProvisioningService {
       if (!context.serverActive || !context.blueprint.isActive) {
         throw new ProvisioningStageError(
           context.job.status,
-          'Blueprint atau koneksi Coolify tidak aktif.',
+          'Template atau koneksi deployment tidak aktif.',
         )
       }
       if (context.serviceStatus !== 'active') {
@@ -298,7 +298,7 @@ export class ProvisioningService {
         if (!cluster || !cluster.isActive) {
           throw new ProvisioningStageError(
             'provisioning_database',
-            'Cluster database blueprint tidak tersedia atau tidak aktif.',
+            'Cluster database template tidak tersedia atau tidak aktif.',
           )
         }
 
@@ -498,7 +498,7 @@ export class ProvisioningService {
           {},
           variables && Object.keys(variables).length
             ? `${Object.keys(variables).length} environment variable diterapkan.`
-            : 'Blueprint tidak memerlukan environment variable.',
+            : 'Template tidak memerlukan environment variable.',
         )
         return
       }

@@ -7,6 +7,8 @@ import {
   coolifyServers,
   customers,
   databaseClusters,
+  infrastructureDatabaseClusters,
+  infrastructureServiceDatabases,
   serviceBillingRuns,
   serviceResources,
   serviceDatabases,
@@ -518,6 +520,40 @@ export class ServiceRepository {
         lastError: allocation.lastError,
         sqlImportedAt: allocation.sqlImportedAt?.toISOString() ?? null,
         retentionUntil: allocation.retentionUntil?.toISOString() ?? null,
+        createdAt: allocation.createdAt.toISOString(),
+        updatedAt: allocation.updatedAt.toISOString(),
+      })
+    }
+
+    const nativeRows = await this.database
+      .select({
+        allocation: infrastructureServiceDatabases,
+        clusterName: infrastructureDatabaseClusters.name,
+      })
+      .from(infrastructureServiceDatabases)
+      .innerJoin(
+        infrastructureDatabaseClusters,
+        eq(infrastructureDatabaseClusters.id, infrastructureServiceDatabases.databaseClusterId),
+      )
+      .where(
+        and(
+          inArray(infrastructureServiceDatabases.serviceId, serviceIds),
+          isNull(infrastructureServiceDatabases.deletedAt),
+        ),
+      )
+
+    for (const { allocation, clusterName } of nativeRows) {
+      links.set(allocation.serviceId, {
+        id: allocation.id,
+        serviceId: allocation.serviceId,
+        databaseClusterId: allocation.databaseClusterId,
+        clusterName,
+        databaseName: allocation.databaseName,
+        roleName: allocation.roleName,
+        status: allocation.status,
+        lastError: allocation.lastError,
+        sqlImportedAt: null,
+        retentionUntil: null,
         createdAt: allocation.createdAt.toISOString(),
         updatedAt: allocation.updatedAt.toISOString(),
       })

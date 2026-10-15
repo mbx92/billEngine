@@ -1,0 +1,2 @@
+ALTER TABLE "resource_routes" ADD CONSTRAINT "resource_routes_desired_status_check" CHECK ("resource_routes"."desired_status" in ('pending', 'configuring', 'active', 'failed', 'disabled'));--> statement-breakpoint
+ALTER TABLE "resource_routes" ADD CONSTRAINT "resource_routes_observed_status_check" CHECK ("resource_routes"."observed_status" in ('pending', 'configuring', 'active', 'failed', 'disabled'));

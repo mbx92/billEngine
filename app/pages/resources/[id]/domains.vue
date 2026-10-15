@@ -18,6 +18,7 @@ const composeServiceName = ref('')
 const isPrimary = ref(false)
 const saving = ref(false)
 const busyIds = ref<string[]>([])
+const pendingRemoval = ref<ApiResourceDomain | null>(null)
 const message = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 
@@ -88,7 +89,6 @@ async function refreshDomain(domain: ApiResourceDomain) {
 }
 
 async function removeDomain(domain: ApiResourceDomain) {
-  if (!confirm(`Lepas ${domain.hostname} dari Coolify dan BillEngine?`)) return
   busyIds.value.push(domain.id)
   message.value = null
   actionError.value = null
@@ -100,6 +100,7 @@ async function removeDomain(domain: ApiResourceDomain) {
     actionError.value = apiErrorMessage(caught, 'Gagal melepas domain.')
   } finally {
     busyIds.value = busyIds.value.filter((id) => id !== domain.id)
+    pendingRemoval.value = null
   }
 }
 
@@ -290,7 +291,7 @@ function statusTone(status: ApiResourceDomain['status']) {
                       size="sm"
                       variant="ghost"
                       :disabled="isBusy(domain.id)"
-                      @click="removeDomain(domain)"
+                      @click="pendingRemoval = domain"
                     >
                       <Trash2 :size="14" aria-hidden="true" />
                       Lepas
@@ -303,5 +304,16 @@ function statusTone(status: ApiResourceDomain['status']) {
         </div>
       </UiCard>
     </template>
+
+    <UiConfirmDialog
+      v-if="pendingRemoval"
+      :title="`Lepas ${pendingRemoval.hostname}?`"
+      description="Domain akan dilepas dari provider dan tidak lagi dikelola oleh aplikasi."
+      confirm-label="Lepas domain"
+      destructive
+      :pending="isBusy(pendingRemoval.id)"
+      @confirm="removeDomain(pendingRemoval)"
+      @cancel="pendingRemoval = null"
+    />
   </div>
 </template>

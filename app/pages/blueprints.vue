@@ -1,691 +1,298 @@
 <script setup lang="ts">
-import { Box, FileCode2, GitBranch, Pencil, Plus, RefreshCw, Server, Trash2, X } from '@lucide/vue'
-import type {
-  ApiBlueprintCatalog,
-  ApiCoolifyProjectOption,
-  ApiDeploymentBlueprint,
-} from '#shared/types/api'
+import { Box, Database, KeyRound, RefreshCw, Rocket, Server } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
 
-definePageMeta({ middleware: 'auth' })
-useHead({ title: 'Blueprints · Billing Infra' })
+definePageMeta({ middleware: 'auth', alias: ['/templates'] })
+useHead({ title: 'Templates · Billing Infra' })
 
-const {
-  data: response,
-  status,
-  error,
-  refresh,
-} = await useFetch<{ data: ApiBlueprintCatalog }>('/api/provisioning/blueprints')
+interface TemplateParameter {
+  key: string
+  label: string
+  environmentKey: string
+  type: 'string' | 'secret'
+  required: boolean
+  generated: boolean
+  defaultValue?: string
+  help?: string
+}
 
-const catalog = computed(() => response.value?.data)
-const showForm = ref(false)
-const editingId = ref<string | null>(null)
-const deletingBlueprint = ref<ApiDeploymentBlueprint | null>(null)
-const activeTab = ref<'identity' | 'source' | 'target' | 'runtime' | 'routing'>('identity')
-const saving = ref(false)
-const deleting = ref(false)
-const loadingProjects = ref(false)
-const projectOptions = ref<ApiCoolifyProjectOption[]>([])
-const projectError = ref<string | null>(null)
+interface InfrastructureTemplate {
+  id: string
+  slug: string
+  name: string
+  description: string | null
+  category: 'application' | 'database' | 'cache'
+  version: number
+  isBuiltin: boolean
+  definition: {
+    engine: 'generic' | 'postgresql' | 'mysql' | 'redis'
+    resourceKind: 'application' | 'database'
+    spec: {
+      source: { type: 'image'; reference: string }
+      ports: Array<{ containerPort: number; protocol: 'tcp' | 'udp' }>
+      volumes: Array<{ name: string; mountTarget: string; kind: 'ephemeral' | 'persistent' }>
+    }
+    parameters: TemplateParameter[]
+  }
+}
+
+interface InfrastructureNode {
+  id: string
+  name: string
+  environment: string
+  status: 'enrolling' | 'online' | 'degraded' | 'offline' | 'revoked' | 'unknown'
+  isActive: boolean
+  isDraining: boolean
+  agentVersion: string | null
+}
+
+const [{ data: templateResponse, status, error, refresh }, { data: nodeResponse }] =
+  await Promise.all([
+    useFetch<{ data: InfrastructureTemplate[] }>('/api/infrastructure/templates'),
+    useFetch<{ data: InfrastructureNode[] }>('/api/infrastructure/nodes'),
+  ])
+
+const templates = computed(() => templateResponse.value?.data ?? [])
+const nodes = computed(() =>
+  (nodeResponse.value?.data ?? []).filter(
+    (node) =>
+      node.isActive &&
+      !node.isDraining &&
+      ['online', 'degraded'].includes(node.status) &&
+      supportsTemplateSecrets(node.agentVersion),
+  ),
+)
+const selectedTemplate = ref<InfrastructureTemplate | null>(null)
+const deploying = ref(false)
 const actionMessage = ref<string | null>(null)
 const actionError = ref<string | null>(null)
-let projectRequestId = 0
-
 const form = reactive({
-  coolifyServerId: '',
+  nodeId: '',
   name: '',
-  slug: '',
-  description: '',
-  repositoryUrl: '',
-  branch: 'main',
-  buildPack: 'dockercompose' as ApiDeploymentBlueprint['buildPack'],
-  projectUuid: '',
-  targetServerUuid: '',
-  environmentName: 'production',
-  destinationUuid: '',
-  baseDirectory: '/',
-  dockerfileLocation: '/Dockerfile',
-  dockerComposeLocation: '/docker-compose.yml',
-  composeServiceName: 'app',
-  portsExposes: '3000',
-  healthcheckPath: '/health',
-  healthcheckPort: '3000',
-  environmentKeys: [] as string[],
-  customLabels: '',
-  billingGateEnabled: true,
-  databaseClusterId: '',
-  databaseEnvironmentKey: 'DATABASE_URL',
-  isActive: true,
+  hostPort: '',
+  classification: 'internal' as 'billable' | 'internal' | 'ignored',
+  values: {} as Record<string, string>,
 })
 
-const tabs = [
-  { id: 'identity', label: 'Identitas' },
-  { id: 'source', label: 'Source & build' },
-  { id: 'target', label: 'Target Coolify' },
-  { id: 'runtime', label: 'Runtime & env' },
-  { id: 'routing', label: 'Routing' },
-] as const
-
-const selectedConnection = computed(() =>
-  catalog.value?.servers.find((server) => server.id === form.coolifyServerId),
-)
-
-watch(
-  () => form.name,
-  (name) => {
-    if (!editingId.value) form.slug = slugify(name)
-  },
-)
-
-function resetForm() {
-  const defaultServer = catalog.value?.servers.find((server) => server.isActive)
-  editingId.value = null
-  activeTab.value = 'identity'
-  Object.assign(form, {
-    coolifyServerId: defaultServer?.id ?? '',
-    name: '',
-    slug: '',
-    description: '',
-    repositoryUrl: '',
-    branch: 'main',
-    buildPack: 'dockercompose',
-    projectUuid: '',
-    targetServerUuid: defaultServer?.nodes.find((node) => node.isUsable)?.coolifyUuid ?? '',
-    environmentName: 'production',
-    destinationUuid: '',
-    baseDirectory: '/',
-    dockerfileLocation: '/Dockerfile',
-    dockerComposeLocation: '/docker-compose.yml',
-    composeServiceName: 'app',
-    portsExposes: '3000',
-    healthcheckPath: '/health',
-    healthcheckPort: '3000',
-    environmentKeys: [],
-    customLabels: '',
-    billingGateEnabled: true,
-    databaseClusterId: '',
-    databaseEnvironmentKey: 'DATABASE_URL',
-    isActive: true,
-  })
-  projectOptions.value = []
-  projectError.value = null
-  if (form.coolifyServerId) void loadProjects(form.coolifyServerId)
-}
-
-function openCreate() {
-  clearFeedback()
-  resetForm()
-  showForm.value = true
-}
-
-function openEdit(blueprint: ApiDeploymentBlueprint) {
-  clearFeedback()
-  editingId.value = blueprint.id
-  activeTab.value = 'identity'
-  Object.assign(form, {
-    coolifyServerId: blueprint.coolifyServerId,
-    name: blueprint.name,
-    slug: blueprint.slug,
-    description: blueprint.description ?? '',
-    repositoryUrl: blueprint.repositoryUrl,
-    branch: blueprint.branch,
-    buildPack: blueprint.buildPack,
-    projectUuid: blueprint.projectUuid,
-    targetServerUuid: blueprint.targetServerUuid,
-    environmentName: blueprint.environmentName,
-    destinationUuid: blueprint.destinationUuid ?? '',
-    baseDirectory: blueprint.baseDirectory ?? '/',
-    dockerfileLocation: blueprint.dockerfileLocation ?? '/Dockerfile',
-    dockerComposeLocation: blueprint.dockerComposeLocation ?? '/docker-compose.yml',
-    composeServiceName: blueprint.composeServiceName ?? 'app',
-    portsExposes: blueprint.portsExposes ?? '',
-    healthcheckPath: blueprint.healthcheckPath ?? '',
-    healthcheckPort: blueprint.healthcheckPort ?? '',
-    environmentKeys: [...blueprint.environmentKeys],
-    customLabels: blueprint.customLabels ?? '',
-    billingGateEnabled: blueprint.billingGateEnabled,
-    databaseClusterId: blueprint.databaseClusterId ?? '',
-    databaseEnvironmentKey: blueprint.databaseEnvironmentKey,
-    isActive: blueprint.isActive,
-  })
-  showForm.value = true
-  void loadProjects(blueprint.coolifyServerId, blueprint.projectUuid)
-}
-
-function handleCoolifyServerChange() {
-  form.projectUuid = ''
-  form.targetServerUuid =
-    selectedConnection.value?.nodes.find((node) => node.isUsable)?.coolifyUuid ?? ''
-  projectOptions.value = []
-  projectError.value = null
-  if (form.coolifyServerId) void loadProjects(form.coolifyServerId)
-}
-
-async function loadProjects(serverId: string, preserveProjectUuid = '') {
-  const requestId = ++projectRequestId
-  loadingProjects.value = true
-  projectError.value = null
-  try {
-    const result = await $fetch<{ data: ApiCoolifyProjectOption[] }>('/api/provisioning/projects', {
-      query: { serverId },
-    })
-    if (requestId !== projectRequestId) return
-    projectOptions.value = result.data
-    if (
-      preserveProjectUuid &&
-      result.data.some((project) => project.uuid === preserveProjectUuid)
-    ) {
-      form.projectUuid = preserveProjectUuid
-    }
-  } catch (caught) {
-    if (requestId !== projectRequestId) return
-    projectOptions.value = []
-    projectError.value = apiErrorMessage(caught, 'Daftar project Coolify gagal dimuat.')
-  } finally {
-    if (requestId === projectRequestId) loadingProjects.value = false
-  }
-}
-
-async function saveBlueprint() {
-  saving.value = true
-  clearFeedback()
-  try {
-    const body = {
-      ...form,
-      environmentKeys: normalizeEnvironmentKeys(form.environmentKeys),
-    }
-    if (editingId.value) {
-      await $fetch(`/api/provisioning/blueprints/${editingId.value}`, {
-        method: 'PATCH',
-        body,
-      })
-      actionMessage.value = `Blueprint ${form.name} berhasil diperbarui.`
-    } else {
-      await $fetch('/api/provisioning/blueprints', { method: 'POST', body })
-      actionMessage.value = `Blueprint ${form.name} berhasil dibuat.`
-    }
-    showForm.value = false
-    await refresh()
-  } catch (caught) {
-    actionError.value = apiErrorMessage(caught, 'Blueprint gagal disimpan.')
-  } finally {
-    saving.value = false
-  }
-}
-
-async function deleteBlueprint() {
-  if (!deletingBlueprint.value) return
-  deleting.value = true
-  clearFeedback()
-  const blueprint = deletingBlueprint.value
-  try {
-    await $fetch(`/api/provisioning/blueprints/${blueprint.id}`, { method: 'DELETE' })
-    actionMessage.value = `Blueprint ${blueprint.name} berhasil dihapus.`
-    deletingBlueprint.value = null
-    await refresh()
-  } catch (caught) {
-    actionError.value = apiErrorMessage(caught, 'Blueprint gagal dihapus.')
-    deletingBlueprint.value = null
-  } finally {
-    deleting.value = false
-  }
-}
-
-function addEnvironmentKey() {
-  form.environmentKeys.push('')
-}
-
-function removeEnvironmentKey(index: number) {
-  form.environmentKeys.splice(index, 1)
-}
-
-function normalizeEnvironmentKeys(keys: string[]) {
-  return keys
-    .flatMap((value) => {
-      const normalized = value.trim().replace(/^export\s+/i, '')
-      if (!normalized) return []
-      const separator = normalized.indexOf('=')
-      return [separator >= 0 ? normalized.slice(0, separator).trim() : normalized]
-    })
-    .filter((value, index, values) => value && values.indexOf(value) === index)
-}
-
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-}
-
-function clearFeedback() {
+function openDeploy(template: InfrastructureTemplate) {
   actionMessage.value = null
   actionError.value = null
+  selectedTemplate.value = template
+  form.nodeId = nodes.value[0]?.id ?? ''
+  form.name = `${template.slug}-01`
+  form.hostPort = String(defaultHostPort(template))
+  form.classification = 'internal'
+  form.values = Object.fromEntries(
+    template.definition.parameters.map((parameter) => [parameter.key, parameter.defaultValue ?? '']),
+  )
+}
+
+function defaultHostPort(template: InfrastructureTemplate) {
+  if (template.definition.engine === 'postgresql') return 5432
+  if (template.definition.engine === 'mysql') return 3306
+  if (template.definition.engine === 'redis') return 6379
+  return template.definition.spec.ports[0]?.containerPort ?? 3000
+}
+
+async function deployTemplate() {
+  if (!selectedTemplate.value) return
+  deploying.value = true
+  actionMessage.value = null
+  actionError.value = null
+  const template = selectedTemplate.value
+  try {
+    await $fetch(`/api/infrastructure/templates/${template.id}/deploy`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `template:${template.id}:${crypto.randomUUID()}` },
+      body: {
+        nodeId: form.nodeId,
+        name: form.name,
+        hostPort: Number(form.hostPort),
+        classification: form.classification,
+        values: form.values,
+      },
+    })
+    selectedTemplate.value = null
+    actionMessage.value = `${template.name} sedang dideploy. Progresnya dapat dilihat di halaman Resources.`
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Template gagal dideploy.')
+  } finally {
+    deploying.value = false
+  }
+}
+
+function categoryLabel(category: InfrastructureTemplate['category']) {
+  if (category === 'database') return 'Database'
+  if (category === 'cache') return 'Cache'
+  return 'Application'
+}
+
+function supportsTemplateSecrets(version: string | null) {
+  if (!version) return false
+  const [major = 0, minor = 0] = version.split('.').map(Number)
+  return major > 0 || minor >= 3
 }
 </script>
 
 <template>
   <div class="mx-auto max-w-7xl">
-    <header class="mb-5 flex flex-col justify-between gap-4 sm:mb-6 sm:flex-row sm:items-end">
+    <header class="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
       <div>
         <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
-          Infrastructure / deployment catalog
+          Infrastructure / Templates
         </p>
-        <h1 class="text-2xl font-semibold tracking-tight text-ink">Blueprints</h1>
+        <h1 class="text-2xl font-semibold tracking-tight text-ink">Deployment Templates</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">
-          Kelola resep deployment reusable untuk source, build pack, target Coolify, environment,
-          database, healthcheck, dan routing.
+          Deploy service yang sama berkali-kali ke Ubuntu node. Setiap deployment memperoleh
+          konfigurasi, secret, container, dan volume persisten yang terpisah.
         </p>
       </div>
-      <div class="flex flex-wrap gap-2">
-        <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
-          <RefreshCw :size="15" :class="{ 'animate-spin': status === 'pending' }" />
-          Refresh
-        </UiButton>
-        <UiButton @click="openCreate"><Plus :size="15" /> Tambah blueprint</UiButton>
-      </div>
+      <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">
+        <RefreshCw :size="15" /> Refresh
+      </UiButton>
     </header>
 
     <p
       v-if="actionMessage"
-      class="mb-4 rounded-md border border-brand/30 bg-brand/10 px-3 py-2 text-sm text-brand"
-      role="status"
+      class="mb-4 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success"
     >
       {{ actionMessage }}
     </p>
     <p
-      v-if="actionError && !showForm"
+      v-if="actionError"
       class="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
       role="alert"
     >
       {{ actionError }}
     </p>
+    <p
+      v-if="status !== 'pending' && !nodes.length"
+      class="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+    >
+      Template database membutuhkan OC Agent 0.3.0 atau lebih baru. Buka halaman Ubuntu Nodes lalu
+      jalankan kembali perintah installer pada server; identity node lama tetap digunakan.
+    </p>
 
-    <div v-if="status === 'pending' && !catalog" class="grid gap-4 md:grid-cols-2">
-      <UiSkeleton v-for="item in 4" :key="item" height="13rem" />
+    <div v-if="status === 'pending'" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <UiSkeleton v-for="item in 3" :key="item" height="17rem" />
     </div>
     <UiCard v-else-if="error" :padded="false">
       <UiEmptyState
-        title="Blueprint gagal dimuat"
-        description="Periksa koneksi database lalu muat ulang halaman."
+        title="Template gagal dimuat"
+        description="Pastikan migration database terbaru sudah dijalankan."
       />
     </UiCard>
-    <UiCard v-else-if="!catalog?.blueprints.length" :padded="false">
-      <UiEmptyState
-        title="Belum ada blueprint"
-        description="Buat resep deployment pertama untuk mulai melakukan provisioning aplikasi."
-      />
+    <UiCard v-else-if="!templates.length" :padded="false">
+      <UiEmptyState title="Belum ada template" description="Jalankan migration database terbaru." />
     </UiCard>
-    <div v-else class="grid gap-4 lg:grid-cols-2">
-      <UiCard v-for="blueprint in catalog.blueprints" :key="blueprint.id">
+    <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <UiCard v-for="template in templates" :key="template.id">
         <div class="flex items-start justify-between gap-4">
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <h2 class="truncate text-base font-semibold text-ink">{{ blueprint.name }}</h2>
-              <UiBadge :tone="blueprint.isActive ? 'success' : 'neutral'" dot>
-                {{ blueprint.isActive ? 'active' : 'inactive' }}
-              </UiBadge>
-              <UiBadge tone="info">{{ blueprint.buildPack }}</UiBadge>
-            </div>
-            <p class="mt-1 font-mono text-[11px] text-muted">{{ blueprint.slug }}</p>
+          <div class="flex size-10 items-center justify-center rounded-lg bg-brand/10 text-brand">
+            <Database v-if="template.category === 'database'" :size="20" />
+            <Box v-else :size="20" />
           </div>
-          <div class="flex shrink-0 gap-1">
-            <UiButton variant="ghost" size="sm" @click="openEdit(blueprint)">
-              <Pencil :size="14" /> Edit
-            </UiButton>
-            <UiButton variant="danger" size="sm" @click="deletingBlueprint = blueprint">
-              <Trash2 :size="14" />
-            </UiButton>
+          <div class="flex gap-2">
+            <UiBadge tone="info">{{ categoryLabel(template.category) }}</UiBadge>
+            <UiBadge v-if="template.isBuiltin" tone="neutral">Built-in</UiBadge>
           </div>
         </div>
-
-        <p v-if="blueprint.description" class="mt-3 line-clamp-2 text-sm leading-5 text-muted">
-          {{ blueprint.description }}
-        </p>
-        <dl class="mt-4 grid gap-3 border-t pt-4 text-xs sm:grid-cols-2">
-          <div>
-            <dt class="flex items-center gap-1.5 text-muted"><GitBranch :size="12" /> Source</dt>
-            <dd class="mt-1 truncate text-ink">{{ blueprint.repositoryUrl }}</dd>
-            <dd class="font-mono text-[10px] text-muted">{{ blueprint.branch }}</dd>
+        <h2 class="mt-4 text-base font-semibold text-ink">{{ template.name }}</h2>
+        <p class="mt-1 min-h-10 text-sm leading-5 text-muted">{{ template.description }}</p>
+        <dl class="mt-4 space-y-2 border-t pt-4 text-xs">
+          <div class="flex justify-between gap-3">
+            <dt class="text-muted">Image</dt>
+            <dd class="truncate font-mono text-ink">{{ template.definition.spec.source.reference }}</dd>
           </div>
-          <div>
-            <dt class="flex items-center gap-1.5 text-muted"><Server :size="12" /> Target</dt>
-            <dd class="mt-1 text-ink">{{ blueprint.coolifyServerName }}</dd>
-            <dd class="truncate font-mono text-[10px] text-muted">
-              {{ blueprint.environmentName }} · {{ blueprint.projectUuid }}
+          <div class="flex justify-between gap-3">
+            <dt class="text-muted">Container port</dt>
+            <dd class="font-mono text-ink">
+              {{ template.definition.spec.ports[0]?.containerPort ?? '—' }}
             </dd>
           </div>
-          <div>
-            <dt class="flex items-center gap-1.5 text-muted">
-              <FileCode2 :size="12" /> Build file
-            </dt>
-            <dd class="mt-1 font-mono text-ink">
-              {{
-                blueprint.buildPack === 'dockercompose'
-                  ? blueprint.dockerComposeLocation
-                  : blueprint.buildPack === 'dockerfile'
-                    ? blueprint.dockerfileLocation
-                    : 'Auto detected'
-              }}
-            </dd>
-          </div>
-          <div>
-            <dt class="flex items-center gap-1.5 text-muted"><Box :size="12" /> Runtime</dt>
-            <dd class="mt-1 text-ink">
-              Port {{ blueprint.portsExposes || 'auto' }} ·
-              {{ blueprint.environmentKeys.length }} env key
+          <div class="flex justify-between gap-3">
+            <dt class="text-muted">Storage</dt>
+            <dd class="text-ink">
+              {{ template.definition.spec.volumes.length ? 'Persistent volume' : 'Ephemeral' }}
             </dd>
           </div>
         </dl>
+        <UiButton class="mt-5 w-full" :disabled="!nodes.length" @click="openDeploy(template)">
+          <Rocket :size="15" /> Deploy
+        </UiButton>
       </UiCard>
     </div>
 
     <UiDialog
-      v-if="showForm"
-      :title="editingId ? 'Edit blueprint' : 'Tambah blueprint'"
-      description="Konfigurasi disimpan sebagai resep reusable. Nilai secret environment tetap diisi saat provisioning."
-      size="xl"
-      fixed-height
-      :close-disabled="saving"
-      @close="showForm = false"
+      v-if="selectedTemplate"
+      :title="`Deploy ${selectedTemplate.name}`"
+      description="Password dapat diisi sendiri atau dikosongkan agar dibuat otomatis. Nilainya tidak akan ditampilkan kembali."
+      size="lg"
+      :close-disabled="deploying"
+      @close="selectedTemplate = null"
     >
-      <form id="blueprint-form" @submit.prevent="saveBlueprint">
-        <p
-          v-if="actionError"
-          class="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
-          role="alert"
-        >
-          {{ actionError }}
-        </p>
-
-        <div class="mb-5 overflow-x-auto border-b">
-          <div class="flex min-w-max gap-1">
-            <button
-              v-for="tab in tabs"
-              :key="tab.id"
-              type="button"
-              class="focus-ring border-b-2 px-3 py-2 text-xs font-semibold transition"
-              :class="
-                activeTab === tab.id
-                  ? 'border-brand text-brand'
-                  : 'border-transparent text-muted hover:text-ink'
-              "
-              @click="activeTab = tab.id"
-            >
-              {{ tab.label }}
-            </button>
-          </div>
-        </div>
-
-        <div v-if="activeTab === 'identity'" class="grid gap-4 md:grid-cols-2">
-          <UiInput v-model="form.name" label="Nama blueprint" required />
-          <UiInput v-model="form.slug" label="Slug" required />
+      <form id="template-deploy-form" class="space-y-5" @submit.prevent="deployTemplate">
+        <div class="grid gap-4 md:grid-cols-2">
           <label class="block md:col-span-2">
-            <span class="mb-2 block text-xs font-semibold text-muted">Deskripsi</span>
-            <textarea
-              v-model="form.description"
-              rows="4"
-              class="focus-ring w-full rounded-md border border-line-strong bg-canvas px-3 py-2 text-sm text-ink"
-              placeholder="Kegunaan dan karakteristik aplikasi yang dibuat blueprint ini."
-            />
-          </label>
-          <label v-if="editingId" class="flex items-center gap-3 text-sm text-ink md:col-span-2">
-            <input v-model="form.isActive" type="checkbox" class="size-4 accent-brand" />
-            Blueprint aktif dan dapat dipilih saat provisioning
-          </label>
-        </div>
-
-        <div v-else-if="activeTab === 'source'" class="grid gap-4 md:grid-cols-2">
-          <UiInput
-            v-model="form.repositoryUrl"
-            class="md:col-span-2"
-            label="Public repository URL"
-            type="url"
-            required
-          />
-          <UiInput v-model="form.branch" label="Branch" required />
-          <label class="block">
-            <span class="mb-2 block text-xs font-semibold text-muted">Build pack</span>
+            <span class="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
+              <Server :size="13" /> Ubuntu node
+            </span>
             <select
-              v-model="form.buildPack"
+              v-model="form.nodeId"
+              required
               class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
             >
-              <option value="nixpacks">Nixpacks</option>
-              <option value="railpack">Railpack</option>
-              <option value="static">Static</option>
-              <option value="dockerfile">Dockerfile</option>
-              <option value="dockercompose">Docker Compose</option>
-            </select>
-          </label>
-          <UiInput v-model="form.baseDirectory" label="Base directory" required />
-          <template v-if="form.buildPack === 'dockercompose'">
-            <UiInput
-              v-model="form.dockerComposeLocation"
-              label="Docker Compose location"
-              required
-            />
-            <UiInput v-model="form.composeServiceName" label="Compose service" required />
-          </template>
-          <UiInput
-            v-if="form.buildPack === 'dockerfile'"
-            v-model="form.dockerfileLocation"
-            label="Dockerfile location"
-            required
-          />
-          <div class="rounded-md border border-info/30 bg-info/10 px-4 py-3 md:col-span-2">
-            <p class="text-sm font-semibold text-ink">File build tetap dikelola di Git</p>
-            <p class="mt-1 text-xs leading-5 text-muted">
-              Editor ini menentukan file dan service yang digunakan Coolify. Isi Dockerfile atau
-              Docker Compose tetap mengikuti repository dan branch di atas agar perubahan memiliki
-              version history serta dapat direview.
-            </p>
-          </div>
-        </div>
-
-        <div v-else-if="activeTab === 'target'" class="grid gap-4 md:grid-cols-2">
-          <label class="block">
-            <span class="mb-2 block text-xs font-semibold text-muted">Koneksi Coolify</span>
-            <select
-              v-model="form.coolifyServerId"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-              required
-              @change="handleCoolifyServerChange"
-            >
-              <option value="" disabled>Pilih koneksi</option>
-              <option v-for="server in catalog?.servers" :key="server.id" :value="server.id">
-                {{ server.name }}
+              <option value="" disabled>Pilih node</option>
+              <option v-for="node in nodes" :key="node.id" :value="node.id">
+                {{ node.name }} · {{ node.environment }} · {{ node.status }}
               </option>
             </select>
           </label>
-          <label class="block">
-            <span class="mb-2 block text-xs font-semibold text-muted">Server target</span>
-            <select
-              v-model="form.targetServerUuid"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-              required
-            >
-              <option value="" disabled>Pilih server</option>
-              <option
-                v-for="node in selectedConnection?.nodes"
-                :key="node.id"
-                :value="node.coolifyUuid"
-              >
-                {{ node.name }} · {{ node.status }}
-              </option>
-            </select>
-          </label>
+          <UiInput v-model="form.name" label="Nama resource" required pattern="[a-z0-9][a-z0-9-]*" />
+          <UiInput v-model="form.hostPort" label="Host port" type="number" min="1" max="65535" required />
           <label class="block md:col-span-2">
-            <span class="mb-2 block text-xs font-semibold text-muted">Project Coolify</span>
+            <span class="mb-2 block text-xs font-semibold text-muted">Classification</span>
             <select
-              v-model="form.projectUuid"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="!form.coolifyServerId || loadingProjects"
-              required
+              v-model="form.classification"
+              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
             >
-              <option value="" disabled>
-                {{ loadingProjects ? 'Memuat project…' : 'Pilih project' }}
-              </option>
-              <option v-for="project in projectOptions" :key="project.uuid" :value="project.uuid">
-                {{ project.name }} · {{ project.uuid }}
-              </option>
+              <option value="internal">Internal</option>
+              <option value="billable">Billable</option>
+              <option value="ignored">Ignored</option>
             </select>
-            <span v-if="projectError" class="mt-1 block text-xs text-danger">
-              {{ projectError }}
-            </span>
           </label>
-          <UiInput v-model="form.environmentName" label="Environment" required />
-          <UiInput v-model="form.destinationUuid" label="Destination UUID (opsional)" />
         </div>
 
-        <div v-else-if="activeTab === 'runtime'" class="space-y-5">
-          <div class="grid gap-4 md:grid-cols-3">
-            <UiInput v-model="form.portsExposes" label="Exposed port" />
-            <UiInput v-model="form.healthcheckPath" label="Healthcheck path" />
-            <UiInput v-model="form.healthcheckPort" label="Healthcheck port" />
+        <div class="rounded-md border border-line-strong">
+          <div class="border-b px-4 py-3">
+            <h3 class="flex items-center gap-2 text-sm font-semibold text-ink">
+              <KeyRound :size="15" /> Parameter
+            </h3>
+            <p class="mt-1 text-xs text-muted">Secret disimpan terenkripsi dan dikirim ke agent saat operasi berjalan.</p>
           </div>
-
-          <div class="rounded-md border border-line-strong bg-canvas/50">
-            <div class="flex items-center justify-between border-b px-4 py-3">
-              <div>
-                <h3 class="text-sm font-semibold text-ink">Environment keys</h3>
-                <p class="mt-0.5 text-xs text-muted">
-                  Simpan nama key saja. Nilai dan secret diisi saat provisioning.
-                </p>
-              </div>
-              <UiButton type="button" variant="secondary" size="sm" @click="addEnvironmentKey">
-                <Plus :size="13" /> Tambah key
-              </UiButton>
-            </div>
-            <div v-if="form.environmentKeys.length" class="divide-y">
-              <div
-                v-for="(_key, index) in form.environmentKeys"
-                :key="index"
-                class="flex items-center gap-3 px-4 py-2"
-              >
-                <span class="w-6 shrink-0 text-right font-mono text-[10px] text-muted">
-                  {{ index + 1 }}
-                </span>
-                <input
-                  v-model="form.environmentKeys[index]"
-                  class="focus-ring h-9 min-w-0 flex-1 rounded border border-line-strong bg-surface px-3 font-mono text-sm text-ink"
-                  placeholder="APP_SECRET"
-                  autocomplete="off"
-                />
-                <button
-                  type="button"
-                  class="focus-ring flex size-8 shrink-0 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
-                  aria-label="Hapus environment key"
-                  @click="removeEnvironmentKey(index)"
-                >
-                  <X :size="14" />
-                </button>
-              </div>
-            </div>
-            <p v-else class="px-4 py-6 text-center text-xs text-muted">
-              Blueprint belum meminta environment variable manual.
-            </p>
-          </div>
-
-          <div class="grid gap-4 md:grid-cols-2">
-            <label class="block">
-              <span class="mb-2 block text-xs font-semibold text-muted">Database cluster</span>
-              <select
-                v-model="form.databaseClusterId"
-                class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-              >
-                <option value="">Tanpa database otomatis</option>
-                <option
-                  v-for="cluster in catalog?.databaseClusters"
-                  :key="cluster.id"
-                  :value="cluster.id"
-                >
-                  {{ cluster.name }}
-                </option>
-              </select>
-            </label>
+          <div class="grid gap-4 p-4 md:grid-cols-2">
             <UiInput
-              v-model="form.databaseEnvironmentKey"
-              label="Database environment key"
-              :disabled="!form.databaseClusterId"
-              placeholder="DATABASE_URL"
+              v-for="parameter in selectedTemplate.definition.parameters"
+              :key="parameter.key"
+              v-model="form.values[parameter.key]"
+              :label="parameter.label"
+              :type="parameter.type === 'secret' ? 'password' : 'text'"
+              :required="parameter.required && !parameter.generated"
+              :placeholder="parameter.generated ? 'Buat otomatis' : undefined"
+              :hint="parameter.help"
+              :autocomplete="parameter.type === 'secret' ? 'new-password' : 'off'"
             />
           </div>
-        </div>
-
-        <div v-else class="space-y-4">
-          <label class="block">
-            <span class="mb-2 flex items-center justify-between text-xs font-semibold text-muted">
-              <span>Custom Traefik labels</span>
-              <span class="font-mono font-normal">LABELS</span>
-            </span>
-            <textarea
-              v-model="form.customLabels"
-              rows="12"
-              spellcheck="false"
-              class="focus-ring w-full resize-y rounded-md border border-line-strong bg-[#080d13] px-4 py-3 font-mono text-[13px] leading-6 text-ink placeholder:text-muted/50"
-              placeholder="traefik.http.middlewares.custom.compress=true"
-            />
-          </label>
-          <label
-            class="flex items-start gap-3 rounded-md border border-line-strong p-4 text-sm text-ink"
-          >
-            <input
-              v-model="form.billingGateEnabled"
-              type="checkbox"
-              class="mt-0.5 size-4 accent-brand"
-            />
-            <span>
-              <span class="block font-semibold">Aktifkan billing gate</span>
-              <span class="mt-1 block text-xs leading-5 text-muted">
-                Saat deploy, BillEngine menempelkan middleware Traefik
-                <span class="font-mono">billing-gate@file</span> ke aplikasi (termasuk Docker
-                Compose) tanpa mengubah repo. Request masuk melewati gate sebelum ke container.
-              </span>
-            </span>
-          </label>
         </div>
       </form>
 
       <template #footer>
-        <div class="flex items-center justify-between gap-3">
-          <p class="hidden text-xs text-muted sm:block">
-            Tab {{ tabs.findIndex((tab) => tab.id === activeTab) + 1 }} dari {{ tabs.length }}
-          </p>
-          <div class="ml-auto flex gap-2">
-            <UiButton variant="secondary" :disabled="saving" @click="showForm = false">
-              Batal
-            </UiButton>
-            <UiButton
-              type="submit"
-              form="blueprint-form"
-              :disabled="saving || loadingProjects || !form.projectUuid"
-            >
-              {{ saving ? 'Menyimpan…' : editingId ? 'Simpan perubahan' : 'Buat blueprint' }}
-            </UiButton>
-          </div>
-        </div>
-      </template>
-    </UiDialog>
-
-    <UiDialog
-      v-if="deletingBlueprint"
-      title="Hapus blueprint"
-      description="Blueprint yang sudah memiliki riwayat provisioning tidak dapat dihapus dan harus dinonaktifkan dari menu Edit."
-      size="md"
-      :close-disabled="deleting"
-      @close="deletingBlueprint = null"
-    >
-      <p class="text-sm leading-6 text-muted">
-        Hapus <span class="font-semibold text-ink">{{ deletingBlueprint.name }}</span
-        >? Aksi ini tidak dapat dibatalkan.
-      </p>
-      <template #footer>
         <div class="flex justify-end gap-2">
-          <UiButton variant="secondary" :disabled="deleting" @click="deletingBlueprint = null">
+          <UiButton variant="secondary" :disabled="deploying" @click="selectedTemplate = null">
             Batal
           </UiButton>
-          <UiButton variant="danger" :disabled="deleting" @click="deleteBlueprint">
-            <Trash2 :size="14" /> {{ deleting ? 'Menghapus…' : 'Hapus blueprint' }}
+          <UiButton type="submit" form="template-deploy-form" :disabled="deploying || !nodes.length">
+            <Rocket :size="15" /> {{ deploying ? 'Menjadwalkan…' : 'Deploy template' }}
           </UiButton>
         </div>
       </template>

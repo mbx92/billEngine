@@ -80,6 +80,7 @@ export default defineNuxtConfig({
     coolifyApiToken: developmentEnv.COOLIFY_API_TOKEN || '',
     coolifyCredentialsKey: developmentEnv.COOLIFY_CREDENTIALS_KEY || '',
     infraCredentialsKey: developmentEnv.INFRA_CREDENTIALS_KEY || '',
+    agentArtifactDirectory: developmentEnv.AGENT_ARTIFACT_DIRECTORY || 'dist',
     cloudflareApiToken: developmentEnv.CLOUDFLARE_API_TOKEN || '',
     cloudflareZoneId: developmentEnv.CLOUDFLARE_ZONE_ID || '',
     cloudflareAccountId: developmentEnv.CLOUDFLARE_ACCOUNT_ID || '',
@@ -141,5 +142,6 @@ export default defineNuxtConfig({
   },
   routeRules: {
     '/api/auth/**': { cors: false },
+    '/blueprints': { redirect: '/templates' },
   },
 })

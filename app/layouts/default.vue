@@ -48,7 +48,7 @@ const primaryNavigation = [
 ] as const
 const infrastructureNavigation = [
   { label: 'Resources', to: '/resources', icon: Boxes },
-  { label: 'Blueprints', to: '/blueprints', icon: FileCode2 },
+  { label: 'Templates', to: '/templates', icon: FileCode2 },
   { label: 'Provisioning', to: '/provisioning', icon: Rocket },
   { label: 'Database Clusters', to: '/database-clusters', icon: Database },
   { label: 'Tunnels', to: '/tunnels', icon: Network },

@@ -143,22 +143,30 @@ describe('Coolify client', () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ uuid: 'app-1', docker_compose_raw: 'services:\n  app: {}\n' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({ uuid: 'app-1', docker_compose_raw: 'services:\n  app: {}\n' }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
       )
-      .mockResolvedValue(
-        new Response(JSON.stringify({ uuid: 'app-1' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+      .mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ uuid: 'app-1' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        ),
       )
     vi.stubGlobal('fetch', request)
 
     const client = new CoolifyClient('https://coolify.example.test', 'secret')
     await expect(client.getApplicationComposeRaw('app-1')).resolves.toContain('services:')
-    await client.updateApplicationCustomLabels('app-1', 'coolify.traefik.middlewares=billing-gate@file')
+    await client.updateApplicationCustomLabels(
+      'app-1',
+      'coolify.traefik.middlewares=billing-gate@file',
+    )
     await client.updateApplicationComposeRaw('app-1', 'services:\n  app:\n    image: x\n')
 
     expect(request.mock.calls[1]![1]).toEqual(
@@ -248,10 +256,7 @@ describe('Coolify client', () => {
       ),
     )
 
-    const request = new CoolifyClient(
-      'https://coolify.example.test',
-      'secret',
-    ).listApplications()
+    const request = new CoolifyClient('https://coolify.example.test', 'secret').listApplications()
 
     await expect(request).rejects.toMatchObject({
       name: 'CoolifyClientError',

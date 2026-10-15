@@ -1,95 +1,108 @@
 # PRD — OC Infrastructure Platform
 
-- Versi: 0.1
+- Versi: 0.2
 - Status: Draft untuk review
-- Target: Local development dan staging
+- Target awal: local development dan satu server staging Ubuntu
 - Repository: `mbx92/billEngine`
 - Branch pengembangan: `feature/oc-infrastructure-platform`
 
-## 1. Ringkasan
+## 1. Ringkasan Keputusan
 
-OC Infrastructure Platform adalah evolusi BillEngine dari platform billing yang
-terintegrasi erat dengan Coolify menjadi control plane modular untuk mengelola
-aplikasi Docker, server database, domain, storage, monitoring, dan billing.
+OC Infrastructure Platform akan dirombak menjadi control plane native untuk
+mengelola workload pada Ubuntu Server. Platform tidak menggunakan Coolify,
+baik sebagai runtime, provider legacy, jalur fallback, maupun komponen migrasi.
 
-Perubahan dilakukan secara bertahap. Coolify tetap menjadi provider legacy yang
-didukung selama migrasi, sedangkan provider Docker native dikelola melalui Go
-Agent pada host Debian. Billing, invoice, payment, customer portal, dan overdue
-gate yang sudah berjalan harus tetap kompatibel.
+Nuxt menjadi control plane untuk dashboard, API, authorization, orchestration,
+billing, dan desired state. Go Agent menjadi satu-satunya executor operasi
+infrastructure pada Ubuntu Server. Workload dijalankan dengan Docker Engine,
+Docker Compose v2, dan BuildKit. Traefik tetap menangani reverse proxy dan
+billing gate, sedangkan Cloudflare menangani DNS dan tunnel bila diperlukan.
 
-Pengembangan awal dilakukan secara lokal dan di staging. Tidak ada migrasi,
-deployment, atau perubahan konfigurasi production tanpa persetujuan terpisah.
+Branch ini mengizinkan perubahan breaking pada domain infrastructure agar model,
+API, database, service, UI, dan test tidak lagi membawa abstraksi atau istilah
+Coolify. Domain billing dan dokumen finansial tetap harus kompatibel dan tidak
+boleh diregresikan.
+
+Pengembangan dan validasi awal dilakukan secara lokal dan pada server staging
+Ubuntu. Deployment production atau migrasi workload production memerlukan
+persetujuan dan runbook terpisah.
 
 ## 2. Latar Belakang
 
 BillEngine saat ini menggunakan Nuxt 4, TypeScript, PostgreSQL, dan Drizzle ORM.
-Platform telah memiliki:
+Platform telah memiliki customer, plan, service, invoice, payment, refund,
+credit note, deployment blueprint, provisioning job, Cloudflare Tunnel, domain
+management, Traefik ForwardAuth, dan shared PostgreSQL provisioning.
 
-- customer, plan, service, invoice, payment, refund, dan credit note;
-- billing automation dan recurring invoice;
-- Coolify API integration;
-- deployment blueprint dan provisioning job;
-- Cloudflare Tunnel dan domain management;
-- Traefik ForwardAuth sebagai billing gate untuk service overdue; dan
-- shared PostgreSQL provisioning.
+Implementasi infrastructure existing masih terikat pada Coolify melalui:
 
-Integrasi infrastructure saat ini masih memakai konsep dan tabel yang spesifik
-ke Coolify. Akibatnya, penambahan runtime Docker native akan berisiko menyebarkan
-percabangan provider ke seluruh business logic apabila tidak didahului kontrak
-provider dan model data yang netral.
+- API client, konfigurasi, schema, dan service Coolify;
+- tabel server, node, dan resource yang menggunakan identitas Coolify;
+- lifecycle aplikasi, reconciliation, domain, dan provisioning;
+- route API, komponen UI, shared contract, seed, dan test; serta
+- label Traefik dan pesan operasional yang memakai istilah Coolify.
+
+Karena server yang tersedia menggunakan Ubuntu dan Coolify tidak lagi menjadi
+bagian dari arah produk, mempertahankan coexistence hanya menambah kompleksitas.
+Target baru adalah satu jalur operasi yang dimiliki penuh oleh OC: control plane,
+protokol agent, model data, dan lifecycle workload.
 
 ## 3. Problem Statement
 
-Platform membutuhkan cara untuk mengoperasikan infrastructure dari satu control
-plane tanpa menjadikan lifecycle customer dan billing bergantung pada satu
-vendor. Sistem baru harus dapat:
+Platform memerlukan control plane infrastructure yang:
 
-1. menjalankan Coolify dan Docker native secara berdampingan;
-2. menjaga satu sumber kepemilikan untuk setiap resource agar tidak terjadi
-   dual control;
-3. mempertahankan seluruh invariant finansial dan billing yang sudah ada;
-4. mengelola host remote dengan aman tanpa memberikan akses Docker socket atau
-   shell kepada dashboard/customer; dan
-5. dimigrasikan dari data existing secara additive dan dapat dihentikan tanpa
-   mengganggu workload production.
+1. mengoperasikan satu atau lebih Ubuntu Server tanpa Coolify;
+2. memisahkan domain billing dari status teknis container;
+3. tidak memberikan Docker socket atau akses shell kepada dashboard/customer;
+4. membuat seluruh operasi mutasi idempotent, asynchronous, dan dapat diaudit;
+5. mempertahankan layanan metadata dan billing ketika node offline;
+6. mengelola aplikasi, route, domain, database, storage, backup, dan observability
+   melalui model milik OC; serta
+7. dapat dipasang ulang dan dipulihkan tanpa ketergantungan pada platform PaaS
+   eksternal.
 
 ## 4. Tujuan Produk
 
 ### 4.1 Tujuan utama
 
-- Menyediakan abstraction `InfrastructureProvider` untuk Coolify dan Docker
-  native.
-- Menyediakan Go Agent untuk inventory dan operasi terstruktur pada server
-  Debian dengan Docker Engine, Compose, dan BuildKit.
+- Menjadikan Ubuntu Server sebagai satu-satunya sistem operasi host yang
+  didukung.
+- Menyediakan Go Agent untuk inventory dan operasi terstruktur pada Docker
+  Engine, Compose, dan BuildKit.
+- Menyediakan satu kontrak internal antara control plane dan agent tanpa
+  provider registry atau adapter Coolify.
 - Menyatukan lifecycle aplikasi, domain, database, storage, monitoring, dan
-  billing melalui model resource yang provider-neutral.
-- Mempertahankan Coolify sebagai jalur legacy sampai parity dan migrasi telah
-  terbukti aman.
-- Menyediakan workflow local development yang dapat direproduksi sebelum
-  integrasi staging.
-- Memastikan semua operasi mutasi bersifat idempotent, dapat diaudit, dan dapat
-  dipulihkan dari kegagalan parsial.
+  billing melalui resource model milik OC.
+- Menghapus dependency runtime, konfigurasi, database model, API, UI, dan test
+  yang khusus Coolify dari target akhir branch.
+- Memastikan mutation idempotent, resumable, dapat diaudit, dan aman terhadap
+  retry maupun kegagalan parsial.
+- Menyediakan bootstrap dan runbook Ubuntu yang dapat direproduksi.
 
-### 4.2 Sasaran keberhasilan awal
+### 4.2 Sasaran keberhasilan MVP
 
-- Satu koneksi Coolify dan satu Docker Agent dapat aktif bersamaan di staging.
-- Aplikasi dari kedua provider dapat ditampilkan melalui API dan UI yang sama.
-- Satu aplikasi Docker native dapat diprovision, diberi domain, dipantau, dan
-  dikendalikan lifecycle-nya secara idempotent di staging.
-- Relasi service dan billing tetap bekerja tanpa mengetahui provider runtime.
-- Overdue gate tetap berlaku untuk resource Coolify maupun Docker native.
-- Tidak ada perubahan pada production sebelum release gate tersendiri disetujui.
+- Satu server staging Ubuntu dapat di-enroll dan dikelola dari control plane.
+- Agent melaporkan heartbeat, capacity, inventory, dan versi secara aman.
+- Satu aplikasi dapat dibuat dari image atau build context, di-deploy, diberi
+  domain, dipantau, dihentikan, dimulai ulang, dan dihapus secara idempotent.
+- Billing gate dapat memblokir dan memulihkan akses tanpa bergantung pada status
+  teknis container.
+- Database dan volume persisten tidak terhapus akibat retry atau penghapusan
+  metadata.
+- Tidak ada request runtime, credential, tabel aktif, atau jalur UI yang
+  memerlukan Coolify.
 
 ## 5. Non-Goals
 
 Rilis awal tidak mencakup:
 
-- penggantian Coolify di production;
-- Kubernetes atau orchestrator multi-cluster;
-- high availability untuk control plane atau agent;
-- akses shell umum atau akses Docker socket untuk customer;
-- migrasi otomatis seluruh workload production;
-- hard multi-tenant isolation setara virtual machine pada satu Docker host;
+- dukungan atau kompatibilitas dengan Coolify;
+- Kubernetes, Swarm, Nomad, atau orchestrator multi-cluster;
+- host selain Ubuntu Server;
+- high availability control plane, PostgreSQL, atau agent;
+- akses shell umum, terminal web, atau akses Docker socket untuk customer;
+- hard multi-tenant isolation setara virtual machine pada satu host;
+- migrasi otomatis workload production dari Coolify;
 - redesign payment gateway atau accounting core; dan
 - marketplace aplikasi atau public plugin system.
 
@@ -97,13 +110,13 @@ Rilis awal tidak mencakup:
 
 ### 6.1 Administrator platform
 
-Mendaftarkan provider/node, memilih target deployment, menjalankan operasi,
-melihat health dan audit log, serta menangani kegagalan provisioning.
+Mendaftarkan node Ubuntu, menetapkan policy dan capacity, menjalankan operasi,
+melihat health, log operasi, dan audit trail, serta menangani kegagalan.
 
 ### 6.2 Staf billing/operasional
 
 Mengelola customer, service, invoice, payment, dan status billing tanpa perlu
-memahami detail provider infrastructure.
+memiliki akses Docker atau memahami detail host.
 
 ### 6.3 Customer
 
@@ -112,567 +125,582 @@ melalui portal dengan isolasi data per customer.
 
 ### 6.4 Machine identity
 
-Go Agent memiliki identitas dan credential sendiri. Identitas agent bukan akun
-administrator dan hanya memiliki akses pada endpoint serta operasi yang
-diperlukan.
+Setiap Go Agent memiliki identitas sendiri. Identitas agent bukan akun
+administrator dan hanya dapat mengakses endpoint serta operasi yang diperlukan.
 
 ## 7. Prinsip Desain
 
-1. **Billing tetap menjadi domain terpisah.** Status service bisnis tidak boleh
-   diturunkan langsung dari status container.
-2. **Satu resource, satu owner.** Sebuah resource hanya boleh dikendalikan oleh
-   satu provider pada satu waktu.
-3. **Capability-driven.** Fitur ditentukan dari capability provider, bukan
-   rangkaian `if provider === ...` pada business logic.
-4. **Asynchronous by default.** Operasi infrastructure direpresentasikan sebagai
-   job/operation dengan status yang dapat dipoll atau direkonsiliasi.
-5. **Idempotent mutation.** Retry tidak boleh membuat resource duplikat.
-6. **Control plane tetap hidup saat provider offline.** Billing, invoice, dan
-   akses metadata tidak boleh gagal hanya karena agent/provider tidak tersedia.
-7. **Least privilege.** Dashboard tidak mengakses Docker socket; agent tidak
+1. **Ubuntu-only.** Implementasi, dokumentasi, CI integration, dan runbook host
+   menargetkan Ubuntu Server.
+2. **Satu jalur kontrol.** Semua mutation infrastructure melalui control plane
+   dan Go Agent; tidak ada dual control dengan Coolify.
+3. **Billing terpisah dari runtime.** Status service bisnis tidak diturunkan
+   langsung dari status container.
+4. **Desired versus observed state.** Control plane menyimpan intent, sedangkan
+   agent melaporkan hasil aktual beserta waktu observasinya.
+5. **Asynchronous by default.** Mutation direpresentasikan sebagai operation
+   yang dapat dipoll, di-retry, dan direkonsiliasi.
+6. **Idempotent mutation.** Retry dengan idempotency key yang sama tidak membuat
+   resource duplikat.
+7. **Control plane tetap tersedia saat node offline.** Billing, invoice, dan
+   metadata tidak ikut gagal ketika agent tidak terhubung.
+8. **Least privilege.** Dashboard tidak mengakses Docker socket dan agent tidak
    mengeksekusi arbitrary shell command.
-8. **Additive migration.** Tidak ada drop/rename tabel legacy pada fase awal.
-9. **Local-first, staging-gated.** Integrasi host divalidasi lokal, lalu staging,
-   sebelum ada pembahasan production.
+9. **Deny by default.** Opsi berbahaya seperti privileged mode, host network,
+   device, host path, dan Linux capability ditolak kecuali ada policy eksplisit.
+10. **Safe deletion.** Penghapusan metadata, workload, volume, backup, DNS, dan
+    credential merupakan tindakan terpisah dengan guard masing-masing.
 
-## 8. Baseline dan Temuan Audit Awal
+## 8. Scope Rombak Branch
 
-Audit awal menunjukkan coupling Coolify tersebar pada server API/service,
-komponen UI, shared contract, test, tabel database, provisioning, domain, dan
-reconciliation. Model existing yang paling terdampak adalah:
+Branch ini melakukan clean break pada domain infrastructure. Pekerjaan mencakup:
 
-- `coolify_servers`;
-- `coolify_nodes`;
-- `coolify_resources`;
-- `service_resources` yang memiliki foreign key langsung ke Coolify resource;
-- deployment blueprint dan provisioning job;
-- resource domain dan lifecycle; serta
-- database cluster/shared PostgreSQL provisioning.
+- mengganti seluruh model Coolify dengan node, resource, operation, observation,
+  route, volume, dan secret reference milik OC;
+- mengganti Coolify client/service dengan client protokol Go Agent;
+- mengganti provisioning, lifecycle, reconciliation, domain, dan database flow;
+- mengganti route API, shared schema, komponen UI, seed, fixture, serta test;
+- menghapus environment variable, pesan error, label, dan dokumentasi Coolify;
+- menyediakan migration atau reset path yang eksplisit untuk database
+  development/staging; dan
+- mempertahankan integritas customer, service, invoice, payment, refund, credit
+  note, dan audit finansial.
 
-Belum terdapat kontrak `InfrastructureProvider`, implementasi Docker/BuildKit,
-Go module, atau agent. Karena itu, fase pertama harus membangun seam arsitektur
-dan Coolify adapter dengan perilaku identik sebelum Docker native menerima
-operasi tulis.
-
-Baseline test existing harus dicatat dan distabilkan sebelum feature work.
-Kegagalan test atau lint yang sudah ada tidak boleh disamarkan sebagai regresi
-provider baru, dan setiap perubahan baseline harus terdokumentasi.
+Kode Coolify boleh tetap muncul hanya pada migration historis atau dokumen arsip
+yang memang diperlukan untuk menjelaskan asal schema. Kode tersebut tidak boleh
+diimpor, dikonfigurasi, atau dijalankan oleh aplikasi.
 
 ## 9. Kapabilitas yang Harus Dipertahankan
-
-Komponen berikut dianggap sebagai core dan tidak boleh diregresikan:
 
 - snapshot customer, plan, harga, pajak, dan service pada dokumen finansial;
 - recurring invoice dengan unique guard per billing period;
 - alokasi payment, refund, dan credit note yang transaksional;
 - nomor dokumen yang dialokasikan secara atomik;
-- audit event yang tersimpan dalam transaksi yang relevan;
+- audit event dalam transaction boundary yang relevan;
 - isolasi customer pada portal dan API;
 - authentication, authorization, settings, email, dan report;
 - service lifecycle bisnis;
-- domain routing dan Cloudflare Tunnel yang sudah ada;
+- domain routing dan Cloudflare Tunnel yang masih digunakan;
 - Traefik ForwardAuth overdue gate; dan
-- shared PostgreSQL provisioning selama masih digunakan.
+- shared PostgreSQL provisioning selama masuk scope aktif.
 
 ## 10. Ruang Lingkup Fungsional
 
-### 10.1 Provider dan node management
+### 10.1 Node Ubuntu
 
-- Administrator dapat membuat, menguji, menonaktifkan, dan melihat health
-  koneksi provider.
-- Provider mengekspos capability yang didukung, misalnya application lifecycle,
-  build, domain routing, metrics, database, storage, atau backup.
-- Node memiliki provider owner, environment, label, capacity, dan status
-  heartbeat terakhir.
-- Provider yang tidak sehat tidak menghambat operasi billing dan metadata.
-- Resource tidak dapat dipindahkan provider hanya dengan mengubah foreign key;
-  perpindahan harus melalui workflow migrasi eksplisit.
+- Administrator dapat membuat enrollment token sekali pakai, mendaftarkan node,
+  mengganti nama/label, menonaktifkan, mencabut identity, dan melihat health.
+- Node menyimpan environment, label, capacity, versi agent, versi Docker,
+  heartbeat terakhir, serta observed status.
+- Enrollment hanya berhasil untuk host Ubuntu yang memenuhi versi dan dependency
+  minimum yang ditetapkan runbook.
+- Node offline tidak menghambat API billing dan metadata.
+- Drain mode mencegah penempatan workload baru tanpa menghentikan workload aktif.
 
 ### 10.2 Inventory dan reconciliation
 
-- Platform menyimpan inventory ternormalisasi untuk resource yang diketahui.
-- External identifier provider tetap disimpan untuk reconciliation.
-- Drift antara desired state dan observed state ditampilkan tanpa langsung
-  menimpa konfigurasi.
-- Data observasi memiliki timestamp sehingga status stale dapat dibedakan dari
-  status healthy.
-- Reconciliation bersifat idempotent dan memiliki bounded retry.
+- Agent melaporkan container, image, Compose project, network, volume, dan
+  resource milik OC.
+- Semua object yang dibuat platform memiliki label ownership stabil.
+- Resource asing ditampilkan sebagai unmanaged dan tidak dimutasi otomatis.
+- Drift antara desired state dan observed state terlihat tanpa menimpa
+  konfigurasi secara diam-diam.
+- Observasi memiliki timestamp agar status stale berbeda dari healthy.
+- Reconciliation menggunakan lock per resource, bounded retry, dan backoff.
 
 ### 10.3 Application lifecycle
 
-- Membuat aplikasi dari image atau build context yang diizinkan.
-- Mengelola environment variable dan secret reference.
-- Menetapkan CPU/memory limit dan restart policy.
-- Deploy, start, stop, restart, redeploy, dan delete sesuai authorization.
-- Menyimpan desired version dan observed version.
-- Menampilkan log operasi tanpa membocorkan secret.
-- Delete workload merupakan operasi terpisah dari penghapusan metadata dan
-  membutuhkan guard yang jelas.
+- Membuat aplikasi dari image registry atau build context yang diizinkan.
+- Mengelola environment variable dan secret reference tanpa membocorkan value.
+- Menetapkan CPU/memory limit, health check, dan restart policy.
+- Deploy, start, stop, restart, redeploy, rollback versi, dan delete sesuai role.
+- Menyimpan desired revision, observed revision, image digest, dan hasil deploy.
+- Menampilkan log teredaksi dan terbatas sesuai authorization.
+- Penghapusan workload tidak otomatis menghapus volume, backup, DNS, atau
+  metadata service.
 
-### 10.4 Database server dan database service
+### 10.4 Database
 
-- Inventory database server/cluster dan status koneksinya.
-- Provisioning database mengikuti capability provider dan policy platform.
-- Credential database disimpan terenkripsi dan tidak dikirim ulang ke log.
-- Shared PostgreSQL existing tetap didukung selama transisi.
-- Backup/restore database masuk fase lanjutan setelah lifecycle aplikasi stabil.
+- Inventory instance/cluster database dan status koneksinya.
+- Provisioning database menggunakan operasi terstruktur, bukan arbitrary shell.
+- Username/password dibuat dengan sumber randomness yang aman dan disimpan
+  terenkripsi.
+- Template bawaan PostgreSQL, MySQL, dan Redis dapat dideploy berulang kali
+  dengan nama, host port, username, database, dan password yang berbeda.
+- Default MVP adalah instance/container dedicated per deployment dengan volume
+  persisten. Integrasi shared cluster memakai database dan role terpisah per
+  service pada fase berikutnya; satu credential tidak boleh digunakan lintas
+  service.
+- Secret disimpan terenkripsi di control plane, direferensikan dari desired spec,
+  lalu diambil agent hanya saat operation aktif dan dipasang sebagai file dengan
+  permission terbatas. Plaintext tidak disimpan pada operation atau audit log.
+- Shared PostgreSQL existing tetap didukung melalui resource model baru.
+- Backup dan restore wajib memiliki verifikasi hasil sebelum dianggap sukses.
+- Hanya PostgreSQL workload yang dibuat sebagai resource Template native yang
+  dapat dipromosikan menjadi database cluster. PostgreSQL metadata Billing tidak
+  masuk inventory kandidat dan tidak boleh dikelola control plane sendiri.
+- Aktivasi pertama menggunakan mode `standalone`. Agent memverifikasi ownership
+  container dan menjalankan preflight PostgreSQL secara lokal; control plane
+  tidak memerlukan koneksi TCP langsung ke database pada node remote.
+- Mode `replicated` dan penambahan standby lintas node hanya diaktifkan setelah
+  lifecycle primary, backup, dan private data-plane network tervalidasi.
+- Shared cluster membuat database, role, dan password berbeda untuk setiap
+  service melalui action agent `database.service.ensure`; control plane tidak
+  membuka koneksi TCP langsung ke PostgreSQL workload.
+- Password service dan connection URI disimpan terenkripsi. Secret hanya
+  diberikan kepada agent selama operation aktif dan explicit admin reveal
+  menggunakan response `no-store` serta audit tanpa plaintext.
+- MVP shared cluster mengharuskan aplikasi dan PostgreSQL berada pada node yang
+  sama serta memakai managed Docker network `oc-private`. Setelah provisioning
+  berhasil, connection URI dipasang sebagai `<ENV_KEY>_FILE` dan aplikasi
+  dijadwalkan redeploy otomatis.
+
+### 10.4.1 Template deployment
+
+- Istilah produk adalah **Template**; nama `blueprint` lama hanya boleh tersisa
+  pada migration historis sampai clean-break schema selesai.
+- Template memiliki versi immutable pada setiap deployment agar perubahan resep
+  tidak mengubah resource yang sudah berjalan secara diam-diam.
+- Parameter non-secret masuk ke environment tervalidasi, sedangkan parameter
+  secret menjadi managed secret reference.
+- Resource menyimpan `template_id` dan `template_version`, tetapi lifecycle
+  container tetap memakai operation native yang sama dengan aplikasi biasa.
+- Menghapus container tidak otomatis menghapus named volume persisten.
 
 ### 10.5 Domain, Cloudflare, dan Traefik
 
-- Domain dapat dihubungkan ke resource provider-neutral.
-- DNS/tunnel dan route Traefik memiliki status operasi yang dapat diaudit.
-- TLS dan route hanya dinyatakan aktif setelah health check berhasil.
-- Overdue gate tetap membaca status service/billing, bukan status provider.
-- Penghapusan aplikasi tidak otomatis menghapus DNS tanpa policy eksplisit.
+- Domain dihubungkan langsung ke infrastructure resource milik OC.
+- Agent menghasilkan konfigurasi/label Traefik dari route spec tervalidasi.
+- DNS/tunnel dan route memiliki operation serta audit trail terpisah.
+- TLS dan route dinyatakan aktif setelah health check berhasil.
+- Overdue gate membaca status service/billing, bukan status node atau container.
+- Penghapusan aplikasi tidak otomatis menghapus DNS.
 
 ### 10.6 Storage dan backup
 
-- Volume memiliki owner resource, mount policy, dan retention metadata.
-- Platform membedakan volume ephemeral dan persistent.
-- Backup memiliki status, checksum/reference, retention, dan hasil verifikasi.
-- Backend backup dipilih pada fase lanjutan; MVP tidak menjanjikan restore
-  lintas provider.
+- Volume memiliki resource owner, mount policy, jenis ephemeral/persistent, dan
+  retention metadata.
+- Host path mount ditolak untuk workload customer pada MVP.
+- Backup menyimpan status, checksum, ukuran, lokasi, retention, dan hasil
+  verifikasi.
+- Restore selalu menjadi operation eksplisit dan diaudit.
 
 ### 10.7 Monitoring
 
-- Agent mengirim heartbeat, versi, capacity, utilization ringkas, dan inventory.
-- Metrics high-cardinality tidak disimpan langsung di database metadata.
-- Dashboard menampilkan healthy, degraded, offline, dan stale secara berbeda.
-- Alerting dan retention metrics rinci masuk setelah protokol agent stabil.
+- Agent mengirim heartbeat, version, capacity, utilization ringkas, dan inventory.
+- Metrics high-cardinality tidak disimpan pada tabel metadata utama.
+- Dashboard membedakan healthy, degraded, offline, unknown, dan stale.
+- Alert minimum mencakup agent offline, disk watermark, operation stuck,
+  deploy gagal berulang, dan backup gagal.
 
 ### 10.8 Billing integration
 
-- `service_resources` menghubungkan service ke generic infrastructure resource.
-- Harga dan invoice tidak dihitung langsung dari live provider response.
-- Suspension/unsuspension menggunakan workflow yang sama untuk semua provider.
-- Kegagalan provider menghasilkan operasi retryable dan audit event; tidak
+- `service_resources` menghubungkan service ke `infrastructure_resources`.
+- Harga dan invoice tidak dihitung langsung dari live Docker/agent response.
+- Suspension dan unsuspension membuat operation yang idempotent.
+- Kegagalan node menghasilkan operation retryable dan audit event; tidak
   mengubah invoice atau payment secara implisit.
-- Satu service dapat memiliki beberapa resource, tetapi ownership setiap
-  resource tetap tunggal.
+- Satu service dapat memiliki beberapa resource dengan ownership customer yang
+  tervalidasi.
 
 ### 10.9 Audit dan keamanan
 
-- Setiap perubahan credential, provider, resource, lifecycle, domain, dan
-  privilege dicatat dalam audit log.
-- Secret tidak boleh muncul pada response API, UI, application log, atau audit
-  payload.
-- Operasi sensitif memerlukan role yang sesuai dan idempotency key.
-- Agent menolak action yang tidak dikenal, expired, replayed, atau berada di
-  luar capability/policy node.
+- Perubahan node, identity, resource, lifecycle, domain, secret, role, dan policy
+  dicatat dalam audit log.
+- Secret tidak muncul pada response API/UI biasa, log aplikasi, log agent, atau
+  audit payload. Admin dapat melakukan explicit reveal melalui response
+  `no-store`; tindakan diaudit hanya dengan nama key dan plaintext dibersihkan
+  dari state UI saat dialog ditutup.
+- Mutation memerlukan authorization, idempotency key, correlation ID, dan
+  operation record.
+- Agent menolak action yang tidak dikenal, expired, replayed, tidak ditandatangani,
+  atau berada di luar policy node.
 
 ## 11. Arsitektur Target
 
 ### 11.1 Komponen
 
 - **Nuxt control plane:** dashboard, API, authorization, orchestration, billing,
-  dan desired state.
-- **PostgreSQL metadata:** provider, node, resource, operation, relasi service,
-  dan audit.
-- **Infrastructure provider adapters:** menerjemahkan kontrak internal ke
-  Coolify API atau protokol Go Agent.
-- **Go Agent:** menjalankan operasi tervalidasi pada Docker Engine, Compose, dan
-  BuildKit di host Debian.
-- **Traefik:** reverse proxy dan enforcement overdue gate.
-- **Cloudflare:** DNS dan tunnel.
-- **Coolify:** provider legacy selama masa coexistence dan migrasi.
+  desired state, dan operation queue.
+- **PostgreSQL metadata:** node, identity, resource, operation, observation,
+  route, relasi service, dan audit.
+- **Go Agent:** executor tunggal untuk operasi tervalidasi pada Ubuntu Server.
+- **Docker Engine + Compose v2 + BuildKit:** runtime dan build workload.
+- **Traefik:** reverse proxy, TLS termination, dan overdue gate.
+- **Cloudflare:** DNS dan tunnel bila topologi membutuhkannya.
+- **Backup backend:** object storage atau target lain yang dipilih melalui ADR.
+
+Coolify bukan bagian dari arsitektur target maupun arsitektur transisi.
 
 ### 11.2 Batas tanggung jawab
 
-Control plane memiliki desired state dan authorization. Provider memiliki
-mekanisme eksekusi. Agent memiliki akses lokal ke Docker tetapi tidak memiliki
-akses ke domain billing. Traefik melakukan routing/enforcement, sedangkan
-Cloudflare menangani DNS/tunnel. PostgreSQL metadata bukan tempat menyimpan
-metrics mentah atau Docker secret plaintext.
+Control plane memiliki desired state, authorization, scheduling sederhana, dan
+audit. Agent memiliki akses lokal ke Docker tetapi tidak memiliki akses ke domain
+billing. Agent hanya menerima command terstruktur. Traefik melakukan routing dan
+enforcement. Cloudflare menangani DNS/tunnel. PostgreSQL metadata tidak menyimpan
+Docker secret plaintext, log mentah tanpa batas, atau metrics high-cardinality.
 
-## 12. Kontrak `InfrastructureProvider`
+### 11.3 Topologi MVP
 
-Kontrak final ditetapkan melalui Architecture Decision Record, tetapi bentuk
-awalnya harus memisahkan discovery, application operations, dan observability:
+MVP menggunakan satu server staging Ubuntu yang menjalankan Go Agent, Docker,
+Traefik, dan workload uji. Control plane dan PostgreSQL dapat berjalan pada host
+yang sama untuk staging kecil, tetapi harus berada pada Compose project, network,
+volume, dan resource limit terpisah dari workload customer.
+
+Model data tetap menggunakan entitas node agar penambahan server Ubuntu kedua
+tidak memerlukan redesign, tetapi scheduler multi-node otomatis bukan scope MVP.
+
+## 12. Kontrak Control Plane–Agent
+
+Kontrak final ditetapkan melalui ADR dan versioned protocol. Bentuk awalnya:
 
 ```ts
-type ProviderKind = 'coolify' | 'docker-agent'
-
-interface InfrastructureProvider {
-  readonly kind: ProviderKind
-
-  getCapabilities(): Promise<ProviderCapabilities>
-  testConnection(): Promise<ConnectionStatus>
-  listNodes(): Promise<ProviderNode[]>
-  listResources(input?: InventoryFilter): Promise<ProviderResource[]>
-
-  applications: ApplicationProvider
-  observations: ObservationProvider
-}
-
-interface ApplicationProvider {
-  ensureApplication(
-    spec: ApplicationSpec,
-    context: OperationContext,
-  ): Promise<ProviderOperation>
-
-  configureEnvironment(
-    resource: ResourceReference,
-    spec: EnvironmentSpec,
-    context: OperationContext,
-  ): Promise<ProviderOperation>
-
-  configureRoutes(
-    resource: ResourceReference,
-    routes: RouteSpec[],
-    context: OperationContext,
-  ): Promise<ProviderOperation>
-
-  deploy(
-    resource: ResourceReference,
-    context: OperationContext,
-  ): Promise<ProviderOperation>
-
-  setLifecycle(
-    resource: ResourceReference,
-    state: 'running' | 'stopped' | 'deleted',
-    context: OperationContext,
-  ): Promise<ProviderOperation>
-
-  setLimits(
-    resource: ResourceReference,
-    limits: ResourceLimits,
-    context: OperationContext,
-  ): Promise<ProviderOperation>
+interface InfrastructureRuntime {
+  getNodeStatus(nodeId: string): Promise<NodeStatus>
+  listInventory(nodeId: string): Promise<InventorySnapshot>
+  ensureApplication(spec: ApplicationSpec, context: OperationContext): Promise<OperationRef>
+  configureEnvironment(resource: ResourceRef, spec: EnvironmentSpec, context: OperationContext): Promise<OperationRef>
+  configureRoutes(resource: ResourceRef, routes: RouteSpec[], context: OperationContext): Promise<OperationRef>
+  deploy(resource: ResourceRef, context: OperationContext): Promise<OperationRef>
+  setLifecycle(resource: ResourceRef, state: 'running' | 'stopped' | 'deleted', context: OperationContext): Promise<OperationRef>
+  setLimits(resource: ResourceRef, limits: ResourceLimits, context: OperationContext): Promise<OperationRef>
 }
 ```
 
 Ketentuan kontrak:
 
-- setiap mutasi menerima idempotency key melalui `OperationContext`;
-- hasil mutasi berupa operation, bukan asumsi bahwa pekerjaan selesai sinkron;
-- error provider dinormalisasi menjadi retryable, terminal, unauthorized,
-  unsupported, conflict, atau unavailable;
-- capability yang tidak tersedia menghasilkan `unsupported`, bukan silent
-  fallback;
-- business service tidak mengimpor SDK Coolify atau client Agent secara
-  langsung; dan
-- adapter dipilih melalui provider registry berdasarkan resource owner.
-
-Port tambahan seperti database, storage, backup, dan advanced metrics ditambah
-setelah kontrak application tervalidasi. Kontrak tidak boleh menjadi satu
-interface besar yang memaksa semua provider mendukung seluruh fitur.
+- setiap mutation membawa idempotency key, correlation ID, actor, target node,
+  expiry, dan expected resource revision;
+- hasil mutation berupa operation, bukan asumsi selesai sinkron;
+- error dinormalisasi menjadi retryable, terminal, unauthorized, unsupported,
+  conflict, invalid-spec, atau unavailable;
+- protocol memiliki versi dan compatibility window yang eksplisit;
+- duplicate delivery mengembalikan operation/result yang sama;
+- payload dan log tidak mengandung secret plaintext; dan
+- business service tidak mengakses Docker API atau client agent secara langsung.
 
 ## 13. Desain Go Agent
 
 ### 13.1 Tanggung jawab
 
-- enrollment dan rotasi identity;
-- heartbeat, version, capacity, dan inventory;
+- enrollment, machine identity, rotasi, dan revocation;
+- heartbeat, version negotiation, capacity, dan inventory;
 - operasi Docker/Compose/BuildKit yang terstruktur;
-- health check dan status operation;
-- redaction secret dan local audit correlation; serta
-- enforcement allowlist/policy dari control plane.
+- validasi spec dan enforcement policy lokal;
+- health check, status operation, dan observed state;
+- secret redaction dan local audit correlation; serta
+- recovery operation setelah agent restart.
 
 ### 13.2 Model koneksi
 
-Default yang direkomendasikan untuk host kantor/rumah adalah koneksi outbound
-dari agent ke control plane agar tidak membutuhkan inbound public port. Protokol
-final dapat berupa long polling atau stream terautentikasi dan harus mendukung:
+Default adalah koneksi outbound dari agent ke control plane agar server tidak
+memerlukan port agent publik. Transport final dapat berupa long polling atau
+stream terautentikasi dan harus mendukung:
 
 - one-time enrollment token;
 - machine identity berbasis mTLS atau credential berumur pendek;
 - rotation dan revocation;
-- request signing/correlation;
-- expiry dan replay protection; dan
-- reconnect dengan exponential backoff.
+- signature/correlation untuk command;
+- expiry dan replay protection;
+- reconnect dengan exponential backoff; dan
+- acknowledgement yang durable untuk command yang sudah diterima.
 
-### 13.3 Batas keamanan
+### 13.3 Instalasi Ubuntu
+
+- Agent didistribusikan sebagai binary atau package dengan checksum/signature.
+- Agent berjalan sebagai service `systemd` dengan user khusus.
+- Unit service menerapkan hardening yang kompatibel dengan akses Docker yang
+  memang dibutuhkan agent.
+- Direktori config, state, dan log memiliki ownership serta permission ketat.
+- Docker, Compose plugin, BuildKit, firewall, NTP, disk, dan DNS diperiksa oleh
+  preflight command.
+- Instalasi dan upgrade agent bersifat versioned serta memiliki rollback.
+
+### 13.4 Batas keamanan
 
 - Agent tidak menyediakan endpoint arbitrary command execution.
 - Input Compose/build divalidasi terhadap schema dan policy.
-- Host path mount, privileged container, host network, device mount, dan
-  capability Linux ditolak secara default.
-- Secret disampaikan sebagai reference/encrypted payload dan dihapus dari
-  output operasi.
-- Build concurrency pada server development dibatasi agar control plane dan
-  database tetap responsif.
+- Privileged container, host network, device mount, host PID/IPC, host path, dan
+  penambahan Linux capability ditolak secara default.
+- Secret disampaikan sebagai reference atau encrypted envelope dan dihapus dari
+  output operation.
+- Build concurrency dibatasi agar control plane dan database tetap responsif.
+- Akses Docker socket dianggap privileged dan dibatasi hanya untuk process agent;
+  risikonya harus dicatat pada threat model.
 
-## 14. Perubahan Database dan Strategi Migrasi
+## 14. Desain Data dan Migrasi
 
-### 14.1 Model additive awal
+### 14.1 Model target
 
-Tabel berikut direncanakan sebagai model generic:
+- `infrastructure_nodes`: nama, environment, label, identity, version, capacity,
+  heartbeat, drain flag, dan observed status;
+- `infrastructure_resources`: node owner, customer owner, service relation, kind,
+  stable external ID, desired/observed revision, state, dan metadata terbatas;
+- `infrastructure_operations`: idempotency key, action, actor, target, status,
+  attempt, correlation, expected revision, error teredaksi, dan timestamp;
+- `resource_observations`: snapshot status ringkas dan observed timestamp;
+- `resource_routes`: hostname, target port, TLS, middleware, desired/observed
+  state, dan operation relation;
+- `resource_volumes`: jenis, mount target, retention, backup policy, dan delete
+  protection; serta
+- `node_enrollments`/`node_identities`: hash token/credential, expiry, rotation,
+  revocation, dan last-used metadata.
 
-- `provider_connections`: jenis provider, nama, environment, encrypted config,
-  status, dan capability snapshot;
-- `provider_nodes`: koneksi provider, external ID, label, capacity, heartbeat,
-  dan observed status;
-- `infrastructure_resources`: provider owner, node, jenis resource, external ID,
-  desired/observed state, dan metadata terbatas;
-- `provider_operations`: idempotency key, action, target, status, attempts,
-  correlation, error teredaksi, dan timestamp; serta
-- `resource_observations`: snapshot status ringkas dengan observed timestamp.
+Secret value disimpan melalui mekanisme terenkripsi yang diputuskan pada ADR;
+tabel metadata hanya menyimpan reference dan metadata aman.
 
-Kolom/tabel lanjutan untuk storage, backup, dan metrics hanya ditambahkan saat
-fitur terkait masuk milestone aktif.
+### 14.2 Clean-break migration
 
-### 14.2 Relasi existing
+Karena branch ini merombak total infrastructure control, tidak ada dual-read,
+dual-write, provider registry, atau adapter compatibility dengan Coolify.
 
-- `service_resources` ditambah referensi ke `infrastructure_resources`.
-- Resource domain mengarah ke generic resource, dengan relasi legacy tetap ada
-  selama dual-read.
-- Provisioning job menyimpan provider connection, target node, generic resource,
-  dan provider operation.
-- Deployment blueprint menyimpan requirement/capability dan provider config yang
-  tervalidasi, bukan field Coolify di core model.
-- Database cluster dapat direlasikan ke generic resource tanpa menghapus model
-  shared PostgreSQL existing.
+Urutan migrasi development/staging:
 
-### 14.3 Tahapan migrasi
+1. catat baseline dan ekspor data infrastructure existing untuk audit/rollback;
+2. bekukan mutation infrastructure lama;
+3. buat schema target dan mapping hanya untuk relasi bisnis yang masih valid;
+4. hubungkan `service_resources`, domain, dan provisioning ke resource baru;
+5. deploy control plane baru dan enroll agent Ubuntu;
+6. buat ulang workload uji melalui jalur native;
+7. validasi billing, domain, route, volume, dan audit;
+8. hapus kode dan konfigurasi Coolify; dan
+9. drop tabel/kolom Coolify hanya setelah backup serta validation report disetujui.
 
-1. **Expand:** tambah tabel, index, constraint, dan nullable foreign key baru.
-2. **Backfill:** salin koneksi/node/resource Coolify sambil mempertahankan UUID,
-   external ID, dan hubungan existing.
-3. **Validate:** bandingkan jumlah record, orphan, uniqueness, dan relasi service,
-   domain, serta provisioning.
-4. **Dual-read/shadow:** baca model generic dan bandingkan dengan model legacy
-   tanpa mengubah jalur operasi.
-5. **Dual-write terbatas:** tulis kedua model melalui satu transaction boundary
-   jika memungkinkan dan pantau divergence.
-6. **Cutover per capability:** pindahkan satu jalur pada satu waktu ke provider
-   registry, dimulai dari read-only inventory.
-7. **Contract:** drop/rename legacy hanya setelah production migration memiliki
-   rencana dan persetujuan tersendiri.
+Reset database diperbolehkan untuk environment development yang disposable.
+Database staging harus menggunakan migration terukur dan backup. Migrasi atau
+penghapusan data production tidak termasuk persetujuan PRD ini.
 
-### 14.4 Ketentuan migrasi
+### 14.3 Invariant migrasi
 
-- Migration harus dapat dijalankan pada salinan database production-like.
-- Tidak ada destructive schema migration pada milestone awal.
-- Backfill harus idempotent dan dapat dilanjutkan setelah gagal.
-- Foreign key baru tidak dibuat `NOT NULL` sebelum semua validasi lulus.
-- Credential existing memiliki fallback reader selama re-encryption berlangsung.
-- Rollback aplikasi tidak boleh memerlukan rollback data yang destruktif.
+- ID customer, service, invoice, payment, dan dokumen finansial tidak berubah.
+- Resource tidak boleh diklaim agent hanya berdasarkan nama container.
+- Mapping resource memerlukan stable ownership label atau verifikasi manual.
+- Volume persisten, DNS, dan backup tidak dihapus sebagai efek samping schema
+  migration.
+- Backfill yang disediakan harus idempotent dan menghasilkan validation report.
+- Rollback aplikasi tidak boleh memerlukan penghapusan data finansial.
 
-## 15. Workflow Local Development
+## 15. Workflow Development dan Staging
 
-### 15.1 Topologi yang direkomendasikan
+### 15.1 Local development
 
 - Nuxt control plane dan PostgreSQL metadata berjalan lokal.
-- Traefik dan workload uji berjalan di network Docker terisolasi.
-- Go Agent berjalan pada Debian Stable lokal, VM Debian, atau server development
-  khusus; validasi final agent harus dilakukan pada Debian Stable.
-- Cloudflare dan provider external menggunakan credential khusus development atau
-  staging, bukan credential production.
-
-Cloud environment tetap dapat dipakai untuk CI atau review, tetapi integrasi
-Docker host dan agent dikembangkan local-first agar developer memiliki kontrol
-penuh atas daemon, network, volume, dan log.
+- Docker/Traefik/workload uji berjalan pada network dan Compose project terisolasi.
+- Go Agent dapat berjalan pada VM Ubuntu lokal atau node development khusus.
+- Validasi final selalu dilakukan pada Ubuntu Server.
+- Cloudflare menggunakan credential development/staging, bukan production.
 
 ### 15.2 Prasyarat
 
 - Node.js dan npm sesuai versi repository;
 - PostgreSQL versi yang didukung repository;
+- Ubuntu Server pada node integrasi;
 - Docker Engine, Docker Compose v2, dan BuildKit;
-- Go versi stabil yang dipin di `go.mod` saat agent dibuat; dan
-- domain lokal atau hostname staging untuk pengujian routing.
+- Go versi yang dipin di `go.mod`; dan
+- hostname/domain staging untuk pengujian routing.
 
 ### 15.3 Isolasi dan secret
 
-- Gunakan database lokal yang disposable atau snapshot tersanitasi.
+- Gunakan database disposable atau snapshot tersanitasi.
 - `.env` lokal tidak di-commit.
-- Token Coolify, Cloudflare, SMTP, payment, dan production database tidak boleh
-  dipakai dalam test lokal.
-- Container/volume uji diberi label project agar cleanup tidak menyentuh workload
-  lain.
-- Agent development hanya menerima workload pada namespace/network yang telah
+- Token Cloudflare, SMTP, payment, enrollment, dan database production tidak
+  dipakai pada test lokal.
+- Container, network, dan volume uji diberi label project serta ownership.
+- Cleanup hanya memproses resource yang memiliki label ownership test yang tepat.
+- Agent development hanya menerima workload pada namespace/network yang
   ditentukan.
 
-### 15.4 Developer experience yang ditargetkan
+### 15.4 Developer experience
 
-Repository pada akhirnya menyediakan command terdokumentasi untuk:
+Repository menyediakan command terdokumentasi untuk:
 
 - bootstrap dependency dan database;
-- menjalankan migration dan seed;
+- menjalankan migration serta seed;
 - menjalankan Nuxt dan Go Agent;
-- menjalankan contract, integration, dan end-to-end test; serta
-- membersihkan hanya resource uji yang dimiliki project.
-
-Bootstrap bersih pada workstation/VM baru harus dapat direproduksi tanpa akses
-ke production.
+- melakukan preflight Ubuntu;
+- enroll/revoke node development;
+- menjalankan unit, integration, security, dan end-to-end test; serta
+- membersihkan hanya resource uji milik project.
 
 ## 16. Implementation Plan
 
-### Fase 0 — Stabilkan baseline
+### Fase 0 — Baseline dan guardrail
 
-- Dokumentasikan baseline lint, typecheck, unit test, integration test, dan build.
-- Perbaiki atau karantina secara eksplisit kegagalan baseline existing.
-- Tambahkan fixture database production-like yang tersanitasi.
-- Tetapkan feature flag dan kill switch provider baru.
+- Catat hasil lint, typecheck, unit test, integration test, dan build.
+- Inventarisasi seluruh coupling Coolify pada kode, schema, config, UI, dan test.
+- Ekspor data infrastructure development/staging yang perlu dipertahankan.
+- Tetapkan ownership label, naming convention, feature flag, dan kill switch.
 
-Exit criteria: baseline dapat dibedakan dengan jelas dari regresi baru dan tidak
-ada operasi Docker native yang aktif.
+Exit criteria: baseline dan daftar penghapusan Coolify terdokumentasi; tidak ada
+mutation ke server staging selama cutover disiapkan.
 
-### Fase 1 — Provider seam dan Coolify adapter
+### Fase 1 — Domain dan schema baru
 
-- Definisikan contract, capability, normalized error, dan operation model.
-- Bungkus integrasi Coolify existing sebagai adapter.
-- Tambahkan provider registry.
-- Jalankan contract suite terhadap Coolify adapter.
-- Pertahankan API/UI behavior existing.
+- Definisikan resource, operation, observation, route, volume, node, dan identity.
+- Implementasikan repository serta service tanpa provider abstraction.
+- Tambahkan schema/migration baru dan mapping relasi service.
+- Ganti shared schema dan API contract.
 
-Exit criteria: seluruh jalur existing berjalan melalui seam provider tanpa
-perubahan perilaku teramati.
+Exit criteria: control plane dapat membuat desired state dan operation tanpa
+memuat module atau tipe Coolify.
 
-### Fase 2 — Generic schema dan shadow migration
+### Fase 2 — Go Agent read-only
 
-- Tambah tabel/kolom generic.
-- Implementasikan backfill idempotent.
-- Jalankan shadow read dan reconciliation report.
-- Tambah observability untuk divergence.
+- Buat agent, installer Ubuntu, service `systemd`, enrollment, identity, dan
+  version negotiation.
+- Implementasikan heartbeat, preflight, capacity, dan inventory read-only.
+- Uji reconnect, duplicate delivery, expiry, revocation, dan agent offline.
 
-Exit criteria: data Coolify existing terwakili pada model generic tanpa orphan
-atau perubahan ownership.
+Exit criteria: staging menampilkan node serta inventory Ubuntu dengan status
+stale/offline yang benar dan tanpa izin mutation workload.
 
-### Fase 3 — Coolify parity
+### Fase 3 — Application operations
 
-- Pindahkan provisioning, lifecycle, domain, dan reconciliation satu per satu.
-- Validasi service/billing dan overdue gate.
-- Hapus akses Coolify langsung dari business service; akses tetap ada hanya di
-  adapter.
+- Implementasikan ensure, deploy, start, stop, restart, redeploy, rollback, dan
+  delete sebagai operation terstruktur.
+- Terapkan Compose/BuildKit policy, resource limit, locking, dan secret redaction.
+- Implementasikan reconciliation desired/observed state.
 
-Exit criteria: Coolify memenuhi contract suite dan end-to-end flow existing.
+Exit criteria: satu aplikasi dapat dikelola end-to-end secara idempotent pada
+staging Ubuntu dan pulih dari restart agent/control plane.
 
-### Fase 4 — Go Agent read-only
+### Fase 4 — Domain, Traefik, dan billing gate
 
-- Buat agent skeleton, enrollment, identity, heartbeat, dan version negotiation.
-- Implementasikan inventory read-only dan observed state.
-- Uji reconnect, credential revocation, dan agent offline.
+- Generate route Traefik dari route spec tervalidasi.
+- Integrasikan Cloudflare DNS/tunnel yang masih diperlukan.
+- Hubungkan suspend/unsuspend ke billing gate dan lifecycle operation.
+- Uji TLS, health check, overdue, payment recovery, dan delete guard.
 
-Exit criteria: staging menampilkan node dan inventory tanpa memberi agent izin
-mutasi workload.
+Exit criteria: domain staging aktif dan billing gate bekerja tanpa label,
+endpoint, atau proses Coolify.
 
-### Fase 5 — Docker native staging
+### Fase 5 — Database, storage, backup, dan monitoring
 
-- Implementasikan structured application operations.
-- Tambah Compose/BuildKit policy, resource limit, dan secret redaction.
-- Integrasikan Traefik route, domain, dan health check.
-- Aktifkan mutasi hanya untuk staging node melalui feature flag.
+- Migrasikan shared PostgreSQL provisioning ke resource/operation baru.
+- Implementasikan volume policy, backup, restore, dan verifikasi checksum.
+- Tambahkan metrics backend, dashboard, alert, capacity, dan disk watermark.
 
-Exit criteria: satu aplikasi dapat diprovision dan dikelola end-to-end secara
-idempotent pada staging, termasuk billing gate.
+Exit criteria: capability memiliki test, runbook, alert, backup, dan prosedur
+recovery yang tervalidasi.
 
-### Fase 6 — Database, storage, backup, dan monitoring
+### Fase 6 — Penghapusan Coolify dan release readiness
 
-- Tambah port provider per capability.
-- Implementasikan lifecycle database sesuai prioritas.
-- Tambah volume/backup policy dan verifikasi restore.
-- Integrasikan metrics backend dan alerting yang dipilih.
+- Hapus client, service, route, UI, config, env, fixture, seed, dan test Coolify.
+- Hapus schema legacy setelah backup dan validation report disetujui.
+- Jalankan pencarian repository untuk memastikan tidak ada dependency runtime.
+- Jalankan fresh-install dan upgrade rehearsal pada Ubuntu staging.
+- Susun threat model, incident runbook, dan production proposal terpisah.
 
-Exit criteria: setiap capability memiliki contract test, runbook, dan rollback
-yang tervalidasi.
-
-### Fase 7 — Evaluasi production migration
-
-- Audit hasil staging dan capacity test.
-- Susun mapping workload, maintenance window, backup, dan rollback per customer.
-- Minta persetujuan eksplisit sebelum perubahan production.
-
-Fase ini bukan bagian dari persetujuan PRD awal.
+Exit criteria: branch berjalan penuh secara native pada Ubuntu dan seluruh
+acceptance criteria terpenuhi.
 
 ## 17. Acceptance Criteria MVP
 
 MVP local/staging diterima jika:
 
-1. Coolify dan Docker Agent terdaftar sebagai dua provider dengan capability
-   masing-masing.
-2. Seluruh fitur Coolify existing yang masuk scope melewati contract dan
-   regression test tanpa perubahan hasil bisnis.
-3. Backfill pada database production-like mempertahankan jumlah resource,
-   identifier, service relation, domain relation, dan ownership.
-4. Provisioning Docker native dapat diulang dengan idempotency key yang sama
-   tanpa membuat aplikasi, route, atau job duplikat.
-5. Aplikasi staging dapat deploy, start, stop, restart, menerima limit, dan
-   melaporkan health melalui API/UI yang sama dengan provider legacy.
-6. Domain dan TLS staging berfungsi serta overdue gate dapat memblokir dan
-   memulihkan akses berdasarkan status billing.
-7. Agent offline ditampilkan sebagai unavailable/stale tanpa memutus fungsi
-   invoice, payment, portal, atau metadata.
-8. Tidak ada secret pada log, audit payload, API response, atau UI.
-9. Agent menolak arbitrary shell, privileged container, host path, dan action
-   replay secara default.
-10. Semua operasi mutasi memiliki authorization, audit trail, correlation ID,
-    normalized error, dan bounded retry.
-11. Bootstrap serta test lokal terdokumentasi dan berhasil pada environment
-    bersih.
-12. Tidak ada deployment atau perubahan data/configuration production.
+1. Server staging Ubuntu dapat di-enroll, dicabut, dan di-enroll ulang dengan
+   identity baru tanpa menyisakan credential aktif lama.
+2. Agent melaporkan version, Docker version, capacity, heartbeat, dan inventory.
+3. Provisioning dengan idempotency key yang sama tidak membuat aplikasi, route,
+   volume, atau operation duplikat.
+4. Aplikasi dapat deploy, start, stop, restart, redeploy, menerima limit, dan
+   melaporkan health melalui API/UI.
+5. Desired/observed revision dan drift ditampilkan dengan timestamp yang benar.
+6. Domain dan TLS staging berfungsi; overdue gate dapat memblokir lalu memulihkan
+   akses berdasarkan status billing.
+7. Agent offline ditampilkan sebagai offline/stale tanpa memutus invoice,
+   payment, portal, atau metadata.
+8. Tidak ada secret pada log, audit payload, response API/UI biasa, atau
+   operation error; explicit admin reveal wajib `no-store` dan diaudit tanpa
+   plaintext.
+9. Agent menolak arbitrary shell, privileged container, host network, device,
+   host path, capability berbahaya, command expired, dan replay.
+10. Setiap mutation memiliki authorization, audit trail, correlation ID,
+    normalized error, locking, dan bounded retry.
+11. Delete workload tidak menghapus persistent volume, backup, DNS, atau
+    financial/service metadata tanpa action eksplisit.
+12. Bootstrap dan test berhasil pada environment bersih serta server Ubuntu baru.
+13. Tidak ada import, API call, environment variable aktif, route UI, atau
+    dependency runtime Coolify.
+14. Regression test billing dan dokumen finansial tetap lulus.
+15. Tidak ada deployment atau perubahan data/configuration production.
 
 ## 18. Non-Functional Requirements
 
 ### 18.1 Reliability
 
-- Operasi infrastructure harus idempotent dan resumable.
-- Provider outage tidak boleh merusak state billing.
-- Status stale harus eksplisit; platform tidak boleh menganggap data lama
-  sebagai healthy.
-- Retry menggunakan backoff dan batas attempt yang dapat dikonfigurasi.
+- Operation harus idempotent, resumable, dan memiliki state machine valid.
+- Node outage tidak boleh merusak state billing.
+- Status stale eksplisit dan tidak dianggap healthy.
+- Retry menggunakan exponential backoff, jitter, dan batas attempt.
+- Command acknowledgement serta hasil operation tetap konsisten setelah restart.
 
 ### 18.2 Security
 
-- Credential terenkripsi at rest dan teredaksi in transit/log.
+- Credential terenkripsi at rest dan teredaksi pada transit/log.
 - Machine identity dapat dirotasi dan dicabut.
-- Semua input agent divalidasi dan menggunakan allowlist.
-- Authorization diuji pada level API dan service, tidak hanya UI.
-- Dependency dan container image memiliki vulnerability scanning pada CI.
+- Semua input agent divalidasi dengan schema dan allowlist.
+- Authorization diuji pada API dan service, bukan hanya UI.
+- Image dependency menjalani vulnerability scanning pada CI.
+- Artifact agent memiliki checksum/signature dan provenance build.
 
 ### 18.3 Performance dan capacity
 
-- Target awal adalah server development 4 core, RAM 32 GB, dan SSD.
-- Build concurrency dibatasi satu secara default sampai capacity test selesai.
-- Polling inventory/heartbeat tidak boleh tanpa batas atau memenuhi database.
-- Resource limit dan disk watermark wajib sebelum workload customer diuji.
-- Load test mencakup build bersamaan, reconciliation, billing job, dan request
-  dashboard.
+- Capacity target server dicatat dari hasil preflight, bukan hard-code asumsi.
+- Build concurrency satu secara default sampai capacity test menyatakan aman.
+- Heartbeat dan inventory menggunakan interval, pagination, dan retention yang
+  tidak memenuhi database.
+- CPU/memory limit dan disk watermark wajib sebelum workload customer diuji.
+- Load test mencakup build, reconciliation, billing job, dan request dashboard.
 
 ### 18.4 Maintainability
 
-- Core domain tidak bergantung pada SDK provider.
-- Provider adapter memiliki contract test yang sama.
+- Core billing tidak bergantung pada Docker SDK atau protokol agent.
+- Protocol agent versioned dan memiliki compatibility test.
 - Schema/API change memiliki migration note.
-- Operasi penting memiliki runbook dan failure-mode test.
+- Operation penting memiliki runbook dan failure-mode test.
+- Istilah pada API, UI, schema, dan log konsisten menggunakan node/resource/
+  operation, bukan istilah provider legacy.
 
 ## 19. Testing Strategy
 
 ### 19.1 Unit test
 
-- provider registry, capability resolution, error mapping, policy, dan
-  idempotency;
-- billing invariant dan provider-neutral service lifecycle; serta
-- redaction, authorization, dan state transition.
+- state transition operation, idempotency, locking, retry, dan error mapping;
+- validation spec, policy, ownership, authorization, dan redaction;
+- billing invariant serta service lifecycle; dan
+- reconciliation desired/observed revision.
 
-### 19.2 Contract test
+### 19.2 Protocol/contract test
 
-Suite yang sama dijalankan untuk Coolify dan Docker Agent. Test mencakup
-inventory, ensure, deploy, lifecycle, limit, unsupported capability, conflict,
-unavailable provider, dan retry semantics.
+Suite control plane–agent mencakup version negotiation, inventory, ensure,
+deploy, lifecycle, limit, invalid spec, duplicate delivery, conflict, timeout,
+unavailable node, expiry, replay, dan retry semantics.
 
 ### 19.3 Database migration test
 
-- Jalankan seluruh migration dari database kosong.
+- Jalankan migration dari database kosong.
 - Jalankan upgrade dari snapshot schema/data existing yang tersanitasi.
-- Verifikasi count, UUID/external ID, orphan, uniqueness, dan foreign key.
+- Verifikasi count, UUID, relasi service/domain, orphan, uniqueness, dan FK.
 - Ulangi backfill untuk membuktikan idempotency.
-- Uji rollback aplikasi dengan schema additive tetap terpasang.
+- Uji rollback aplikasi dengan backup schema/data tersedia.
 
 ### 19.4 Integration test
 
 - PostgreSQL nyata, bukan hanya mock.
-- Coolify API fake/sandbox dengan response dan failure realistis.
-- Docker Engine/Compose/BuildKit pada environment terisolasi.
+- Docker Engine, Compose, dan BuildKit pada VM/runner Ubuntu terisolasi.
 - Traefik route, Cloudflare sandbox/mock, dan overdue ForwardAuth.
-- Agent enrollment, reconnect, expiry, revocation, dan version mismatch.
+- Enrollment, reconnect, expiry, revocation, dan version mismatch.
+- Persistent volume, backup, restore, serta cleanup ownership.
 
 ### 19.5 End-to-end staging
 
 - Buat customer, plan, service, resource, dan domain.
-- Provision dan deploy aplikasi.
-- Verifikasi health, route, TLS, log redaction, dan audit.
+- Provision dan deploy aplikasi pada Ubuntu.
+- Verifikasi health, route, TLS, log redaction, resource limit, dan audit.
 - Simulasikan overdue, block, payment/recovery, dan unsuspend.
-- Simulasikan agent/provider offline pada setiap langkah penting.
+- Simulasikan agent offline/restart pada setiap langkah penting.
+- Hapus workload dan buktikan data persisten yang dilindungi tetap ada.
 
 ### 19.6 Failure injection dan security test
 
@@ -680,88 +708,92 @@ unavailable provider, dan retry semantics.
   image pull failure, build failure, dan database restart;
 - forged/replayed command, expired identity, unauthorized node, malicious Compose
   option, secret leakage, dan cross-customer access; serta
-- recovery setelah control plane atau agent restart di tengah operasi.
+- recovery setelah control plane atau agent restart di tengah operation.
 
 ## 20. Release dan Rollback Strategy
 
-- Semua provider baru dimulai dengan feature flag off.
-- Enrollment agent, read-only inventory, dan mutation memiliki flag terpisah.
-- Cutover dilakukan per capability dan per environment, bukan global.
-- Shadow read berjalan sebelum dual-write atau mutasi.
-- Kill switch menghentikan command baru tanpa menghapus workload yang sudah ada.
-- Rollback aplikasi kembali ke Coolify adapter/model legacy selama masa
-  coexistence.
-- Rollback tidak otomatis menghapus container, volume, DNS, atau data customer.
-- Setiap cutover staging membutuhkan backup, validation report, dan runbook.
+- Enrollment, inventory, mutation, routing, dan delete memiliki flag terpisah.
+- Mutation staging dimulai dalam mode deny-by-default.
+- Kill switch menghentikan command baru tanpa menghapus workload aktif.
+- Rollback control plane/agent menggunakan versi protocol yang kompatibel.
+- Rollback tidak otomatis menghapus container, volume, DNS, backup, atau data.
+- Sebelum schema legacy dihapus, simpan backup dan validation report.
+- Rollback ke Coolify bukan strategi yang didukung; recovery menggunakan versi
+  terakhir control plane/agent native yang tervalidasi.
+- Setiap release staging membutuhkan backup, smoke test, dan runbook.
 
 ## 21. Risiko dan Mitigasi
 
 | Risiko | Dampak | Mitigasi |
 | --- | --- | --- |
-| Dual control Coolify dan Agent | State berkonflik atau workload rusak | Provider ownership immutable, lock per resource, migration workflow eksplisit |
-| Retry membuat resource duplikat | Biaya dan route konflik | Idempotency key, external ID unik, reconciliation |
-| Kegagalan parsial provisioning | Service menggantung | Operation state machine, compensation terbatas, runbook manual |
-| Akses Docker socket | Eskalasi ke host | Socket hanya untuk agent, allowlist action, sandbox/policy, audit |
-| Secret bocor | Kompromi customer/provider | Encryption, reference, redaction test, log policy |
-| Host 4-core kehabisan resource | Control plane tidak responsif | Limit, build concurrency, queue, disk watermark, capacity test |
-| Migrasi FK/data keliru | Relasi billing/resource putus | Additive schema, backfill report, production-like migration test |
-| Agent offline/NAT tidak stabil | Operasi tertunda | Outbound connection, durable queue, expiry, stale state, retry bounds |
-| Perbedaan capability provider | UX tidak konsisten | Capability-driven UI/API dan explicit unsupported response |
-| Gate/domain ikut berubah | Customer salah blokir/terbuka | Provider-neutral gate contract dan E2E overdue test |
+| Agent memiliki akses Docker | Kompromi agent dapat menguasai host | Dedicated user/service, credential rotation, policy, audit, host hardening, threat model |
+| Retry membuat resource duplikat | Konflik route dan pemborosan resource | Idempotency key, stable ID, unique constraint, reconciliation |
+| Kegagalan parsial provisioning | Service menggantung | Operation state machine, checkpoint, bounded compensation, runbook |
+| Clean break kehilangan mapping lama | Service/domain salah terhubung | Export, explicit mapping, validation report, rehearsal staging |
+| Secret bocor | Kompromi customer/node | Encryption, reference/envelope, redaction test, log policy |
+| Host kehabisan CPU/RAM/disk | Control plane/workload tidak responsif | Limit, queue, build concurrency, watermark, capacity test |
+| Agent offline atau koneksi tidak stabil | Operation tertunda | Outbound connection, durable queue, expiry, stale state, backoff |
+| Spec Compose berbahaya | Eskalasi privilege host | Schema ketat, denylist + allowlist, no raw arbitrary Compose for customer |
+| Gate/domain salah konfigurasi | Customer salah blokir atau terbuka | Provider-independent gate contract, health check, E2E overdue test |
+| Single-node failure | Semua workload staging berhenti | Backup, restore rehearsal, documented RTO/RPO; HA di fase berikutnya |
 
 ## 22. Observability dan Operasional
 
-Minimal telemetry yang diperlukan:
+Telemetry minimum:
 
-- correlation ID dari API hingga provider operation/agent;
+- correlation ID dari API hingga operation dan log agent;
 - jumlah operation per status, durasi, retry, dan terminal error;
-- provider health, node heartbeat age, queue depth, dan reconciliation drift;
-- build/deploy result dan resource utilization ringkas;
-- audit event untuk perubahan configuration dan privilege; serta
-- alert untuk agent offline, operation stuck, disk watermark, dan repeated
-  reconciliation failure.
+- node health, heartbeat age, queue depth, dan reconciliation drift;
+- build/deploy result, CPU, memory, disk, dan network ringkas;
+- audit event perubahan configuration, identity, dan privilege; serta
+- alert agent offline, operation stuck, disk watermark, backup gagal, dan
+  reconciliation failure berulang.
 
-Log harus structured, memiliki environment/provider/node/resource identifier,
-dan tidak mengandung secret.
+Log harus structured, memiliki environment/node/resource/operation identifier,
+memiliki retention, dan tidak mengandung secret.
 
 ## 23. Deliverables
 
-- ADR batas domain dan `InfrastructureProvider`;
-- provider contract dan shared contract test suite;
-- Coolify adapter dengan parity existing;
-- generic database schema, migration, backfill, dan validation report;
-- Go Agent dengan enrollment, heartbeat, inventory, dan structured operations;
-- Docker native adapter untuk staging;
-- local development guide dan staging runbook;
-- security threat model dan secret-handling policy;
-- monitoring dashboard/alerts minimum; serta
-- rollback dan incident runbook.
+- ADR arsitektur Ubuntu-only dan batas control plane–agent;
+- schema data, migration, mapping, backup, dan validation report;
+- versioned agent protocol dan contract test suite;
+- Go Agent, installer Ubuntu, unit `systemd`, preflight, dan upgrade/rollback;
+- infrastructure API/service/UI tanpa dependency Coolify;
+- application, domain, database, storage, backup, dan monitoring flow;
+- local development guide dan Ubuntu staging runbook;
+- threat model, secret-handling policy, dan host-hardening checklist;
+- dashboard/alert minimum; serta
+- recovery dan incident runbook.
 
 ## 24. Keputusan yang Masih Terbuka
 
-Keputusan berikut harus diselesaikan melalui ADR sebelum capability terkait
-diimplementasikan:
+Keputusan berikut diselesaikan melalui ADR sebelum capability terkait aktif:
 
-1. Transport agent: long polling, WebSocket/gRPC stream, atau kombinasi.
-2. PKI/secret backend untuk machine identity dan provider credential.
-3. Registry serta policy sumber image/build context.
-4. Network isolation antar customer pada Docker host.
-5. Backend metrics dan log retention.
-6. Backend object storage serta retention/restore backup.
-7. Strategi shared versus dedicated database untuk fase lanjutan.
-8. Batas tindakan lifecycle yang boleh dilakukan customer.
+1. versi minimum Ubuntu Server yang didukung;
+2. evolusi transport setelah MVP: long polling, WebSocket/gRPC stream, atau
+   kombinasi; MVP short polling HTTPS telah diputuskan dalam ADR-001;
+3. PKI dan secret backend untuk machine identity serta application secret;
+4. registry dan policy sumber image/build context;
+5. network isolation antar customer pada Docker host;
+6. metrics backend dan log retention;
+7. object storage, retention, encryption, dan restore policy backup;
+8. topology shared cluster untuk produksi (HA, connection pooling, quota, dan
+   backup); default isolasi logical database/user per service sudah diputuskan;
+   dan
+9. batas tindakan lifecycle yang boleh dilakukan customer.
 
-Default sementara: outbound agent connection, deny-by-default capability,
-staging-only credentials, dan tidak ada production cutover.
+Default sementara: outbound agent connection, deny-by-default, satu staging node
+Ubuntu, build concurrency satu, credential staging-only, dan tidak ada production
+cutover.
 
 ## 25. Approval Gates
 
-Pekerjaan hanya maju ke fase berikutnya setelah artefak fase berjalan direview.
-Secara khusus:
+Pekerjaan maju setelah artefak fase berjalan direview. Secara khusus:
 
 - PRD dan ADR disetujui sebelum refactor besar;
-- Coolify parity disetujui sebelum agent memperoleh write capability;
-- migration validation disetujui sebelum dual-write;
-- security review disetujui sebelum staging mutation; dan
-- production membutuhkan proposal, backup, maintenance window, rollback, serta
-  persetujuan terpisah.
+- schema dan backup plan disetujui sebelum clean-break migration staging;
+- threat model disetujui sebelum agent memperoleh write capability;
+- route/TLS/billing gate test lulus sebelum workload staging dibuka;
+- backup dan restore rehearsal lulus sebelum data persisten dipakai; dan
+- production membutuhkan proposal, inventory, backup, maintenance window,
+  rollback/recovery plan, serta persetujuan terpisah.

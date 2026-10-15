@@ -51,13 +51,13 @@ const databaseCompatibilityError = computed(() => {
     selectedBlueprint.value.databaseClusterId &&
     selectedService.value.databaseMode !== 'shared'
   ) {
-    return 'Blueprint memakai database shared, tetapi service belum memakai plan dengan mode database shared.'
+    return 'Template memakai database shared, tetapi service belum memakai plan dengan mode database shared.'
   }
   if (
     selectedService.value.databaseMode === 'shared' &&
     !selectedBlueprint.value.databaseClusterId
   ) {
-    return 'Service memakai database shared, tetapi blueprint belum memiliki database cluster.'
+    return 'Service memakai database shared, tetapi template belum memiliki database cluster.'
   }
   return null
 })
@@ -220,8 +220,8 @@ function resourceStatusTone(status: ApiProvisioningJob['resourceStatus']) {
         </p>
         <h1 class="text-2xl font-semibold tracking-tight text-ink">Deployment Provisioning</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">
-          Buat aplikasi Coolify dari blueprint, terapkan environment dan domain, lalu pantau health
-          serta SSL sampai aktif.
+          Buat aplikasi dari template, terapkan environment dan domain, lalu pantau health serta SSL
+          sampai aktif.
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -230,11 +230,11 @@ function resourceStatusTone(status: ApiProvisioningJob['resourceStatus']) {
           Refresh
         </UiButton>
         <NuxtLink
-          to="/blueprints"
+          to="/templates"
           class="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line-strong bg-surface-raised px-4 text-sm font-semibold text-ink transition hover:border-muted hover:bg-[#1a222d]"
         >
           <FileCode2 :size="15" />
-          Kelola blueprint
+          Kelola template
         </NuxtLink>
         <UiButton @click="openJobDialog">
           <Rocket :size="15" />
@@ -275,13 +275,13 @@ function resourceStatusTone(status: ApiProvisioningJob['resourceStatus']) {
       </p>
       <form class="grid gap-4 md:grid-cols-2" @submit.prevent="queueJob">
         <label class="block">
-          <span class="mb-2 block text-xs font-semibold text-muted">Blueprint</span>
+          <span class="mb-2 block text-xs font-semibold text-muted">Template</span>
           <select
             v-model="jobForm.blueprintId"
             class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
             required
           >
-            <option value="" disabled>Pilih blueprint</option>
+            <option value="" disabled>Pilih template</option>
             <option
               v-for="blueprint in data?.blueprints.filter((item) => item.isActive)"
               :key="blueprint.id"
@@ -386,7 +386,7 @@ function resourceStatusTone(status: ApiProvisioningJob['resourceStatus']) {
     <UiCard v-else-if="!data?.jobs.length" :padded="false">
       <UiEmptyState
         title="Belum ada provisioning job"
-        description="Buat blueprint lalu provision aplikasi pertama."
+        description="Buat template lalu provision aplikasi pertama."
       />
     </UiCard>
     <div v-else class="space-y-4">

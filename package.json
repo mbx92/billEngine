@@ -1,6 +1,6 @@
 {
-  "name": "coolify-billing-platform",
-  "version": "1.0.0",
+  "name": "oc-infrastructure-platform",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -19,8 +19,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "agent:test": "cd agent && go test ./...",
+    "agent:build:linux": "node scripts/build-agent.mjs",
+    "agent:build:linux:all": "node scripts/build-agent.mjs --all",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check",
+    "db:check:infra": "node --env-file-if-exists=.env scripts/check-infrastructure-db.mjs",
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:deploy": "drizzle-kit migrate",
     "db:backup": "node --env-file-if-exists=.env scripts/backup-database.mjs",

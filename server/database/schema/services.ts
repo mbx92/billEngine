@@ -19,6 +19,11 @@ import { users } from './auth'
 import { coolifyResources } from './coolify'
 import { customers } from './customers'
 import { billingCycle, serviceStatus } from './enums'
+import {
+  infrastructureDatabaseClusters,
+  infrastructureOperations,
+  infrastructureResources,
+} from './infrastructure'
 import type { DatabaseMode } from './provisioning'
 
 export const plans = pgTable(
@@ -131,6 +136,10 @@ export const serviceResources = pgTable(
     resourceId: uuid('resource_id')
       .notNull()
       .references(() => coolifyResources.id, { onDelete: 'restrict' }),
+    infrastructureResourceId: uuid('infrastructure_resource_id').references(
+      () => infrastructureResources.id,
+      { onDelete: 'restrict' },
+    ),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   },
@@ -138,5 +147,70 @@ export const serviceResources = pgTable(
     uniqueIndex('service_resources_service_resource_uidx').on(table.serviceId, table.resourceId),
     index('service_resources_service_id_idx').on(table.serviceId),
     index('service_resources_resource_id_idx').on(table.resourceId),
+    index('service_resources_infrastructure_resource_id_idx').on(table.infrastructureResourceId),
+  ],
+)
+
+export type NativeServiceDatabaseStatus =
+  'provisioning' | 'active' | 'failed' | 'pending_deletion' | 'deleted'
+
+export const infrastructureServiceDatabases = pgTable(
+  'infrastructure_service_databases',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    serviceId: uuid('service_id')
+      .notNull()
+      .references(() => services.id, { onDelete: 'restrict' }),
+    databaseClusterId: uuid('database_cluster_id')
+      .notNull()
+      .references(() => infrastructureDatabaseClusters.id, { onDelete: 'restrict' }),
+    applicationResourceId: uuid('application_resource_id')
+      .notNull()
+      .references(() => infrastructureResources.id, { onDelete: 'restrict' }),
+    provisioningOperationId: uuid('provisioning_operation_id').references(
+      () => infrastructureOperations.id,
+      { onDelete: 'set null' },
+    ),
+    redeployOperationId: uuid('redeploy_operation_id').references(
+      () => infrastructureOperations.id,
+      { onDelete: 'set null' },
+    ),
+    databaseName: varchar('database_name', { length: 63 }).notNull(),
+    roleName: varchar('role_name', { length: 63 }).notNull(),
+    passwordEncrypted: text('password_encrypted').notNull(),
+    connectionUriEncrypted: text('connection_uri_encrypted').notNull(),
+    environmentKey: varchar('environment_key', { length: 255 }).notNull().default('DATABASE_URL'),
+    status: varchar('status', { length: 32 })
+      .$type<NativeServiceDatabaseStatus>()
+      .notNull()
+      .default('provisioning'),
+    lastError: text('last_error'),
+    provisionedAt: timestamp('provisioned_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('infrastructure_service_databases_active_service_uidx')
+      .on(table.serviceId)
+      .where(sql`${table.deletedAt} is null`),
+    uniqueIndex('infrastructure_service_databases_active_application_uidx')
+      .on(table.applicationResourceId)
+      .where(sql`${table.deletedAt} is null`),
+    uniqueIndex('infrastructure_service_databases_cluster_database_uidx').on(
+      table.databaseClusterId,
+      table.databaseName,
+    ),
+    uniqueIndex('infrastructure_service_databases_cluster_role_uidx').on(
+      table.databaseClusterId,
+      table.roleName,
+    ),
+    index('infrastructure_service_databases_cluster_id_idx').on(table.databaseClusterId),
+    index('infrastructure_service_databases_status_idx').on(table.status),
+    check(
+      'infrastructure_service_databases_status_check',
+      sql`${table.status} in ('provisioning', 'active', 'failed', 'pending_deletion', 'deleted')`,
+    ),
   ],
 )
