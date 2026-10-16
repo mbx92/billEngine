@@ -28,6 +28,17 @@ type Capacity struct {
 	DiskBytes   string `json:"diskBytes"`
 }
 
+func DetectCapabilities(ctx context.Context) []string {
+	capabilities := []string{"container-runtime"}
+	if _, err := commandVersion(ctx, runCommand, "git", "--version"); err != nil {
+		return capabilities
+	}
+	if _, err := commandVersion(ctx, runCommand, "docker", "buildx", "version"); err == nil {
+		capabilities = append(capabilities, "image-build")
+	}
+	return capabilities
+}
+
 func Inspect(ctx context.Context) (HostInfo, error) {
 	osRelease, err := os.ReadFile("/etc/os-release")
 	if err != nil {

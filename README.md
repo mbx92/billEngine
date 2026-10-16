@@ -13,11 +13,19 @@ cp .env.example .env
 npm install
 npm run dev:db
 npm run db:migrate
+npm run db:seed
 ADMIN_EMAIL=admin@example.test ADMIN_PASSWORD='replace-with-a-long-password' npm run db:create-admin
 npm run dev
 ```
 
 The application runs at `http://localhost:3000`; PostgreSQL binds only to `127.0.0.1:5432`.
+
+The development seed creates three customers, three plans, and three instances of the same
+Customer Status Demo application: normal/running, invoice grace period, and suspended. It also
+adds simulated application, release, resource, route, and deployment records so the complete
+relationship can be inspected without an Ubuntu agent. The placeholder registry is deliberately
+inactive and cannot be used for a real deployment. The demo application source lives in
+[`examples/customer-demo-app`](examples/customer-demo-app).
 
 Application runtime configuration uses `NUXT_*` variables, including in
 production containers. `BETTER_AUTH_TRUSTED_ORIGINS` remains unprefixed because
@@ -43,6 +51,9 @@ npm run test:e2e
 ## Application deployments
 
 GitHub Actions publishes an immutable container image and registers it as an Application Release.
+Alternatively, an OC Agent `0.11.0+` enrolled with the `builder` role can clone a public HTTPS
+GitHub repository, build it through an isolated Docker Buildx worker, push it to the configured OCI
+registry, and register the resulting digest without consuming GitHub Actions minutes.
 The **Infrastructure → Templates** page deploys that release to an enrolled Ubuntu server. The
 **Infrastructure → Deployments** page shows the resulting operation queue and execution history,
 while **Resources** shows the desired and last-observed runtime state.
@@ -55,6 +66,12 @@ for remotely managed Cloudflare Tunnels. See
 
 Do not use a production database for local development. Registry tokens, auth secrets, and database
 credentials must remain in server-side environment variables.
+
+OC Agent `0.8.0+` can receive verified remote upgrade and rollback operations from
+**Infrastructure → Nodes**. Existing nodes need to rerun the installer once to bootstrap the
+root-owned systemd updater; subsequent releases do not require SSH access. The updater retains the
+previous compatible binary and restores it automatically when the new version does not report a
+healthy heartbeat.
 
 ## Production deployment
 
@@ -128,7 +145,8 @@ always requires explicit admin confirmation.
 ## Monitoring and backups
 
 `/api/metrics` exposes Prometheus text metrics for invoice/service status,
-failed jobs, failed email deliveries, and PostgreSQL pool state. Protect it in
+failed jobs, failed email deliveries, PostgreSQL pool state, node heartbeat age,
+CPU/RAM/root-disk utilization, and stuck infrastructure operations. Protect it in
 production with `NUXT_METRICS_TOKEN` and send `Authorization: Bearer <token>`
 from the scraper.
 
@@ -149,5 +167,17 @@ Schedule that container externally, copy the
 backup off-host, and regularly test restoration with `pg_restore` against a
 non-production database. Backup creation fails rather than deleting unrelated
 files; retention only removes older `billengine-*.dump` files in `BACKUP_DIR`.
+
+The command above protects the Billing metadata database. PostgreSQL databases
+allocated to deployed workloads use **Infrastructure → Database Clusters** instead:
+OC Agent 0.10.0+ creates a custom-format dump under
+`/var/lib/oc-agent/backups/<allocation-id>/`, verifies it with `pg_restore --list`,
+and records its SHA-256 and size in the control plane. Restore is an explicit,
+audited operation and is never applied to the Billing metadata database.
+
+Scheduled workload backups are configured from **Infrastructure → Backups**.
+Policies upload directly from the node to an S3-compatible target (AWS S3,
+Cloudflare R2, or MinIO), retain the configured number of successful artifacts,
+and optionally deliver failure alerts through the configured Resend account.
 
 Architecture and product decisions live in [`docs/`](./docs/).

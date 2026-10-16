@@ -15,8 +15,25 @@ Versi ini mengeksekusi aplikasi berbasis image untuk operasi ensure, start,
 stop, restart, redeploy, dan delete. Setelah enrollment, control plane otomatis
 mengantrekan `gateway.ensure`; agent menjalankan satu container Traefik bernama
 `oc-gateway` pada network `oc-private`, tanpa membuka dashboard administrasi.
-Build source dan backup belum diaktifkan; operation terkait masih ditolak
-sebagai `unsupported`.
+Agent `0.8.0+` mendukung upgrade dan rollback terstruktur melalui helper systemd
+root yang terpisah. Agent `0.10.0+` menambahkan backup dan restore PostgreSQL
+workload milik OC serta snapshot CPU, RAM, dan root disk pada heartbeat. Dump
+workload disimpan dengan permission `0600` di
+`/var/lib/oc-agent/backups/<allocation-id>/` dan diverifikasi sebelum dilaporkan
+berhasil.
+
+Agent `0.11.0+` mendukung role `builder`. Pilih role **Image builder** ketika membuat enrollment
+token dan pastikan `git` serta plugin `docker buildx` tersedia. Builder melaporkan capability
+`image-build`, membuat workspace sementara di `/var/lib/oc-agent/builds`, lalu mendorong image dan
+cache BuildKit ke registry Application. Builder murni tidak memasang Traefik dan tidak menerima
+deployment workload.
+
+Untuk scheduled backup, agent mengunggah dump langsung ke endpoint S3-compatible
+dengan AWS Signature V4. Access key dan secret key dienkripsi di control plane,
+hanya dikirim ketika operation aktif, dan tidak disimpan dalam payload operation
+atau audit log. Restore mengunduh kembali artifact jika cache lokal node sudah
+tidak tersedia. Retention menghapus object dan cache lokal melalui operation
+terpisah yang tetap diaudit.
 
 ## Build
 
@@ -27,6 +44,9 @@ sha256sum dist/oc-agent-linux-amd64
 
 Gunakan `OC_AGENT_ARCH=arm64 npm run agent:build:linux` untuk server ARM.
 Checksum artifact harus dicatat pada release.
+Versi binary bersumber dari `agent/internal/version/VERSION`; build script juga
+membuat `dist/oc-agent-manifest.json` berisi version, ukuran, dan SHA-256 yang
+divalidasi control plane sebelum operation update dibuat.
 
 Untuk menyediakan installer bagi kedua arsitektur dari control plane, jalankan:
 
@@ -49,6 +69,7 @@ Content-Type: application/json
 {
   "nodeName": "staging-01",
   "environment": "staging",
+  "role": "deployment",
   "expiresInMinutes": 30,
   "labels": { "region": "id-bali" }
 }
@@ -205,18 +226,41 @@ private `oc-private`; MVP membatasi keduanya pada node yang sama.
 
 ## Upgrade agent
 
-Setelah binary baru dibangun di control plane, jalankan ulang command installer
-yang sama pada node. Installer mendeteksi identity yang sudah ada, mengunduh dan
-memverifikasi binary terbaru, lalu me-restart service tanpa meminta enrollment
-token baru:
+Node yang masih menggunakan agent sebelum `0.8.0` harus menjalankan ulang
+installer satu kali. Langkah bootstrap ini memasang `oc-agent-update.path`,
+`oc-agent-update.service`, dan helper root tanpa mengganti identity node:
 
 ```bash
 curl -fsSL 'http://10.5.80.141:3000/install/oc-agent.sh' | \
   sudo bash -s -- --url 'http://10.5.80.141:3000' --allow-insecure-http
 ```
 
-Upgrade melalui tombol control plane dan rollback otomatis belum tersedia pada
-versi ini.
+Setelah bootstrap, versi berikutnya dapat dipasang dari tombol **Update agent**
+pada halaman **Infrastructure → Nodes**. Alurnya:
+
+1. control plane menghitung SHA-256 artifact sesuai arsitektur node;
+2. agent mengunduh artifact melalui koneksi control plane yang sudah
+   terautentikasi, memverifikasi ukuran, checksum, arsitektur, dan output
+   `--version`;
+3. agent menaruh binary di `/var/lib/oc-agent/update` dan membuat request untuk
+   helper systemd;
+4. helper root menyimpan binary aktif sebagai `/usr/local/bin/oc-agent.previous`,
+   mengganti binary secara atomik, dan menyalakan ulang service; dan
+5. jika versi baru tidak mengirim heartbeat sehat dalam 75 detik, helper
+   otomatis mengembalikan binary sebelumnya.
+
+Rollback manual tersedia setelah setidaknya satu upgrade remote berhasil.
+Operation upgrade/rollback tetap `running` sampai agent hasil update melaporkan
+hasilnya. Pantau hasil pada halaman **Infrastructure → Deployments**.
+
+Sebelum mengantrekan update, artifact kedua arsitektur harus tersedia:
+
+```bash
+npm run agent:build:linux:all
+```
+
+Untuk deployment container, stage `agent-builder` pada `Dockerfile` sudah
+memasukkan kedua artifact tersebut ke direktori `dist` image control plane.
 
 ## Revocation
 

@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+state_directory=/var/lib/oc-agent/update
+request_file="${state_directory}/request"
+next_binary="${state_directory}/oc-agent.next"
+health_file="${state_directory}/healthy"
+result_file="${state_directory}/result.json"
+current_binary=/usr/local/bin/oc-agent
+previous_binary=/usr/local/bin/oc-agent.previous
+current_backup="${state_directory}/current.backup"
+previous_backup="${state_directory}/previous.backup"
+
+[[ -f "${request_file}" ]] || exit 0
+
+read_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "${request_file}" | head -n 1
+}
+
+operation_id="$(read_value operation_id)"
+mode="$(read_value mode)"
+target_version="$(read_value target_version)"
+
+if [[ ! "${operation_id}" =~ ^[a-f0-9-]{36}$ ]] ||
+  [[ ! "${mode}" =~ ^(upgrade|rollback)$ ]] ||
+  [[ ! "${target_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  rm -f -- "${request_file}"
+  exit 1
+fi
+
+binary_version() {
+  "$1" --version 2>/dev/null | tr -d '\r\n'
+}
+
+write_result() {
+  local status="$1"
+  local previous_version="$2"
+  local current_version="$3"
+  local error_code="$4"
+  local error_message="$5"
+  local temporary
+  temporary="$(mktemp "${state_directory}/result.XXXXXX")"
+  printf '{"operationId":"%s","status":"%s","previousVersion":"%s","currentVersion":"%s","errorCode":"%s","errorMessage":"%s"}\n' \
+    "${operation_id}" "${status}" "${previous_version}" "${current_version}" \
+    "${error_code}" "${error_message}" >"${temporary}"
+  chown oc-agent:oc-agent "${temporary}"
+  chmod 0600 "${temporary}"
+  mv -f -- "${temporary}" "${result_file}"
+}
+
+restore_originals() {
+  if [[ -x "${current_backup}" ]]; then
+    install -m 0755 -o root -g root "${current_backup}" "${current_binary}.restore"
+    mv -f -- "${current_binary}.restore" "${current_binary}"
+  fi
+  if [[ -x "${previous_backup}" ]]; then
+    install -m 0755 -o root -g root "${previous_backup}" "${previous_binary}.restore"
+    mv -f -- "${previous_binary}.restore" "${previous_binary}"
+  else
+    rm -f -- "${previous_binary}"
+  fi
+}
+
+rm -f -- "${request_file}" "${health_file}" "${result_file}" \
+  "${current_backup}" "${previous_backup}"
+
+if [[ ! -x "${current_binary}" ]]; then
+  write_result failed "" "" agent_update_failed "current agent binary is missing"
+  exit 1
+fi
+
+original_version="$(binary_version "${current_binary}")"
+install -m 0755 -o root -g root "${current_binary}" "${current_backup}"
+if [[ -x "${previous_binary}" ]]; then
+  install -m 0755 -o root -g root "${previous_binary}" "${previous_backup}"
+fi
+
+apply_succeeded=true
+systemctl stop oc-agent || apply_succeeded=false
+
+if [[ "${mode}" == "upgrade" ]]; then
+  if [[ ! -x "${next_binary}" ]] || [[ "$(binary_version "${next_binary}" || true)" != "${target_version}" ]]; then
+    apply_succeeded=false
+  elif ! install -m 0755 -o root -g root "${next_binary}" "${current_binary}.new"; then
+    apply_succeeded=false
+  elif ! install -m 0755 -o root -g root "${current_backup}" "${previous_binary}.new"; then
+    apply_succeeded=false
+  else
+    mv -f -- "${previous_binary}.new" "${previous_binary}"
+    mv -f -- "${current_binary}.new" "${current_binary}"
+    rm -f -- "${next_binary}"
+  fi
+else
+  if [[ ! -x "${previous_binary}" ]] || [[ "$(binary_version "${previous_binary}" || true)" != "${target_version}" ]]; then
+    apply_succeeded=false
+  elif ! install -m 0755 -o root -g root "${previous_binary}" "${current_binary}.new"; then
+    apply_succeeded=false
+  elif ! install -m 0755 -o root -g root "${current_backup}" "${previous_binary}.new"; then
+    apply_succeeded=false
+  else
+    mv -f -- "${previous_binary}.new" "${previous_binary}"
+    mv -f -- "${current_binary}.new" "${current_binary}"
+  fi
+fi
+
+if [[ "${apply_succeeded}" != "true" ]]; then
+  restore_originals
+  systemctl start oc-agent || true
+  restored_previous="$(binary_version "${previous_binary}" 2>/dev/null || true)"
+  write_result failed "${restored_previous}" "${original_version}" agent_update_failed "agent binary could not be replaced"
+  rm -f -- "${current_backup}" "${previous_backup}"
+  exit 1
+fi
+
+systemctl start oc-agent || true
+healthy=false
+for _ in $(seq 1 75); do
+  if [[ -f "${health_file}" ]] && [[ "$(tr -d '\r\n' <"${health_file}")" == "${target_version}" ]]; then
+    healthy=true
+    break
+  fi
+  sleep 1
+done
+
+if [[ "${healthy}" == "true" ]]; then
+  previous_version="$(binary_version "${previous_binary}" 2>/dev/null || true)"
+  write_result succeeded "${previous_version}" "${target_version}" "" ""
+  rm -f -- "${current_backup}" "${previous_backup}"
+  exit 0
+fi
+
+systemctl stop oc-agent || true
+restore_originals
+systemctl start oc-agent || true
+restored_previous="$(binary_version "${previous_binary}" 2>/dev/null || true)"
+write_result failed "${restored_previous}" "${original_version}" agent_healthcheck_failed "new agent did not report a healthy heartbeat; previous binary restored"
+rm -f -- "${current_backup}" "${previous_backup}" "${health_file}"
+exit 1

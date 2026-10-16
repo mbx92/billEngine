@@ -79,8 +79,11 @@ export default defineNuxtConfig({
     infraCredentialsKey: developmentEnv.INFRA_CREDENTIALS_KEY || '',
     releaseWebhookSecret: developmentEnv.RELEASE_WEBHOOK_SECRET || '',
     agentArtifactDirectory: developmentEnv.AGENT_ARTIFACT_DIRECTORY || 'dist',
-    infrastructureGatewayImage:
-      developmentEnv.INFRASTRUCTURE_GATEWAY_IMAGE || 'traefik:v3.7.14',
+    agentReleaseVersion: developmentEnv.AGENT_RELEASE_VERSION || '0.11.0',
+    nodeDiskWarningPercent: developmentEnv.NODE_DISK_WARNING_PERCENT || '80',
+    nodeDiskCriticalPercent: developmentEnv.NODE_DISK_CRITICAL_PERCENT || '90',
+    operationStuckMinutes: developmentEnv.OPERATION_STUCK_MINUTES || '15',
+    infrastructureGatewayImage: developmentEnv.INFRASTRUCTURE_GATEWAY_IMAGE || 'traefik:v3.7.14',
     cloudflareApiToken: developmentEnv.CLOUDFLARE_API_TOKEN || '',
     cloudflareZoneId: developmentEnv.CLOUDFLARE_ZONE_ID || '',
     cloudflareAccountId: developmentEnv.CLOUDFLARE_ACCOUNT_ID || '',

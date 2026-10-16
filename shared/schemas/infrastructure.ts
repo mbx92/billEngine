@@ -1,7 +1,10 @@
 import { z } from 'zod'
 
 export const NODE_ENVIRONMENTS = ['development', 'staging', 'production'] as const
+export const NODE_ROLES = ['deployment', 'builder', 'hybrid'] as const
 export const INFRASTRUCTURE_ACTIONS = [
+  'agent.upgrade',
+  'agent.rollback',
   'gateway.ensure',
   'application.ensure',
   'application.deploy',
@@ -11,8 +14,12 @@ export const INFRASTRUCTURE_ACTIONS = [
   'application.redeploy',
   'application.delete',
   'application.set-limits',
+  'application.build',
   'database.cluster.activate',
   'database.service.ensure',
+  'database.backup.create',
+  'database.backup.restore',
+  'database.backup.delete',
   'route.configure',
   'route.delete',
 ] as const
@@ -28,6 +35,7 @@ const environmentKeySchema = z
 export const createNodeEnrollmentSchema = z.object({
   nodeName: z.string().trim().min(1).max(160),
   environment: z.enum(NODE_ENVIRONMENTS).default('staging'),
+  role: z.enum(NODE_ROLES).optional(),
   expiresInMinutes: z.number().int().min(5).max(1440).default(30),
   labels: labelsSchema.default({}),
 })
@@ -40,6 +48,7 @@ export const enrollNodeSchema = z.object({
   architecture: z.string().trim().min(1).max(32),
   dockerVersion: z.string().trim().min(1).max(64),
   composeVersion: z.string().trim().min(1).max(64),
+  capabilities: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
 })
 
 export const nodeCapacitySchema = z.object({
@@ -55,7 +64,21 @@ export const agentHeartbeatSchema = z.object({
   architecture: z.string().trim().min(1).max(32),
   dockerVersion: z.string().trim().min(1).max(64),
   composeVersion: z.string().trim().min(1).max(64),
+  capabilities: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
   capacity: nodeCapacitySchema,
+  usage: z
+    .object({
+      cpuUsageBasisPoints: z.number().int().min(0).max(10_000).optional(),
+      memoryUsedBytes: z.string().regex(/^\d+$/),
+      diskUsedBytes: z.string().regex(/^\d+$/),
+      diskUsageBasisPoints: z.number().int().min(0).max(10_000),
+    })
+    .optional(),
+  update: z
+    .object({
+      previousVersion: z.string().trim().min(1).max(64).optional(),
+    })
+    .optional(),
   gateway: z
     .object({
       status: z.enum(['pending', 'installing', 'healthy', 'failed', 'unknown']),

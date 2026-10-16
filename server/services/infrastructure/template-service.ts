@@ -12,6 +12,7 @@ import {
 import { DomainError } from '../../utils/errors'
 import { validateApplicationPolicy } from './policy'
 import { InfrastructureReleaseService } from './release-service'
+import { ApplicationBuildService } from './application-build-service'
 
 export class InfrastructureTemplateService {
   constructor(private readonly repository = new InfrastructureTemplateRepository()) {}
@@ -150,7 +151,9 @@ export class InfrastructureTemplateService {
     if (isApplication && !targetPort) {
       throw DomainError.validation('Template aplikasi belum memiliki target port TCP.')
     }
-    const platformDomain = String(useRuntimeConfig().platformDomain || '').trim().toLowerCase()
+    const platformDomain = String(useRuntimeConfig().platformDomain || '')
+      .trim()
+      .toLowerCase()
     if (isApplication && !platformDomain) {
       throw DomainError.invalidState('Platform domain belum dikonfigurasi.')
     }
@@ -160,7 +163,9 @@ export class InfrastructureTemplateService {
     if (isApplication && input.classification === 'billable') {
       const config = useRuntimeConfig()
       if (!config.billingGateInternalUrl || !config.billingGateSharedKey) {
-        throw DomainError.invalidState('Billing gate internal URL atau shared key belum dikonfigurasi.')
+        throw DomainError.invalidState(
+          'Billing gate internal URL atau shared key belum dikonfigurasi.',
+        )
       }
     }
 
@@ -272,12 +277,15 @@ export class InfrastructureTemplateService {
       const sharedKey = String(useRuntimeConfig().billingGateSharedKey || '')
       if (sharedKey) secrets.BILLING_GATE_SHARED_KEY = sharedKey
     }
-    const registry = ['application.ensure', 'application.redeploy'].includes(resolved.action)
-      ? await new InfrastructureReleaseService().registryCredentialForOperation(
-          nodeId,
-          operationId,
-        )
-      : null
+    const registry =
+      resolved.action === 'application.build'
+        ? await new ApplicationBuildService().registryCredentialForOperation(nodeId, operationId)
+        : ['application.ensure', 'application.redeploy'].includes(resolved.action)
+          ? await new InfrastructureReleaseService().registryCredentialForOperation(
+              nodeId,
+              operationId,
+            )
+          : null
     return { secrets, registry }
   }
 

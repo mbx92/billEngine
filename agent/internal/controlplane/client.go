@@ -26,18 +26,20 @@ type Identity struct {
 	NodeID          string `json:"nodeId"`
 	NodeName        string `json:"nodeName"`
 	Environment     string `json:"environment"`
+	Role            string `json:"role"`
 	Credential      string `json:"credential"`
 	ProtocolVersion string `json:"protocolVersion"`
 }
 
 type EnrollmentRequest struct {
-	Token           string `json:"token"`
-	AgentVersion    string `json:"agentVersion"`
-	ProtocolVersion string `json:"protocolVersion"`
-	OSRelease       string `json:"osRelease"`
-	Architecture    string `json:"architecture"`
-	DockerVersion   string `json:"dockerVersion"`
-	ComposeVersion  string `json:"composeVersion"`
+	Token           string   `json:"token"`
+	AgentVersion    string   `json:"agentVersion"`
+	ProtocolVersion string   `json:"protocolVersion"`
+	OSRelease       string   `json:"osRelease"`
+	Architecture    string   `json:"architecture"`
+	DockerVersion   string   `json:"dockerVersion"`
+	ComposeVersion  string   `json:"composeVersion"`
+	Capabilities    []string `json:"capabilities"`
 }
 
 type HeartbeatRequest struct {
@@ -47,8 +49,15 @@ type HeartbeatRequest struct {
 	Architecture    string            `json:"architecture"`
 	DockerVersion   string            `json:"dockerVersion"`
 	ComposeVersion  string            `json:"composeVersion"`
+	Capabilities    []string          `json:"capabilities"`
 	Capacity        platform.Capacity `json:"capacity"`
-	Gateway         docker.Gateway    `json:"gateway"`
+	Usage           *platform.Usage   `json:"usage,omitempty"`
+	Gateway         *docker.Gateway   `json:"gateway,omitempty"`
+	Update          *AgentUpdate      `json:"update,omitempty"`
+}
+
+type AgentUpdate struct {
+	PreviousVersion string `json:"previousVersion,omitempty"`
 }
 
 type InventoryRequest struct {
@@ -156,6 +165,49 @@ func (c *Client) OperationSecrets(
 		&response,
 	)
 	return response.Data, err
+}
+
+func (c *Client) DownloadAgentBinary(
+	ctx context.Context,
+	credential string,
+	architecture string,
+	destination io.Writer,
+	maxBytes int64,
+) (int64, error) {
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		c.baseURL+"/api/infrastructure/agent/binary?arch="+architecture,
+		http.NoBody,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create agent download request: %w", err)
+	}
+	request.Header.Set("User-Agent", "oc-agent")
+	request.Header.Set("Authorization", "Bearer "+credential)
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return 0, fmt.Errorf("download agent binary: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return 0, fmt.Errorf(
+			"agent binary endpoint returned HTTP %d: %s",
+			response.StatusCode,
+			strings.TrimSpace(string(limited)),
+		)
+	}
+
+	written, err := io.Copy(destination, io.LimitReader(response.Body, maxBytes+1))
+	if err != nil {
+		return written, fmt.Errorf("write agent binary: %w", err)
+	}
+	if written > maxBytes {
+		return written, fmt.Errorf("agent binary exceeds the %d byte limit", maxBytes)
+	}
+	return written, nil
 }
 
 func (c *Client) do(

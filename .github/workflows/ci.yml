@@ -39,7 +39,12 @@ jobs:
         with:
           node-version: 22.22.2
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
       - run: npm ci
+      - run: npm run agent:test
+      - run: npm run agent:build:linux:all
       - run: npm run db:check
       - run: npm run db:migrate:deploy
       - run: npm run lint

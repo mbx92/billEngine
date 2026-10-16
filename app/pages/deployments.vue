@@ -69,6 +69,8 @@ function statusTone(status: OperationStatus) {
 
 function actionLabel(action: string) {
   const labels: Record<string, string> = {
+    'agent.upgrade': 'Upgrade OC Agent',
+    'agent.rollback': 'Rollback OC Agent',
     'gateway.ensure': 'Bootstrap Traefik gateway',
     'application.ensure': 'Deploy application',
     'application.deploy': 'Deploy application',

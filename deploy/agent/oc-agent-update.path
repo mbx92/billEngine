@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for staged OC Agent updates
+
+[Path]
+PathExists=/var/lib/oc-agent/update/request
+Unit=oc-agent-update.service
+
+[Install]
+WantedBy=multi-user.target

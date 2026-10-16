@@ -20,6 +20,7 @@ import { customers } from './customers'
 import { billingCycle, serviceStatus } from './enums'
 import {
   infrastructureDatabaseClusters,
+  infrastructureBackupTargets,
   infrastructureOperations,
   infrastructureResources,
 } from './infrastructure'
@@ -206,6 +207,112 @@ export const infrastructureServiceDatabases = pgTable(
     check(
       'infrastructure_service_databases_status_check',
       sql`${table.status} in ('provisioning', 'active', 'failed', 'pending_deletion', 'deleted')`,
+    ),
+  ],
+)
+
+export type InfrastructureDatabaseBackupStatus =
+  | 'queued'
+  | 'creating'
+  | 'available'
+  | 'restoring'
+  | 'failed'
+  | 'deleting'
+  | 'deleted'
+
+export const infrastructureBackupPolicies = pgTable(
+  'infrastructure_backup_policies',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 160 }).notNull(),
+    serviceDatabaseId: uuid('service_database_id')
+      .notNull()
+      .references(() => infrastructureServiceDatabases.id, { onDelete: 'restrict' }),
+    storageTargetId: uuid('storage_target_id')
+      .notNull()
+      .references(() => infrastructureBackupTargets.id, { onDelete: 'restrict' }),
+    intervalMinutes: integer('interval_minutes').notNull().default(1440),
+    retentionCount: integer('retention_count').notNull().default(14),
+    alertEmail: varchar('alert_email', { length: 320 }),
+    isActive: boolean('is_active').notNull().default(true),
+    nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull().defaultNow(),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('infrastructure_backup_policies_name_uidx').on(table.name),
+    index('infrastructure_backup_policies_due_idx').on(table.isActive, table.nextRunAt),
+    index('infrastructure_backup_policies_database_idx').on(table.serviceDatabaseId),
+    check(
+      'infrastructure_backup_policies_interval_check',
+      sql`${table.intervalMinutes} between 5 and 525600`,
+    ),
+    check(
+      'infrastructure_backup_policies_retention_check',
+      sql`${table.retentionCount} between 1 and 1000`,
+    ),
+  ],
+)
+
+export const infrastructureDatabaseBackups = pgTable(
+  'infrastructure_database_backups',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    serviceDatabaseId: uuid('service_database_id')
+      .notNull()
+      .references(() => infrastructureServiceDatabases.id, { onDelete: 'restrict' }),
+    policyId: uuid('policy_id').references(() => infrastructureBackupPolicies.id, {
+      onDelete: 'set null',
+    }),
+    storageTargetId: uuid('storage_target_id').references(() => infrastructureBackupTargets.id, {
+      onDelete: 'restrict',
+    }),
+    createOperationId: uuid('create_operation_id')
+      .notNull()
+      .references(() => infrastructureOperations.id, { onDelete: 'restrict' }),
+    restoreOperationId: uuid('restore_operation_id').references(() => infrastructureOperations.id, {
+      onDelete: 'set null',
+    }),
+    status: varchar('status', { length: 24 })
+      .$type<InfrastructureDatabaseBackupStatus>()
+      .notNull()
+      .default('queued'),
+    storagePath: text('storage_path'),
+    objectKey: text('object_key'),
+    checksumSha256: varchar('checksum_sha256', { length: 64 }),
+    sizeBytes: bigint('size_bytes', { mode: 'bigint' }),
+    lastError: text('last_error'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    restoredAt: timestamp('restored_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    alertSentAt: timestamp('alert_sent_at', { withTimezone: true }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('infrastructure_database_backups_create_operation_uidx').on(
+      table.createOperationId,
+    ),
+    index('infrastructure_database_backups_service_created_idx').on(
+      table.serviceDatabaseId,
+      table.createdAt,
+    ),
+    index('infrastructure_database_backups_status_idx').on(table.status),
+    check(
+      'infrastructure_database_backups_status_check',
+      sql`${table.status} in ('queued', 'creating', 'available', 'restoring', 'failed', 'deleting', 'deleted')`,
+    ),
+    check(
+      'infrastructure_database_backups_checksum_check',
+      sql`${table.checksumSha256} is null or ${table.checksumSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      'infrastructure_database_backups_size_check',
+      sql`${table.sizeBytes} is null or ${table.sizeBytes} >= 0`,
     ),
   ],
 )

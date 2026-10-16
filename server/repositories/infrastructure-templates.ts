@@ -6,6 +6,7 @@ import {
   auditLogs,
   infrastructureNodes,
   infrastructureOperations,
+  infrastructureBackupTargets,
   infrastructureResources,
   infrastructureServiceDatabases,
   infrastructureTemplates,
@@ -143,6 +144,7 @@ export class InfrastructureTemplateRepository {
             eq(infrastructureNodes.isActive, true),
             eq(infrastructureNodes.isDraining, false),
             inArray(infrastructureNodes.status, ['online', 'degraded']),
+            inArray(infrastructureNodes.role, ['deployment', 'hybrid']),
           ),
         )
         .limit(1)
@@ -292,6 +294,7 @@ export class InfrastructureTemplateRepository {
         id: infrastructureOperations.id,
         resourceId: infrastructureOperations.resourceId,
         action: infrastructureOperations.action,
+        payload: infrastructureOperations.payload,
       })
       .from(infrastructureOperations)
       .where(
@@ -303,6 +306,41 @@ export class InfrastructureTemplateRepository {
       )
       .limit(1)
     if (!operation) return null
+    if (
+      ['database.backup.create', 'database.backup.restore', 'database.backup.delete'].includes(
+        operation.action,
+      )
+    ) {
+      const targetId =
+        typeof operation.payload.storageTargetId === 'string'
+          ? operation.payload.storageTargetId
+          : null
+      if (!targetId) return { action: operation.action, records: [] }
+      const [target] = await this.database
+        .select({
+          accessKeyEncrypted: infrastructureBackupTargets.accessKeyEncrypted,
+          secretKeyEncrypted: infrastructureBackupTargets.secretKeyEncrypted,
+        })
+        .from(infrastructureBackupTargets)
+        .where(eq(infrastructureBackupTargets.id, targetId))
+        .limit(1)
+      if (!target) return null
+      return {
+        action: operation.action,
+        records: [
+          {
+            environmentKey: 'S3_ACCESS_KEY_ID',
+            secretReference: `operation://${operation.id}/s3-access-key`,
+            encryptedValue: target.accessKeyEncrypted,
+          },
+          {
+            environmentKey: 'S3_SECRET_ACCESS_KEY',
+            secretReference: `operation://${operation.id}/s3-secret-key`,
+            encryptedValue: target.secretKeyEncrypted,
+          },
+        ],
+      }
+    }
     if (operation.action === 'database.service.ensure') {
       const [allocation] = await this.database
         .select({
@@ -314,11 +352,13 @@ export class InfrastructureTemplateRepository {
       if (!allocation) return null
       return {
         action: operation.action,
-        records: [{
-          environmentKey: 'DATABASE_PASSWORD',
-          secretReference: `operation://${operation.id}/database-password`,
-          encryptedValue: allocation.encryptedValue,
-        }],
+        records: [
+          {
+            environmentKey: 'DATABASE_PASSWORD',
+            secretReference: `operation://${operation.id}/database-password`,
+            encryptedValue: allocation.encryptedValue,
+          },
+        ],
       }
     }
     if (!operation.resourceId) return { action: operation.action, records: [] }

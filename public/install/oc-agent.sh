@@ -149,6 +149,7 @@ temporary_directory="$(mktemp -d)"
 trap 'rm -rf -- "${temporary_directory}"' EXIT
 binary_name="oc-agent-linux-${architecture}"
 binary_url="${control_plane_url}/api/infrastructure/agent/binary?arch=${architecture}"
+updater_url="${control_plane_url}/install/oc-agent-updater"
 
 echo "Downloading OC Agent (${architecture})..."
 curl --fail --silent --show-error --location "${binary_url}" \
@@ -159,6 +160,18 @@ curl --fail --silent --show-error --location "${binary_url}&checksum=1" \
   cd "${temporary_directory}"
   sha256sum --check "${binary_name}.sha256"
 )
+chmod 0755 "${temporary_directory}/${binary_name}"
+curl --fail --silent --show-error --location "${updater_url}" \
+  --output "${temporary_directory}/oc-agent-updater"
+if ! new_agent_version="$("${temporary_directory}/${binary_name}" --version)"; then
+  echo "Downloaded artifact is not a remote-update capable OC Agent binary." >&2
+  echo "Rebuild artifacts with: npm run agent:build:linux:all" >&2
+  exit 1
+fi
+if [[ ! "${new_agent_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "Downloaded agent binary did not report a valid version." >&2
+  exit 1
+fi
 
 if ! getent group docker >/dev/null; then
   echo "The docker group was not found." >&2
@@ -171,7 +184,17 @@ usermod -aG docker oc-agent
 
 install -d -m 0750 -o root -g oc-agent /etc/oc-agent
 install -d -m 0700 -o oc-agent -g oc-agent /var/lib/oc-agent
+install -d -m 0700 -o oc-agent -g oc-agent /var/lib/oc-agent/update
+install -d -m 0755 -o root -g root /usr/local/libexec
+if [[ -x /usr/local/bin/oc-agent ]]; then
+  current_agent_version="$(/usr/local/bin/oc-agent --version 2>/dev/null || true)"
+  if [[ "${current_agent_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] &&
+    [[ "${current_agent_version}" != "${new_agent_version}" ]]; then
+    install -m 0755 -o root -g root /usr/local/bin/oc-agent /usr/local/bin/oc-agent.previous
+  fi
+fi
 install -m 0755 -o root -g root "${temporary_directory}/${binary_name}" /usr/local/bin/oc-agent
+install -m 0755 -o root -g root "${temporary_directory}/oc-agent-updater" /usr/local/libexec/oc-agent-updater
 
 install -m 0640 -o root -g oc-agent /dev/null /etc/oc-agent/agent.env
 {
@@ -199,7 +222,7 @@ User=oc-agent
 Group=docker
 EnvironmentFile=/etc/oc-agent/agent.env
 ExecStart=/usr/local/bin/oc-agent
-Restart=on-failure
+Restart=always
 RestartSec=5s
 TimeoutStopSec=30s
 NoNewPrivileges=true
@@ -219,8 +242,32 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 UNIT
 
+cat >/etc/systemd/system/oc-agent-update.path <<'UNIT'
+[Unit]
+Description=Watch for staged OC Agent updates
+
+[Path]
+PathExists=/var/lib/oc-agent/update/request
+Unit=oc-agent-update.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat >/etc/systemd/system/oc-agent-update.service <<'UNIT'
+[Unit]
+Description=Apply a staged OC Agent update
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oc-agent-updater
+TimeoutStartSec=120s
+UNIT
+
 systemctl daemon-reload
 systemctl enable oc-agent
+systemctl enable --now oc-agent-update.path
 systemctl restart oc-agent
 
 if [[ "${existing_identity}" == "true" ]]; then

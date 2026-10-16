@@ -61,6 +61,7 @@ interface InfrastructureNode {
   id: string
   name: string
   environment: string
+  role: 'deployment' | 'builder' | 'hybrid'
   status: 'enrolling' | 'online' | 'degraded' | 'offline' | 'revoked' | 'unknown'
   isActive: boolean
   isDraining: boolean
@@ -148,7 +149,10 @@ const resources = computed(() => data.value?.data ?? [])
 const availableNodes = computed(() =>
   (nodeData.value?.data ?? []).filter(
     (node) =>
-      node.isActive && !node.isDraining && (node.status === 'online' || node.status === 'degraded'),
+      node.isActive &&
+      !node.isDraining &&
+      node.role !== 'builder' &&
+      (node.status === 'online' || node.status === 'degraded'),
   ),
 )
 const runningCount = computed(
@@ -373,6 +377,20 @@ function stateTone(state: ResourceState) {
   return 'neutral' as const
 }
 
+function resourceRouteHref(resource: InfrastructureResource) {
+  if (/^demo-customer-[1-3]$/.test(resource.externalId)) {
+    return `/demo/${resource.externalId}`
+  }
+  return `https://${resource.routeHostname}`
+}
+
+function resourceRouteLabel(resource: InfrastructureResource) {
+  if (/^demo-customer-[1-3]$/.test(resource.externalId)) {
+    return `Buka preview lokal · ${resource.routeStatus}`
+  }
+  return `${resource.routeHostname} · ${resource.routeStatus}`
+}
+
 async function revealResourceCredentials() {
   const resource = pendingCredentialReveal.value
   if (!resource) return
@@ -546,11 +564,11 @@ async function copyCredential(key: string, value: string) {
                     <a
                       v-if="resource.routeHostname"
                       class="mt-1 block max-w-72 truncate font-mono text-[11px] text-brand hover:underline"
-                      :href="`https://${resource.routeHostname}`"
+                      :href="resourceRouteHref(resource)"
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      {{ resource.routeHostname }} · {{ resource.routeStatus }}
+                      {{ resourceRouteLabel(resource) }}
                     </a>
                   </div>
                 </div>

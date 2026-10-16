@@ -141,6 +141,34 @@
       "when": 1792073342477,
       "tag": "0019_lyrical_magdalene",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792112733796,
+      "tag": "0020_agent_update",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792113964786,
+      "tag": "0021_workload_backup_monitoring",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792116434351,
+      "tag": "0022_backup_center",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792136462802,
+      "tag": "0023_native_image_builder",
+      "breakpoints": true
     }
   ]
 }

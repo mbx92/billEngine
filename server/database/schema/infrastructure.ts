@@ -27,14 +27,14 @@ export const NODE_STATUSES = [
 ] as const
 export type InfrastructureNodeStatus = (typeof NODE_STATUSES)[number]
 
-export const GATEWAY_STATUSES = [
-  'pending',
-  'installing',
-  'healthy',
-  'failed',
-  'unknown',
-] as const
+export const NODE_ROLES = ['deployment', 'builder', 'hybrid'] as const
+export type InfrastructureNodeRole = (typeof NODE_ROLES)[number]
+
+export const GATEWAY_STATUSES = ['pending', 'installing', 'healthy', 'failed', 'unknown'] as const
 export type InfrastructureGatewayStatus = (typeof GATEWAY_STATUSES)[number]
+
+export const AGENT_UPDATE_STATUSES = ['idle', 'queued', 'staging', 'succeeded', 'failed'] as const
+export type InfrastructureAgentUpdateStatus = (typeof AGENT_UPDATE_STATUSES)[number]
 
 export const RESOURCE_KINDS = ['application', 'database', 'volume'] as const
 export type InfrastructureResourceKind = (typeof RESOURCE_KINDS)[number]
@@ -63,6 +63,15 @@ export const OPERATION_STATUSES = [
 ] as const
 export type InfrastructureOperationStatus = (typeof OPERATION_STATUSES)[number]
 
+export const APPLICATION_BUILD_STATUSES = [
+  'queued',
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
+] as const
+export type ApplicationBuildStatus = (typeof APPLICATION_BUILD_STATUSES)[number]
+
 export const DATABASE_CLUSTER_STATUSES = [
   'validating',
   'active',
@@ -72,6 +81,9 @@ export const DATABASE_CLUSTER_STATUSES = [
   'retired',
 ] as const
 export type InfrastructureDatabaseClusterStatus = (typeof DATABASE_CLUSTER_STATUSES)[number]
+
+export const BACKUP_TARGET_PROVIDERS = ['s3'] as const
+export type InfrastructureBackupTargetProvider = (typeof BACKUP_TARGET_PROVIDERS)[number]
 
 export const ROUTE_STATUSES = ['pending', 'configuring', 'active', 'failed', 'disabled'] as const
 export type InfrastructureRouteStatus = (typeof ROUTE_STATUSES)[number]
@@ -91,6 +103,8 @@ export interface NodeCapacity {
 export interface InfrastructureLabels {
   [key: string]: string
 }
+
+export type InfrastructureCapabilities = string[]
 
 export const containerRegistries = pgTable(
   'container_registries',
@@ -211,6 +225,10 @@ export const infrastructureNodes = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     name: varchar('name', { length: 160 }).notNull(),
     environment: varchar('environment', { length: 64 }).notNull().default('staging'),
+    role: varchar('role', { length: 24 })
+      .$type<InfrastructureNodeRole>()
+      .notNull()
+      .default('deployment'),
     status: varchar('status', { length: 24 })
       .$type<InfrastructureNodeStatus>()
       .notNull()
@@ -218,6 +236,14 @@ export const infrastructureNodes = pgTable(
     isActive: boolean('is_active').notNull().default(true),
     isDraining: boolean('is_draining').notNull().default(false),
     agentVersion: varchar('agent_version', { length: 64 }),
+    previousAgentVersion: varchar('previous_agent_version', { length: 64 }),
+    targetAgentVersion: varchar('target_agent_version', { length: 64 }),
+    agentUpdateStatus: varchar('agent_update_status', { length: 24 })
+      .$type<InfrastructureAgentUpdateStatus>()
+      .notNull()
+      .default('idle'),
+    agentLastUpdateAt: timestamp('agent_last_update_at', { withTimezone: true }),
+    agentLastUpdateError: text('agent_last_update_error'),
     protocolVersion: varchar('protocol_version', { length: 32 }),
     osRelease: varchar('os_release', { length: 160 }),
     architecture: varchar('architecture', { length: 32 }),
@@ -234,7 +260,13 @@ export const infrastructureNodes = pgTable(
     capacityCpuMilli: integer('capacity_cpu_milli'),
     capacityMemoryBytes: bigint('capacity_memory_bytes', { mode: 'bigint' }),
     capacityDiskBytes: bigint('capacity_disk_bytes', { mode: 'bigint' }),
+    cpuUsageBasisPoints: integer('cpu_usage_basis_points'),
+    memoryUsedBytes: bigint('memory_used_bytes', { mode: 'bigint' }),
+    diskUsedBytes: bigint('disk_used_bytes', { mode: 'bigint' }),
+    diskUsageBasisPoints: integer('disk_usage_basis_points'),
+    utilizationObservedAt: timestamp('utilization_observed_at', { withTimezone: true }),
     labels: jsonb('labels').$type<InfrastructureLabels>().notNull().default({}),
+    capabilities: jsonb('capabilities').$type<InfrastructureCapabilities>().notNull().default([]),
     lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
     lastInventoryAt: timestamp('last_inventory_at', { withTimezone: true }),
     lastError: text('last_error'),
@@ -250,14 +282,29 @@ export const infrastructureNodes = pgTable(
       sql`${table.status} in ('enrolling', 'online', 'degraded', 'offline', 'revoked', 'unknown')`,
     ),
     check(
+      'infrastructure_nodes_role_check',
+      sql`${table.role} in ('deployment', 'builder', 'hybrid')`,
+    ),
+    check(
       'infrastructure_nodes_capacity_check',
       sql`(${table.capacityCpuMilli} is null or ${table.capacityCpuMilli} > 0)
         and (${table.capacityMemoryBytes} is null or ${table.capacityMemoryBytes} > 0)
         and (${table.capacityDiskBytes} is null or ${table.capacityDiskBytes} > 0)`,
     ),
     check(
+      'infrastructure_nodes_utilization_check',
+      sql`(${table.cpuUsageBasisPoints} is null or ${table.cpuUsageBasisPoints} between 0 and 10000)
+        and (${table.memoryUsedBytes} is null or ${table.memoryUsedBytes} >= 0)
+        and (${table.diskUsedBytes} is null or ${table.diskUsedBytes} >= 0)
+        and (${table.diskUsageBasisPoints} is null or ${table.diskUsageBasisPoints} between 0 and 10000)`,
+    ),
+    check(
       'infrastructure_nodes_gateway_status_check',
       sql`${table.gatewayStatus} in ('pending', 'installing', 'healthy', 'failed', 'unknown')`,
+    ),
+    check(
+      'infrastructure_nodes_agent_update_status_check',
+      sql`${table.agentUpdateStatus} in ('idle', 'queued', 'staging', 'succeeded', 'failed')`,
     ),
   ],
 )
@@ -268,6 +315,10 @@ export const nodeEnrollments = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     nodeName: varchar('node_name', { length: 160 }).notNull(),
     environment: varchar('environment', { length: 64 }).notNull().default('staging'),
+    role: varchar('role', { length: 24 })
+      .$type<InfrastructureNodeRole>()
+      .notNull()
+      .default('deployment'),
     tokenHash: varchar('token_hash', { length: 128 }).notNull(),
     labels: jsonb('labels').$type<InfrastructureLabels>().notNull().default({}),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -433,6 +484,86 @@ export const infrastructureOperations = pgTable(
       'infrastructure_operations_attempts_check',
       sql`${table.attemptCount} >= 0 and ${table.maxAttempts} > 0 and ${table.attemptCount} <= ${table.maxAttempts}`,
     ),
+  ],
+)
+
+export const applicationBuilds = pgTable(
+  'application_builds',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    applicationId: uuid('application_id')
+      .notNull()
+      .references(() => deployableApplications.id, { onDelete: 'cascade' }),
+    nodeId: uuid('node_id')
+      .notNull()
+      .references(() => infrastructureNodes.id, { onDelete: 'restrict' }),
+    operationId: uuid('operation_id')
+      .notNull()
+      .references(() => infrastructureOperations.id, { onDelete: 'restrict' }),
+    releaseId: uuid('release_id').references(() => applicationReleases.id, {
+      onDelete: 'set null',
+    }),
+    status: varchar('status', { length: 24 })
+      .$type<ApplicationBuildStatus>()
+      .notNull()
+      .default('queued'),
+    version: varchar('version', { length: 128 }).notNull(),
+    commitSha: varchar('commit_sha', { length: 64 }),
+    imageDigest: varchar('image_digest', { length: 71 }),
+    imageReference: text('image_reference'),
+    logExcerpt: text('log_excerpt'),
+    errorCode: varchar('error_code', { length: 64 }),
+    errorMessage: text('error_message'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('application_builds_operation_uidx').on(table.operationId),
+    index('application_builds_application_created_idx').on(table.applicationId, table.createdAt),
+    index('application_builds_node_status_idx').on(table.nodeId, table.status),
+    check(
+      'application_builds_status_check',
+      sql`${table.status} in ('queued', 'running', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check(
+      'application_builds_commit_check',
+      sql`${table.commitSha} is null or ${table.commitSha} ~ '^[a-f0-9]{7,64}$'`,
+    ),
+    check(
+      'application_builds_digest_check',
+      sql`${table.imageDigest} is null or ${table.imageDigest} ~ '^sha256:[a-f0-9]{64}$'`,
+    ),
+  ],
+)
+
+export const infrastructureBackupTargets = pgTable(
+  'infrastructure_backup_targets',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 160 }).notNull(),
+    provider: varchar('provider', { length: 24 })
+      .$type<InfrastructureBackupTargetProvider>()
+      .notNull()
+      .default('s3'),
+    endpoint: text('endpoint').notNull(),
+    region: varchar('region', { length: 100 }).notNull().default('auto'),
+    bucket: varchar('bucket', { length: 255 }).notNull(),
+    prefix: varchar('prefix', { length: 500 }).notNull().default('oc-backups'),
+    pathStyle: boolean('path_style').notNull().default(false),
+    accessKeyEncrypted: text('access_key_encrypted').notNull(),
+    secretKeyEncrypted: text('secret_key_encrypted').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('infrastructure_backup_targets_name_uidx').on(table.name),
+    index('infrastructure_backup_targets_active_idx').on(table.isActive),
+    check('infrastructure_backup_targets_provider_check', sql`${table.provider} in ('s3')`),
   ],
 )
 

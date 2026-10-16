@@ -8,6 +8,7 @@ import { NativeInfrastructureRepository } from '../../repositories/native-infras
 import { DomainError } from '../../utils/errors'
 import { canTransitionOperation, retryDelayMilliseconds } from './operation-state'
 import { validateApplicationPolicy } from './policy'
+import { ApplicationBuildService } from './application-build-service'
 
 export class NativeInfrastructureService {
   constructor(private readonly repository = new NativeInfrastructureRepository()) {}
@@ -129,7 +130,16 @@ export class NativeInfrastructureService {
     const operation = await this.repository.findOperationForNode(nodeId, operationId)
     if (!operation) throw DomainError.notFound('Operation tidak ditemukan.')
     const targetStatus = input.status
-    if (operation.status === targetStatus) return operation
+    if (operation.status === targetStatus) {
+      if (operation.action === 'application.build') {
+        await new ApplicationBuildService().synchronizeOperation(
+          operation.id,
+          input,
+          operation.status,
+        )
+      }
+      return operation
+    }
     if (!canTransitionOperation(operation.status, targetStatus)) {
       throw DomainError.invalidState(
         `Transition operation ${operation.status} -> ${targetStatus} ditolak.`,
@@ -145,6 +155,9 @@ export class NativeInfrastructureService {
       nextAttemptAt,
     )
     if (!updated) throw DomainError.notFound('Operation tidak ditemukan.')
+    if (operation.action === 'application.build') {
+      await new ApplicationBuildService().synchronizeOperation(operation.id, input, updated.status)
+    }
     return updated
   }
 }

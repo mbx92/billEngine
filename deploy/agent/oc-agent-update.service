@@ -1,0 +1,8 @@
+[Unit]
+Description=Apply a staged OC Agent update
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oc-agent-updater
+TimeoutStartSec=120s

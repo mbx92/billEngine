@@ -11,6 +11,11 @@ instance as separate objects:
 This means one image is built once and can be deployed to multiple clients. A client that needs
 custom source should use a separate application/image repository (or a separate build variant).
 
+BillEngine can also run the build on a dedicated OC Agent. Enroll the Ubuntu node with role
+`builder`; the control plane remains responsible only for queueing, status, and release metadata.
+The builder clones the configured HTTPS GitHub repository, runs Docker Buildx/BuildKit, pushes the
+image to the registered OCI registry, and returns its immutable digest.
+
 ## 1. Configure BillEngine
 
 Generate a callback secret and provide it to the BillEngine runtime:
@@ -28,10 +33,29 @@ For a private GHCR package, add a registry with:
 - Username: the GitHub user or organization owner
 - Token: a GitHub personal access token (classic) with `read:packages`
 
+Use `write:packages` instead when the registry will receive images from the native builder. A
+self-hosted OCI registry or Harbor instance can be used by registering its host and push-capable
+credential in the same page. Use a TLS certificate trusted by both builder and deployment nodes;
+the agent does not automatically enable Docker's insecure-registry mode.
+
 The token is encrypted at rest. It is delivered to the target agent only for a deployment pull,
 passed to `docker login` over stdin, and its temporary Docker config is removed after the pull.
 
 ## 2. Configure the application repository
+
+### Native builder
+
+Install OC Agent `0.11.0+` on a separate Ubuntu server, create its enrollment as **Image builder**,
+and ensure both `git` and `docker buildx` are available. The node reports the `image-build`
+capability after enrollment. From **Infrastructure → Applications**, click **Build image**. Native
+builds currently accept public repositories under `https://github.com/...`; private GitHub source
+credentials are intentionally not sent until a scoped GitHub App integration is implemented.
+
+Builder workspaces are temporary under `/var/lib/oc-agent/builds`. BuildKit cache and published
+layers live in the configured registry. Do not combine the builder role with a production runtime
+node unless the node is intentionally enrolled as `hybrid`.
+
+### GitHub Actions callback
 
 Create `.github/workflows/publish-image.yml` in the application repository:
 

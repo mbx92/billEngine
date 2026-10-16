@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { Copy, Plus, Server as ServerIcon, ShieldX, X } from '@lucide/vue'
+import {
+  AlertTriangle,
+  Copy,
+  Download,
+  Plus,
+  RotateCcw,
+  Server as ServerIcon,
+  ShieldX,
+  X,
+} from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
 import { copyText } from '~/lib/clipboard'
 
@@ -10,10 +19,20 @@ interface InfrastructureNode {
   id: string
   name: string
   environment: string
+  role: 'deployment' | 'builder' | 'hybrid'
   status: 'enrolling' | 'online' | 'degraded' | 'offline' | 'revoked' | 'unknown'
   isActive: boolean
   isDraining: boolean
   agentVersion: string | null
+  previousAgentVersion: string | null
+  targetAgentVersion: string | null
+  agentUpdateStatus: 'idle' | 'queued' | 'staging' | 'succeeded' | 'failed'
+  agentLastUpdateAt: string | null
+  agentLastUpdateError: string | null
+  availableAgentVersion: string
+  agentArtifactReady: boolean
+  remoteUpdateSupported: boolean
+  upgradeAvailable: boolean
   protocolVersion: string | null
   osRelease: string | null
   architecture: string | null
@@ -27,7 +46,16 @@ interface InfrastructureNode {
   capacityCpuMilli: number | null
   capacityMemoryBytes: string | null
   capacityDiskBytes: string | null
+  cpuUsageBasisPoints: number | null
+  memoryUsedBytes: string | null
+  diskUsedBytes: string | null
+  diskUsageBasisPoints: number | null
+  utilizationObservedAt: string | null
+  diskWatermark: 'normal' | 'warning' | 'critical' | 'unknown'
+  stuckOperationCount: number
+  oldestStuckOperationAt: string | null
   labels: Record<string, string>
+  capabilities: string[]
   lastHeartbeatAt: string | null
   resourceCount: number
 }
@@ -36,6 +64,7 @@ interface EnrollmentResult {
   id: string
   nodeName: string
   environment: string
+  role: 'deployment' | 'builder' | 'hybrid'
   expiresAt: string
   token: string
 }
@@ -47,23 +76,24 @@ const requestUrl = useRequestURL()
 const showEnrollmentForm = ref(false)
 const saving = ref(false)
 const revokingNodeId = ref<string | null>(null)
+const updatingNodeId = ref<string | null>(null)
 const pendingRevokeNode = ref<InfrastructureNode | null>(null)
+const pendingAgentAction = ref<{
+  node: InfrastructureNode
+  action: 'upgrade' | 'rollback'
+} | null>(null)
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const enrollment = ref<EnrollmentResult | null>(null)
-const form = reactive({ nodeName: '', environment: 'staging', region: '' })
-const minimumAgentVersion = '0.7.2'
+const form = reactive({ nodeName: '', environment: 'staging', role: 'deployment', region: '' })
+const minimumAgentVersion = '0.8.0'
 
 const { data, status, error, refresh } = await useFetch<{ data: InfrastructureNode[] }>(
   '/api/infrastructure/nodes',
 )
 const nodes = computed(() => data.value?.data ?? [])
 const controlPlaneUrl = computed(() => {
-  const appUrl = String(runtimeConfig.public.appUrl || requestUrl.origin)
-  const developmentUrl = String(runtimeConfig.public.agentControlPlaneUrl || '')
-  const url =
-    enrollment.value?.environment === 'development' && developmentUrl ? developmentUrl : appUrl
-  return url.replace(/\/$/, '')
+  return controlPlaneUrlForEnvironment(enrollment.value?.environment)
 })
 const usesInsecureRemoteHttp = computed(() => {
   try {
@@ -92,14 +122,32 @@ function humanBytes(value: string | null) {
 function statusTone(nodeStatus: InfrastructureNode['status']) {
   if (nodeStatus === 'online') return 'success' as const
   if (nodeStatus === 'degraded' || nodeStatus === 'enrolling') return 'warning' as const
-  if (nodeStatus === 'revoked') return 'danger' as const
+  if (nodeStatus === 'revoked' || nodeStatus === 'offline') return 'danger' as const
+  return 'neutral' as const
+}
+
+function usagePercent(basisPoints: number | null) {
+  return basisPoints === null
+    ? '—'
+    : `${(basisPoints / 100).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`
+}
+
+function memoryUsagePercent(node: InfrastructureNode) {
+  if (!node.memoryUsedBytes || !node.capacityMemoryBytes) return '—'
+  return `${((Number(node.memoryUsedBytes) / Number(node.capacityMemoryBytes)) * 100).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`
+}
+
+function diskWatermarkTone(watermark: InfrastructureNode['diskWatermark']) {
+  if (watermark === 'critical') return 'danger' as const
+  if (watermark === 'warning') return 'warning' as const
+  if (watermark === 'normal') return 'success' as const
   return 'neutral' as const
 }
 
 function supportsCurrentFeatures(version: string | null) {
   if (!version) return false
   const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number)
-  return major > 0 || minor > 7 || (minor === 7 && patch >= 2)
+  return major > 0 || minor > 8 || (minor === 8 && patch >= 0)
 }
 
 function agentVersionTone(version: string | null) {
@@ -128,6 +176,7 @@ async function createEnrollment() {
         body: {
           nodeName: form.nodeName,
           environment: form.environment,
+          role: form.role,
           expiresInMinutes: 30,
           labels: form.region ? { region: form.region } : {},
         },
@@ -161,6 +210,77 @@ async function copyInstallerCommand() {
   }
 }
 
+function controlPlaneUrlForEnvironment(environment?: string) {
+  const appUrl = String(runtimeConfig.public.appUrl || requestUrl.origin)
+  const developmentUrl = String(runtimeConfig.public.agentControlPlaneUrl || '')
+  const url = environment === 'development' && developmentUrl ? developmentUrl : appUrl
+  return url.replace(/\/$/, '')
+}
+
+function installerCommandForNode(node: InfrastructureNode) {
+  const url = controlPlaneUrlForEnvironment(node.environment).replace(/'/g, "'\\''")
+  let insecureFlag = ''
+  try {
+    const parsed = new URL(url)
+    if (
+      parsed.protocol === 'http:' &&
+      !['localhost', '127.0.0.1', '[::1]', '::1'].includes(parsed.hostname)
+    ) {
+      insecureFlag = ' --allow-insecure-http'
+    }
+  } catch {
+    // The server will still reject an invalid URL when the command is run.
+  }
+  return `curl -fsSL '${url}/install/oc-agent.sh' | sudo bash -s -- --url '${url}'${insecureFlag}`
+}
+
+async function copyBootstrapCommand(node: InfrastructureNode) {
+  try {
+    await copyText(installerCommandForNode(node))
+    toast.success('Command bootstrap updater berhasil disalin.')
+  } catch {
+    toast.error('Browser tidak dapat menyalin command bootstrap.')
+  }
+}
+
+async function runAgentAction(node: InfrastructureNode, action: 'upgrade' | 'rollback') {
+  updatingNodeId.value = node.id
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    await $fetch(`/api/infrastructure/nodes/${node.id}/${action}`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `agent-${action}:${node.id}:${crypto.randomUUID()}` },
+    })
+    actionMessage.value =
+      action === 'upgrade'
+        ? `Upgrade ${node.name} ke v${node.availableAgentVersion} masuk antrean.`
+        : `Rollback ${node.name} ke v${node.previousAgentVersion} masuk antrean.`
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(
+      caught,
+      action === 'upgrade'
+        ? 'Gagal mengantrekan upgrade agent.'
+        : 'Gagal mengantrekan rollback agent.',
+    )
+  } finally {
+    updatingNodeId.value = null
+    pendingAgentAction.value = null
+  }
+}
+
+let refreshTimer: number | undefined
+onMounted(() => {
+  refreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void refresh()
+  }, 15_000)
+})
+
+onBeforeUnmount(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer)
+})
+
 async function revokeNode(node: InfrastructureNode) {
   revokingNodeId.value = node.id
   actionError.value = null
@@ -180,7 +300,7 @@ async function revokeNode(node: InfrastructureNode) {
 function closeEnrollment() {
   enrollment.value = null
   showEnrollmentForm.value = false
-  Object.assign(form, { nodeName: '', environment: 'staging', region: '' })
+  Object.assign(form, { nodeName: '', environment: 'staging', role: 'deployment', region: '' })
 }
 </script>
 
@@ -223,7 +343,7 @@ function closeEnrollment() {
     </p>
 
     <UiCard v-if="showEnrollmentForm" class="mb-5">
-      <form v-if="!enrollment" class="grid gap-4 md:grid-cols-3" @submit.prevent="createEnrollment">
+      <form v-if="!enrollment" class="grid gap-4 md:grid-cols-4" @submit.prevent="createEnrollment">
         <UiInput
           v-model="form.nodeName"
           label="Nama node"
@@ -241,13 +361,27 @@ function closeEnrollment() {
             <option value="staging">Staging</option>
           </select>
         </label>
+        <label class="block">
+          <span class="mb-2 block text-xs font-semibold text-muted">Role node</span>
+          <select
+            v-model="form.role"
+            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+          >
+            <option value="deployment">Deployment</option>
+            <option value="builder">Image builder</option>
+            <option value="hybrid">Hybrid</option>
+          </select>
+          <span class="mt-1.5 block text-xs text-muted">
+            Builder sebaiknya memakai server terpisah; hybrid juga menerima workload deployment.
+          </span>
+        </label>
         <UiInput
           v-model="form.region"
           label="Region (opsional)"
           placeholder="id-bali"
           autocomplete="off"
         />
-        <div class="md:col-span-3 flex justify-end">
+        <div class="md:col-span-4 flex justify-end">
           <UiButton type="submit" :disabled="saving">
             {{ saving ? 'Membuat…' : 'Buat token 30 menit' }}
           </UiButton>
@@ -255,7 +389,9 @@ function closeEnrollment() {
       </form>
 
       <div v-else>
-        <p class="text-sm font-semibold text-ink">Token untuk {{ enrollment.nodeName }}</p>
+        <p class="text-sm font-semibold text-ink">
+          Token untuk {{ enrollment.nodeName }} · {{ enrollment.role }}
+        </p>
         <p class="mt-1 text-xs text-muted">
           Simpan sementara pada <code>/etc/oc-agent/agent.env</code>. Hapus setelah enrollment
           berhasil. Kedaluwarsa {{ format.dateTime(enrollment.expiresAt) }}.
@@ -339,15 +475,23 @@ function closeEnrollment() {
           </div>
           <div class="flex shrink-0 flex-col items-end gap-2">
             <UiBadge :tone="statusTone(node.status)" dot>{{ node.status }}</UiBadge>
+            <UiBadge tone="info">{{ node.role }}</UiBadge>
             <UiBadge
               :tone="agentVersionTone(node.agentVersion)"
               :title="
                 node.agentVersion && !supportsCurrentFeatures(node.agentVersion)
-                  ? `Upgrade ke ${minimumAgentVersion}+ untuk bootstrap gateway dan route aplikasi`
+                  ? `Bootstrap ke ${minimumAgentVersion}+ diperlukan untuk remote update dan rollback`
                   : 'Versi OC Agent yang dilaporkan pada heartbeat terakhir'
               "
             >
               Agent {{ node.agentVersion ? `v${node.agentVersion}` : 'belum diketahui' }}
+            </UiBadge>
+            <UiBadge
+              v-if="['queued', 'staging'].includes(node.agentUpdateStatus)"
+              tone="warning"
+              dot
+            >
+              {{ node.agentUpdateStatus === 'queued' ? 'Update queued' : 'Update staging' }}
             </UiBadge>
           </div>
         </div>
@@ -358,18 +502,47 @@ function closeEnrollment() {
             <dd class="mt-1 font-mono text-ink">{{ format.count(node.resourceCount) }}</dd>
           </div>
           <div>
-            <dt class="text-muted">CPU</dt>
+            <dt class="text-muted">CPU usage</dt>
             <dd class="mt-1 font-mono text-ink">
-              {{ node.capacityCpuMilli ? `${node.capacityCpuMilli / 1000} core` : '—' }}
+              {{ usagePercent(node.cpuUsageBasisPoints) }}
+              <span class="text-muted">
+                / {{ node.capacityCpuMilli ? `${node.capacityCpuMilli / 1000} core` : '—' }}
+              </span>
             </dd>
           </div>
           <div>
-            <dt class="text-muted">Memory</dt>
-            <dd class="mt-1 font-mono text-ink">{{ humanBytes(node.capacityMemoryBytes) }}</dd>
+            <dt class="text-muted">Memory usage</dt>
+            <dd class="mt-1 font-mono text-ink">
+              {{ memoryUsagePercent(node) }}
+              <span class="text-muted">
+                · {{ humanBytes(node.memoryUsedBytes) }} /
+                {{ humanBytes(node.capacityMemoryBytes) }}
+              </span>
+            </dd>
           </div>
-          <div>
-            <dt class="text-muted">Disk</dt>
-            <dd class="mt-1 font-mono text-ink">{{ humanBytes(node.capacityDiskBytes) }}</dd>
+          <div class="col-span-2">
+            <dt class="text-muted">Root disk</dt>
+            <dd class="mt-1 flex flex-wrap items-center gap-2 font-mono text-ink">
+              <UiBadge :tone="diskWatermarkTone(node.diskWatermark)" dot>
+                {{ usagePercent(node.diskUsageBasisPoints) }} · {{ node.diskWatermark }}
+              </UiBadge>
+              <span
+                >{{ humanBytes(node.diskUsedBytes) }} /
+                {{ humanBytes(node.capacityDiskBytes) }}</span
+              >
+            </dd>
+          </div>
+          <div
+            v-if="node.stuckOperationCount > 0"
+            class="col-span-2 rounded border border-warning/30 bg-warning/10 px-3 py-2"
+          >
+            <dt class="flex items-center gap-2 font-semibold text-warning">
+              <AlertTriangle :size="14" /> {{ node.stuckOperationCount }} operation stuck
+            </dt>
+            <dd class="mt-1 text-warning">
+              Sejak {{ format.dateTime(node.oldestStuckOperationAt) }} ·
+              <NuxtLink to="/deployments" class="underline">buka Deployments</NuxtLink>
+            </dd>
           </div>
           <div class="col-span-2">
             <dt class="text-muted">Host</dt>
@@ -381,7 +554,7 @@ function closeEnrollment() {
               {{ node.dockerVersion || '—' }} / {{ node.composeVersion || '—' }}
             </dd>
           </div>
-          <div class="col-span-2">
+          <div v-if="node.role !== 'builder'" class="col-span-2">
             <dt class="text-muted">Traefik gateway</dt>
             <dd class="mt-1 flex items-center gap-2">
               <UiBadge :tone="gatewayStatusTone(node.gatewayStatus)" dot>
@@ -396,13 +569,84 @@ function closeEnrollment() {
               Observed {{ format.dateTime(node.gatewayLastObservedAt) }}
             </p>
           </div>
+          <div v-if="node.role !== 'deployment'" class="col-span-2">
+            <dt class="text-muted">Builder capability</dt>
+            <dd class="mt-1">
+              <UiBadge :tone="node.capabilities.includes('image-build') ? 'success' : 'danger'" dot>
+                {{ node.capabilities.includes('image-build') ? 'ready' : 'git/buildx unavailable' }}
+              </UiBadge>
+            </dd>
+          </div>
           <div class="col-span-2">
             <dt class="text-muted">Heartbeat terakhir</dt>
             <dd class="mt-1 font-mono text-ink">{{ format.dateTime(node.lastHeartbeatAt) }}</dd>
           </div>
+          <div class="col-span-2">
+            <dt class="text-muted">Agent release</dt>
+            <dd class="mt-1 text-ink">
+              Tersedia v{{ node.availableAgentVersion }}
+              <span v-if="node.previousAgentVersion" class="text-muted">
+                · rollback v{{ node.previousAgentVersion }}
+              </span>
+            </dd>
+            <p v-if="node.agentLastUpdateError" class="mt-2 text-xs leading-5 text-danger">
+              {{ node.agentLastUpdateError }}
+            </p>
+            <p v-else-if="node.agentLastUpdateAt" class="mt-1 text-[11px] text-muted">
+              Update terakhir {{ format.dateTime(node.agentLastUpdateAt) }}
+            </p>
+            <p
+              v-if="node.upgradeAvailable && !node.agentArtifactReady"
+              class="mt-2 text-xs leading-5 text-warning"
+            >
+              Artifact {{ node.architecture }} belum tersedia di control plane. Jalankan
+              <code>npm run agent:build:linux:all</code>.
+            </p>
+          </div>
         </dl>
 
-        <div v-if="node.status !== 'revoked'" class="mt-4 flex justify-end border-t pt-4">
+        <div
+          v-if="node.status !== 'revoked'"
+          class="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4"
+        >
+          <UiButton
+            v-if="node.upgradeAvailable && !node.remoteUpdateSupported"
+            variant="secondary"
+            size="sm"
+            :disabled="!node.agentArtifactReady"
+            @click="copyBootstrapCommand(node)"
+          >
+            <Copy :size="14" aria-hidden="true" />
+            Bootstrap updater
+          </UiButton>
+          <UiButton
+            v-else-if="node.upgradeAvailable"
+            size="sm"
+            :disabled="
+              updatingNodeId === node.id ||
+              !node.agentArtifactReady ||
+              !['online', 'degraded'].includes(node.status) ||
+              ['queued', 'staging'].includes(node.agentUpdateStatus)
+            "
+            @click="pendingAgentAction = { node, action: 'upgrade' }"
+          >
+            <Download :size="14" aria-hidden="true" />
+            Update ke v{{ node.availableAgentVersion }}
+          </UiButton>
+          <UiButton
+            v-if="node.previousAgentVersion && node.remoteUpdateSupported"
+            variant="secondary"
+            size="sm"
+            :disabled="
+              updatingNodeId === node.id ||
+              !['online', 'degraded'].includes(node.status) ||
+              ['queued', 'staging'].includes(node.agentUpdateStatus)
+            "
+            @click="pendingAgentAction = { node, action: 'rollback' }"
+          >
+            <RotateCcw :size="14" aria-hidden="true" />
+            Rollback v{{ node.previousAgentVersion }}
+          </UiButton>
           <UiButton
             variant="danger"
             size="sm"
@@ -415,6 +659,24 @@ function closeEnrollment() {
         </div>
       </UiCard>
     </div>
+
+    <UiConfirmDialog
+      v-if="pendingAgentAction"
+      :title="
+        pendingAgentAction.action === 'upgrade'
+          ? `Update agent ${pendingAgentAction.node.name}?`
+          : `Rollback agent ${pendingAgentAction.node.name}?`
+      "
+      :description="
+        pendingAgentAction.action === 'upgrade'
+          ? `Binary akan diverifikasi lalu diganti secara atomik ke v${pendingAgentAction.node.availableAgentVersion}. Jika heartbeat baru gagal, updater mengembalikan binary sebelumnya.`
+          : `Agent akan kembali ke v${pendingAgentAction.node.previousAgentVersion}. Binary saat ini tetap disimpan agar dapat dipulihkan kembali.`
+      "
+      :confirm-label="pendingAgentAction.action === 'upgrade' ? 'Update agent' : 'Rollback agent'"
+      :pending="updatingNodeId === pendingAgentAction.node.id"
+      @confirm="runAgentAction(pendingAgentAction.node, pendingAgentAction.action)"
+      @cancel="pendingAgentAction = null"
+    />
 
     <UiConfirmDialog
       v-if="pendingRevokeNode"

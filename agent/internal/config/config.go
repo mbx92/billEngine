@@ -11,12 +11,16 @@ import (
 
 const defaultStateFile = "/var/lib/oc-agent/identity.json"
 const defaultSecretDirectory = "/var/lib/oc-agent/secrets"
+const defaultUpdateDirectory = "/var/lib/oc-agent/update"
+const defaultBinaryPath = "/usr/local/bin/oc-agent"
 
 type Config struct {
 	ControlPlaneURL   string
 	EnrollmentToken   string
 	StateFile         string
 	SecretDirectory   string
+	UpdateDirectory   string
+	BinaryPath        string
 	AllowInsecureHTTP bool
 	HeartbeatEvery    time.Duration
 	OperationEvery    time.Duration
@@ -29,6 +33,8 @@ func Load() (Config, error) {
 		EnrollmentToken:   strings.TrimSpace(os.Getenv("OC_ENROLLMENT_TOKEN")),
 		StateFile:         valueOrDefault("OC_AGENT_STATE_FILE", defaultStateFile),
 		SecretDirectory:   valueOrDefault("OC_AGENT_SECRET_DIRECTORY", defaultSecretDirectory),
+		UpdateDirectory:   valueOrDefault("OC_AGENT_UPDATE_DIRECTORY", defaultUpdateDirectory),
+		BinaryPath:        valueOrDefault("OC_AGENT_BINARY_PATH", defaultBinaryPath),
 		AllowInsecureHTTP: strings.EqualFold(strings.TrimSpace(os.Getenv("OC_ALLOW_INSECURE_HTTP")), "true"),
 		HeartbeatEvery:    durationSeconds("OC_HEARTBEAT_SECONDS", 30),
 		OperationEvery:    durationSeconds("OC_OPERATION_POLL_SECONDS", 2),

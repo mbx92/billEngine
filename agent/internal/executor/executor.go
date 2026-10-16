@@ -2,9 +2,11 @@ package executor
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -13,8 +15,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mbx92/billEngine/agent/internal/controlplane"
+	"github.com/mbx92/billEngine/agent/internal/objectstorage"
 )
 
 type CommandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -96,8 +100,36 @@ type serviceDatabasePayload struct {
 	NetworkAlias          string `json:"networkAlias"`
 }
 
+type databaseBackupPayload struct {
+	BackupID            string `json:"backupId"`
+	AllocationID        string `json:"allocationId"`
+	ClusterID           string `json:"clusterId"`
+	ResourceID          string `json:"resourceId"`
+	DatabaseName        string `json:"databaseName"`
+	ProvisionerUsername string `json:"provisionerUsername"`
+	StorageTargetID     string `json:"storageTargetId"`
+	ObjectStorage       *struct {
+		Provider  string `json:"provider"`
+		Endpoint  string `json:"endpoint"`
+		Region    string `json:"region"`
+		Bucket    string `json:"bucket"`
+		ObjectKey string `json:"objectKey"`
+		PathStyle bool   `json:"pathStyle"`
+	} `json:"objectStorage"`
+}
+
 type gatewayPayload struct {
 	Image string `json:"image"`
+}
+
+type applicationBuildPayload struct {
+	BuildID         string `json:"buildId"`
+	RepositoryURL   string `json:"repositoryUrl"`
+	Revision        string `json:"revision"`
+	DockerfilePath  string `json:"dockerfilePath"`
+	BuildContext    string `json:"buildContext"`
+	ImageRepository string `json:"imageRepository"`
+	Version         string `json:"version"`
 }
 
 type routePayload struct {
@@ -119,6 +151,9 @@ var (
 	slugPattern               = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,159}$`)
 	environmentKeyPattern     = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 	postgresIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
+	gitRevisionPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$`)
+	imageBuildVersionPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	imageDigestPattern        = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 )
 
 const managedNetworkName = "oc-private"
@@ -214,15 +249,408 @@ func executeWithInput(
 		return deleteRoute(ctx, operation, secretDirectory, run)
 	case "application.ensure", "application.redeploy":
 		return ensureApplication(ctx, operation, secrets, registry, secretDirectory, run, runInput)
+	case "application.build":
+		return buildApplicationImage(ctx, operation, registry, secretDirectory, run, runInput)
 	case "application.start", "application.stop", "application.restart", "application.delete":
 		return lifecycle(ctx, operation, secretDirectory, run)
 	case "database.cluster.activate":
 		return activateDatabaseCluster(ctx, operation, run)
 	case "database.service.ensure":
 		return ensureServiceDatabase(ctx, operation, secrets, run, runInput)
+	case "database.backup.create":
+		return createDatabaseBackup(ctx, operation, secrets, run)
+	case "database.backup.restore":
+		return restoreDatabaseBackup(ctx, operation, secrets, run)
+	case "database.backup.delete":
+		return deleteDatabaseBackup(ctx, operation, secrets)
 	default:
 		return nil, &Error{Code: "unsupported", Message: "agent action is not supported"}
 	}
+}
+
+const applicationBuildDirectory = "/var/lib/oc-agent/builds"
+
+func buildApplicationImage(
+	ctx context.Context,
+	operation controlplane.Operation,
+	registry *controlplane.RegistryCredential,
+	secretDirectory string,
+	run CommandRunner,
+	runInput InputCommandRunner,
+) (map[string]any, *Error) {
+	var payload applicationBuildPayload
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil {
+		return nil, invalidSpec("invalid application build payload")
+	}
+	if !uuidPattern.MatchString(payload.BuildID) ||
+		!validGitRevision(payload.Revision) ||
+		!imageBuildVersionPattern.MatchString(payload.Version) {
+		return nil, invalidSpec("invalid application build identity")
+	}
+	repositoryURL, err := url.Parse(payload.RepositoryURL)
+	if err != nil || repositoryURL.Scheme != "https" ||
+		!strings.EqualFold(repositoryURL.Hostname(), "github.com") || repositoryURL.User != nil ||
+		repositoryURL.RawQuery != "" || repositoryURL.Fragment != "" {
+		return nil, invalidSpec("builder only accepts HTTPS github.com repositories")
+	}
+	if registry == nil || registry.Host == "" || registry.Username == "" || registry.Token == "" ||
+		!strings.HasPrefix(payload.ImageRepository, registry.Host+"/") {
+		return nil, invalidSpec("registry credential does not match the build image repository")
+	}
+	dockerfilePath, pathErr := safeBuildPath(payload.DockerfilePath)
+	if pathErr != nil {
+		return nil, invalidSpec("invalid Dockerfile path")
+	}
+	buildContext, pathErr := safeBuildPath(payload.BuildContext)
+	if pathErr != nil {
+		return nil, invalidSpec("invalid build context")
+	}
+
+	if err := os.MkdirAll(applicationBuildDirectory, 0o700); err != nil {
+		return nil, commandError("build_workspace_failed", err, true)
+	}
+	workspace := filepath.Join(applicationBuildDirectory, payload.BuildID)
+	if err := os.RemoveAll(workspace); err != nil {
+		return nil, commandError("build_workspace_failed", err, true)
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		return nil, commandError("build_workspace_failed", err, true)
+	}
+	defer os.RemoveAll(workspace)
+	sourceDirectory := filepath.Join(workspace, "source")
+	if _, err := run(
+		ctx,
+		"git",
+		"clone",
+		"--depth", "1",
+		"--single-branch",
+		"--branch", payload.Revision,
+		"--", payload.RepositoryURL, sourceDirectory,
+	); err != nil {
+		return nil, commandError("repository_clone_failed", err, true)
+	}
+	commitOutput, err := run(ctx, "git", "-C", sourceDirectory, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, commandError("repository_revision_failed", err, false)
+	}
+	commitSHA := strings.ToLower(strings.TrimSpace(string(commitOutput)))
+	if !regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(commitSHA) {
+		return nil, invalidSpec("repository returned an invalid commit SHA")
+	}
+
+	if secretDirectory == "" || !filepath.IsAbs(secretDirectory) {
+		return nil, invalidSpec("secret directory must be absolute")
+	}
+	if err := os.MkdirAll(secretDirectory, 0o700); err != nil {
+		return nil, commandError("registry_auth_failed", err, true)
+	}
+	dockerConfigDirectory, err := os.MkdirTemp(secretDirectory, "builder-registry-")
+	if err != nil {
+		return nil, commandError("registry_auth_failed", err, true)
+	}
+	defer os.RemoveAll(dockerConfigDirectory)
+	if err := os.Chmod(dockerConfigDirectory, 0o700); err != nil {
+		return nil, commandError("registry_auth_failed", err, true)
+	}
+	if _, err := runInput(
+		ctx,
+		[]byte(registry.Token+"\n"),
+		"docker",
+		"--config", dockerConfigDirectory,
+		"login", registry.Host,
+		"--username", registry.Username,
+		"--password-stdin",
+	); err != nil {
+		return nil, commandError("registry_auth_failed", err, true)
+	}
+	builderName := "oc-builder-" + strings.ReplaceAll(payload.BuildID, "-", "")
+	if _, err := run(
+		ctx,
+		"docker",
+		"--config", dockerConfigDirectory,
+		"buildx", "create",
+		"--name", builderName,
+		"--driver", "docker-container",
+		"--use",
+	); err != nil {
+		return nil, commandError("buildkit_start_failed", err, true)
+	}
+	defer func() {
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = run(
+			cleanupContext,
+			"docker",
+			"--config", dockerConfigDirectory,
+			"buildx", "rm", "--force", builderName,
+		)
+	}()
+
+	metadataPath := filepath.Join(workspace, "metadata.json")
+	imageTag := payload.ImageRepository + ":" + payload.Version
+	buildOutput, err := run(
+		ctx,
+		"docker",
+		"--config", dockerConfigDirectory,
+		"buildx", "build",
+		"--progress", "plain",
+		"--file", filepath.Join(sourceDirectory, dockerfilePath),
+		"--tag", imageTag,
+		"--label", "org.opencontainers.image.revision="+commitSHA,
+		"--label", "org.opencontainers.image.source="+payload.RepositoryURL,
+		"--cache-from", "type=registry,ref="+payload.ImageRepository+":buildcache",
+		"--cache-to", "type=registry,ref="+payload.ImageRepository+":buildcache,mode=max",
+		"--metadata-file", metadataPath,
+		"--push",
+		filepath.Join(sourceDirectory, buildContext),
+	)
+	if err != nil {
+		return nil, commandError("image_build_failed", err, false)
+	}
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return nil, commandError("image_digest_missing", err, false)
+	}
+	var buildMetadata map[string]any
+	if err := json.Unmarshal(metadata, &buildMetadata); err != nil {
+		return nil, commandError("image_digest_invalid", err, false)
+	}
+	digest, _ := buildMetadata["containerimage.digest"].(string)
+	digest = strings.ToLower(strings.TrimSpace(digest))
+	if !imageDigestPattern.MatchString(digest) {
+		return nil, &Error{Code: "image_digest_invalid", Message: "BuildKit did not return an OCI image digest"}
+	}
+
+	return map[string]any{
+		"buildId":        payload.BuildID,
+		"version":        payload.Version,
+		"commitSha":      commitSHA,
+		"imageDigest":    digest,
+		"imageReference": payload.ImageRepository + "@" + digest,
+		"logExcerpt":     tailText(string(buildOutput), 8000),
+	}, nil
+}
+
+func validGitRevision(value string) bool {
+	return gitRevisionPattern.MatchString(value) &&
+		!strings.Contains(value, "..") &&
+		!strings.Contains(value, "@{") &&
+		!strings.Contains(value, "//")
+}
+
+func safeBuildPath(value string) (string, error) {
+	if value == "" || filepath.IsAbs(value) || strings.ContainsRune(value, '\x00') {
+		return "", errors.New("path must be relative")
+	}
+	cleaned := filepath.Clean(value)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes source directory")
+	}
+	return cleaned, nil
+}
+
+func tailText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[len(value)-limit:]
+}
+
+const databaseBackupDirectory = "/var/lib/oc-agent/backups"
+
+func createDatabaseBackup(
+	ctx context.Context,
+	operation controlplane.Operation,
+	secrets map[string]string,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	payload, payloadErr := parseDatabaseBackupPayload(operation)
+	if payloadErr != nil {
+		return nil, payloadErr
+	}
+	name, ownershipErr := ownedPostgresContainer(ctx, payload.ResourceID, run)
+	if ownershipErr != nil {
+		return nil, ownershipErr
+	}
+	directory := filepath.Join(databaseBackupDirectory, payload.AllocationID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return nil, commandError("backup_directory_failed", err, true)
+	}
+	path := filepath.Join(directory, payload.BackupID+".dump")
+	temporaryPath := path + ".tmp"
+	containerPath := "/tmp/oc-backup-" + payload.BackupID + ".dump"
+	defer func() { _, _ = run(ctx, "docker", "exec", name, "rm", "-f", containerPath) }()
+
+	if _, err := run(ctx, "docker", "exec", name, "pg_dump", "--format=custom", "--no-owner", "--no-acl", "--username", payload.ProvisionerUsername, "--dbname", payload.DatabaseName, "--file", containerPath); err != nil {
+		return nil, commandError("database_backup_failed", err, true)
+	}
+	if _, err := run(ctx, "docker", "exec", name, "pg_restore", "--list", containerPath); err != nil {
+		return nil, commandError("database_backup_verify_failed", err, false)
+	}
+	_ = os.Remove(temporaryPath)
+	if _, err := run(ctx, "docker", "cp", name+":"+containerPath, temporaryPath); err != nil {
+		return nil, commandError("database_backup_copy_failed", err, true)
+	}
+	checksum, size, err := checksumFile(temporaryPath)
+	if err != nil {
+		_ = os.Remove(temporaryPath)
+		return nil, commandError("database_backup_checksum_failed", err, true)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		_ = os.Remove(temporaryPath)
+		return nil, commandError("database_backup_activate_failed", err, true)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return nil, commandError("database_backup_permissions_failed", err, true)
+	}
+	storagePath := path
+	if payload.ObjectStorage != nil {
+		if payload.ObjectStorage.Provider != "s3" || !uuidPattern.MatchString(payload.StorageTargetID) {
+			return nil, invalidSpec("invalid backup object storage target")
+		}
+		client := objectstorage.S3Client{
+			AccessKey: secrets["S3_ACCESS_KEY_ID"],
+			SecretKey: secrets["S3_SECRET_ACCESS_KEY"],
+		}
+		if err := client.Upload(ctx, s3Target(payload), path, checksum); err != nil {
+			return nil, commandError("database_backup_upload_failed", err, true)
+		}
+		storagePath = "s3://" + payload.ObjectStorage.Bucket + "/" + payload.ObjectStorage.ObjectKey
+	}
+	return map[string]any{
+		"backupId": payload.BackupID, "allocationId": payload.AllocationID,
+		"storagePath": storagePath, "checksumSha256": checksum, "sizeBytes": strconv.FormatInt(size, 10),
+	}, nil
+}
+
+func restoreDatabaseBackup(
+	ctx context.Context,
+	operation controlplane.Operation,
+	secrets map[string]string,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	payload, payloadErr := parseDatabaseBackupPayload(operation)
+	if payloadErr != nil {
+		return nil, payloadErr
+	}
+	name, ownershipErr := ownedPostgresContainer(ctx, payload.ResourceID, run)
+	if ownershipErr != nil {
+		return nil, ownershipErr
+	}
+	path := filepath.Join(databaseBackupDirectory, payload.AllocationID, payload.BackupID+".dump")
+	var raw struct {
+		ChecksumSHA256 string `json:"checksumSha256"`
+	}
+	_ = json.Unmarshal(operation.Payload, &raw)
+	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(raw.ChecksumSHA256) {
+		return nil, invalidSpec("invalid database backup checksum")
+	}
+	checksum, _, err := checksumFile(path)
+	if (err != nil || checksum != raw.ChecksumSHA256) && payload.ObjectStorage != nil {
+		if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
+			return nil, commandError("backup_directory_failed", mkdirErr, true)
+		}
+		client := objectstorage.S3Client{
+			AccessKey: secrets["S3_ACCESS_KEY_ID"],
+			SecretKey: secrets["S3_SECRET_ACCESS_KEY"],
+		}
+		if downloadErr := client.Download(ctx, s3Target(payload), path); downloadErr != nil {
+			return nil, commandError("database_backup_download_failed", downloadErr, true)
+		}
+		checksum, _, err = checksumFile(path)
+	}
+	if err != nil {
+		return nil, &Error{Code: "database_backup_missing", Message: "backup artifact is unavailable on this node"}
+	}
+	if checksum != raw.ChecksumSHA256 {
+		return nil, &Error{Code: "database_backup_checksum_mismatch", Message: "backup checksum verification failed"}
+	}
+	containerPath := "/tmp/oc-restore-" + payload.BackupID + ".dump"
+	defer func() { _, _ = run(ctx, "docker", "exec", name, "rm", "-f", containerPath) }()
+	if _, err := run(ctx, "docker", "cp", path, name+":"+containerPath); err != nil {
+		return nil, commandError("database_restore_copy_failed", err, true)
+	}
+	if _, err := run(ctx, "docker", "exec", name, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "--exit-on-error", "--single-transaction", "--username", payload.ProvisionerUsername, "--dbname", payload.DatabaseName, containerPath); err != nil {
+		return nil, commandError("database_restore_failed", err, false)
+	}
+	return map[string]any{"backupId": payload.BackupID, "allocationId": payload.AllocationID, "restored": true}, nil
+}
+
+func deleteDatabaseBackup(
+	ctx context.Context,
+	operation controlplane.Operation,
+	secrets map[string]string,
+) (map[string]any, *Error) {
+	var payload databaseBackupPayload
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil ||
+		!uuidPattern.MatchString(payload.BackupID) || !uuidPattern.MatchString(payload.AllocationID) {
+		return nil, invalidSpec("invalid database backup deletion payload")
+	}
+	path := filepath.Join(databaseBackupDirectory, payload.AllocationID, payload.BackupID+".dump")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, commandError("database_backup_delete_failed", err, true)
+	}
+	if payload.ObjectStorage != nil {
+		client := objectstorage.S3Client{
+			AccessKey: secrets["S3_ACCESS_KEY_ID"],
+			SecretKey: secrets["S3_SECRET_ACCESS_KEY"],
+		}
+		if err := client.Delete(ctx, s3Target(payload)); err != nil {
+			return nil, commandError("database_backup_object_delete_failed", err, true)
+		}
+	}
+	return map[string]any{"backupId": payload.BackupID, "deleted": true}, nil
+}
+
+func s3Target(payload databaseBackupPayload) objectstorage.S3Target {
+	if payload.ObjectStorage == nil {
+		return objectstorage.S3Target{}
+	}
+	return objectstorage.S3Target{
+		Endpoint:  payload.ObjectStorage.Endpoint,
+		Region:    payload.ObjectStorage.Region,
+		Bucket:    payload.ObjectStorage.Bucket,
+		ObjectKey: payload.ObjectStorage.ObjectKey,
+		PathStyle: payload.ObjectStorage.PathStyle,
+	}
+}
+
+func parseDatabaseBackupPayload(operation controlplane.Operation) (databaseBackupPayload, *Error) {
+	var payload databaseBackupPayload
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil {
+		return payload, invalidSpec("invalid database backup payload")
+	}
+	if !uuidPattern.MatchString(payload.BackupID) || !uuidPattern.MatchString(payload.AllocationID) ||
+		!uuidPattern.MatchString(payload.ClusterID) || !uuidPattern.MatchString(payload.ResourceID) ||
+		!postgresIdentifierPattern.MatchString(payload.DatabaseName) ||
+		!postgresIdentifierPattern.MatchString(payload.ProvisionerUsername) {
+		return payload, invalidSpec("invalid database backup identity")
+	}
+	return payload, nil
+}
+
+func ownedPostgresContainer(ctx context.Context, resourceID string, run CommandRunner) (string, *Error) {
+	name := containerName(resourceID)
+	owner, err := run(ctx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.resource-id"}}`, name)
+	if err != nil || strings.TrimSpace(string(owner)) != resourceID {
+		return "", &Error{Code: "resource_not_found", Message: "owned PostgreSQL container was not found"}
+	}
+	return name, nil
+}
+
+func checksumFile(path string) (string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	size, err := io.Copy(hash, file)
+	if err != nil {
+		return "", 0, err
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), size, nil
 }
 
 func deleteRoute(
@@ -942,14 +1370,18 @@ func invalidSpec(message string) *Error {
 
 func commandError(code string, err error, retryable bool) *Error {
 	message := strings.TrimSpace(err.Error())
-	if len(message) > 500 {
-		message = message[:500]
+	if len(message) > 1000 {
+		message = message[len(message)-1000:]
 	}
 	return &Error{Code: code, Message: message, Retryable: retryable}
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		return output, fmt.Errorf("%w: %s", err, tailText(string(output), 2000))
+	}
+	return output, nil
 }
 
 func runCommandWithInput(
@@ -960,7 +1392,11 @@ func runCommandWithInput(
 ) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Stdin = strings.NewReader(string(input))
-	return command.CombinedOutput()
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return output, fmt.Errorf("%w: %s", err, tailText(string(output), 2000))
+	}
+	return output, nil
 }
 
 func ensureManagedNetwork(ctx context.Context, run CommandRunner) *Error {

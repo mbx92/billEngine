@@ -28,8 +28,12 @@ docker compose version >/dev/null
 
 agent_source="${1:-./oc-agent}"
 service_source="${2:-./deploy/agent/oc-agent.service}"
-if [[ ! -f "${agent_source}" || ! -f "${service_source}" ]]; then
-  echo "Binary agent atau unit systemd tidak ditemukan." >&2
+updater_source="${3:-./deploy/agent/oc-agent-updater}"
+update_path_source="${4:-./deploy/agent/oc-agent-update.path}"
+update_service_source="${5:-./deploy/agent/oc-agent-update.service}"
+if [[ ! -f "${agent_source}" || ! -f "${service_source}" || ! -f "${updater_source}" ||
+  ! -f "${update_path_source}" || ! -f "${update_service_source}" ]]; then
+  echo "Binary agent, updater, atau unit systemd tidak ditemukan." >&2
   exit 1
 fi
 
@@ -44,8 +48,21 @@ usermod -aG docker oc-agent
 
 install -d -m 0750 -o root -g oc-agent /etc/oc-agent
 install -d -m 0700 -o oc-agent -g oc-agent /var/lib/oc-agent
+install -d -m 0700 -o oc-agent -g oc-agent /var/lib/oc-agent/update
+install -d -m 0755 -o root -g root /usr/local/libexec
+new_agent_version="$("${agent_source}" --version)"
+if [[ -x /usr/local/bin/oc-agent ]]; then
+  current_agent_version="$(/usr/local/bin/oc-agent --version 2>/dev/null || true)"
+  if [[ "${current_agent_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] &&
+    [[ "${current_agent_version}" != "${new_agent_version}" ]]; then
+    install -m 0755 -o root -g root /usr/local/bin/oc-agent /usr/local/bin/oc-agent.previous
+  fi
+fi
 install -m 0755 -o root -g root "${agent_source}" /usr/local/bin/oc-agent
+install -m 0755 -o root -g root "${updater_source}" /usr/local/libexec/oc-agent-updater
 install -m 0644 -o root -g root "${service_source}" /etc/systemd/system/oc-agent.service
+install -m 0644 -o root -g root "${update_path_source}" /etc/systemd/system/oc-agent-update.path
+install -m 0644 -o root -g root "${update_service_source}" /etc/systemd/system/oc-agent-update.service
 
 if [[ ! -f /etc/oc-agent/agent.env ]]; then
   install -m 0640 -o root -g oc-agent /dev/null /etc/oc-agent/agent.env
@@ -58,4 +75,5 @@ ENV
 fi
 
 systemctl daemon-reload
+systemctl enable --now oc-agent-update.path
 echo "Edit /etc/oc-agent/agent.env, lalu jalankan: systemctl enable --now oc-agent"

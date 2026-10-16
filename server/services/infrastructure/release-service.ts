@@ -1,14 +1,16 @@
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type {
   CreateApplicationReleaseInput,
   CreateContainerRegistryInput,
   CreateDeployableApplicationInput,
   ReleaseCallbackInput,
   RolloutApplicationReleaseInput,
+  UpdateContainerRegistryInput,
 } from '../../../shared/schemas/releases'
 import { useDatabase, type Database, type Transaction } from '../../database/client'
 import {
   applicationReleases,
+  applicationBuilds,
   auditLogs,
   containerRegistries,
   deployableApplications,
@@ -26,7 +28,7 @@ export class InfrastructureReleaseService {
   constructor(private readonly database: Database = useDatabase()) {}
 
   async catalog() {
-    const [registries, applications, releases, resources] = await Promise.all([
+    const [registries, applications, releases, resources, builds, builders] = await Promise.all([
       this.database
         .select({
           id: containerRegistries.id,
@@ -60,6 +62,43 @@ export class InfrastructureReleaseService {
           ),
         )
         .orderBy(asc(infrastructureResources.name)),
+      this.database
+        .select({
+          id: applicationBuilds.id,
+          applicationId: applicationBuilds.applicationId,
+          nodeId: applicationBuilds.nodeId,
+          nodeName: infrastructureNodes.name,
+          releaseId: applicationBuilds.releaseId,
+          status: applicationBuilds.status,
+          version: applicationBuilds.version,
+          commitSha: applicationBuilds.commitSha,
+          imageDigest: applicationBuilds.imageDigest,
+          imageReference: applicationBuilds.imageReference,
+          logExcerpt: applicationBuilds.logExcerpt,
+          errorCode: applicationBuilds.errorCode,
+          errorMessage: applicationBuilds.errorMessage,
+          startedAt: applicationBuilds.startedAt,
+          completedAt: applicationBuilds.completedAt,
+          createdAt: applicationBuilds.createdAt,
+          updatedAt: applicationBuilds.updatedAt,
+        })
+        .from(applicationBuilds)
+        .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, applicationBuilds.nodeId))
+        .orderBy(desc(applicationBuilds.createdAt))
+        .limit(50),
+      this.database
+        .select({ id: infrastructureNodes.id })
+        .from(infrastructureNodes)
+        .where(
+          and(
+            eq(infrastructureNodes.isActive, true),
+            eq(infrastructureNodes.isDraining, false),
+            inArray(infrastructureNodes.status, ['online', 'degraded']),
+            inArray(infrastructureNodes.role, ['builder', 'hybrid']),
+            sql`${infrastructureNodes.lastHeartbeatAt} >= now() - interval '90 seconds'`,
+            sql`${infrastructureNodes.capabilities} @> '["image-build"]'::jsonb`,
+          ),
+        ),
     ])
 
     return {
@@ -67,6 +106,14 @@ export class InfrastructureReleaseService {
       applications: applications.map(serializeDates),
       releases: releases.map(serializeDates),
       resources,
+      builds: builds.map((build) => ({
+        ...build,
+        startedAt: build.startedAt?.toISOString() ?? null,
+        completedAt: build.completedAt?.toISOString() ?? null,
+        createdAt: build.createdAt.toISOString(),
+        updatedAt: build.updatedAt.toISOString(),
+      })),
+      builderAvailable: builders.length > 0,
     }
   }
 
@@ -95,6 +142,42 @@ export class InfrastructureReleaseService {
       if (isUniqueViolation(error)) throw DomainError.conflict('Host registry sudah terdaftar.')
       throw error
     }
+  }
+
+  async updateRegistry(
+    registryId: string,
+    input: UpdateContainerRegistryInput,
+    actorUserId: string,
+  ) {
+    const now = new Date()
+    const [registry] = await this.database
+      .update(containerRegistries)
+      .set({
+        name: input.name,
+        username: input.username,
+        tokenEncrypted: encryptInfrastructureCredential(input.token),
+        isActive: true,
+        updatedAt: now,
+      })
+      .where(eq(containerRegistries.id, registryId))
+      .returning({
+        id: containerRegistries.id,
+        name: containerRegistries.name,
+        host: containerRegistries.host,
+        username: containerRegistries.username,
+        isActive: containerRegistries.isActive,
+        createdAt: containerRegistries.createdAt,
+        updatedAt: containerRegistries.updatedAt,
+      })
+    if (!registry) throw DomainError.notFound('Registry tidak ditemukan.')
+    await this.database.insert(auditLogs).values({
+      actorUserId,
+      action: 'infrastructure.registry.credential-rotated',
+      entityType: 'container_registry',
+      entityId: registry.id,
+      metadata: { host: registry.host, username: registry.username },
+    })
+    return serializeDates(registry)
   }
 
   async createApplication(input: CreateDeployableApplicationInput, actorUserId: string) {
@@ -263,10 +346,9 @@ export class InfrastructureReleaseService {
         .onConflictDoNothing()
         .returning()
 
-      const release =
-        inserted ??
-        (
-          await transaction
+      const [releaseByVersion] = inserted
+        ? [inserted]
+        : await transaction
             .select()
             .from(applicationReleases)
             .where(
@@ -276,10 +358,23 @@ export class InfrastructureReleaseService {
               ),
             )
             .limit(1)
-        )[0]
-      if (!release || release.imageDigest !== input.imageDigest) {
+      if (releaseByVersion && releaseByVersion.imageDigest !== input.imageDigest) {
         throw DomainError.conflict('Versi release sudah menunjuk image digest yang berbeda.')
       }
+      const [releaseByDigest] = releaseByVersion
+        ? [releaseByVersion]
+        : await transaction
+            .select()
+            .from(applicationReleases)
+            .where(
+              and(
+                eq(applicationReleases.applicationId, application.id),
+                eq(applicationReleases.imageDigest, input.imageDigest),
+              ),
+            )
+            .limit(1)
+      const release = releaseByVersion ?? releaseByDigest
+      if (!release) throw DomainError.conflict('Release tidak dapat dicatat.')
       if (inserted) {
         await transaction.insert(auditLogs).values({
           actorUserId,

@@ -50,6 +50,7 @@ interface InfrastructureNode {
   id: string
   name: string
   environment: string
+  role: 'deployment' | 'builder' | 'hybrid'
   status: 'enrolling' | 'online' | 'degraded' | 'offline' | 'revoked' | 'unknown'
   isActive: boolean
   isDraining: boolean
@@ -69,12 +70,11 @@ const [
   { data: templateResponse, status, error, refresh },
   { data: nodeResponse },
   { data: serviceResponse },
-] =
-  await Promise.all([
-    useFetch<{ data: InfrastructureTemplate[] }>('/api/infrastructure/templates'),
-    useFetch<{ data: InfrastructureNode[] }>('/api/infrastructure/nodes'),
-    useFetch<{ data: ServiceOption[] }>('/api/services', { query: { page: 1, perPage: 100 } }),
-  ])
+] = await Promise.all([
+  useFetch<{ data: InfrastructureTemplate[] }>('/api/infrastructure/templates'),
+  useFetch<{ data: InfrastructureNode[] }>('/api/infrastructure/nodes'),
+  useFetch<{ data: ServiceOption[] }>('/api/services', { query: { page: 1, perPage: 100 } }),
+])
 
 const templates = computed(() => templateResponse.value?.data ?? [])
 const nodes = computed(() =>
@@ -82,6 +82,7 @@ const nodes = computed(() =>
     (node) =>
       node.isActive &&
       !node.isDraining &&
+      node.role !== 'builder' &&
       ['online', 'degraded'].includes(node.status) &&
       supportsTemplateSecrets(node.agentVersion),
   ),
@@ -154,12 +155,9 @@ async function deployTemplate() {
         nodeId: form.nodeId,
         serviceId: form.serviceId || undefined,
         name: form.name,
-        subdomain:
-          template.definition.resourceKind === 'application' ? form.subdomain : undefined,
+        subdomain: template.definition.resourceKind === 'application' ? form.subdomain : undefined,
         hostPort:
-          template.definition.resourceKind === 'application'
-            ? undefined
-            : Number(form.hostPort),
+          template.definition.resourceKind === 'application' ? undefined : Number(form.hostPort),
         classification: form.classification,
         values: form.values,
       },
@@ -234,8 +232,8 @@ function supportsGatewayRoutes(version: string | null) {
       v-if="status !== 'pending' && !nodes.length"
       class="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
     >
-      Template database membutuhkan OC Agent 0.3.0 atau lebih baru. Buka halaman Nodes lalu
-      jalankan kembali perintah installer pada server; identity node lama tetap digunakan.
+      Template database membutuhkan OC Agent 0.3.0 atau lebih baru. Buka halaman Nodes lalu jalankan
+      kembali perintah installer pada server; identity node lama tetap digunakan.
     </p>
 
     <div v-if="status === 'pending'" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

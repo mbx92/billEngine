@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   Activity as ActivityIcon,
+  Archive,
   BarChart3,
   Boxes,
   CreditCard,
@@ -53,6 +54,7 @@ const infrastructureNavigation = [
   { label: 'Templates', to: '/templates', icon: FileCode2 },
   { label: 'Deployments', to: '/deployments', icon: Rocket },
   { label: 'Database Clusters', to: '/database-clusters', icon: Database },
+  { label: 'Backups', to: '/backups', icon: Archive },
   { label: 'Tunnels', to: '/tunnels', icon: Network },
   { label: 'Servers', to: '/servers', icon: ServerIcon },
   { label: 'Activity', to: '/activity', icon: ActivityIcon },

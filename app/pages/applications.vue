@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileCode2, GitBranch, Package, Plus, Rocket, ShieldCheck } from '@lucide/vue'
+import { FileCode2, GitBranch, Hammer, Package, Plus, Rocket, ShieldCheck } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
 
 definePageMeta({ middleware: 'auth' })
@@ -47,20 +47,41 @@ interface Resource {
   observedState: string
 }
 
+interface ApplicationBuild {
+  id: string
+  applicationId: string
+  nodeName: string
+  releaseId: string | null
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  version: string
+  commitSha: string | null
+  imageDigest: string | null
+  logExcerpt: string | null
+  errorCode: string | null
+  errorMessage: string | null
+  createdAt: string
+  completedAt: string | null
+}
+
 interface Catalog {
   registries: Registry[]
   applications: DeployableApplication[]
   releases: Release[]
   resources: Resource[]
+  builds: ApplicationBuild[]
+  builderAvailable: boolean
 }
 
+const format = useFormat()
 const { data, status, error, refresh } = await useFetch<{ data: Catalog }>(
   '/api/infrastructure/applications',
 )
 const catalog = computed(() => data.value?.data)
 const registries = computed(() => catalog.value?.registries ?? [])
+const activeRegistries = computed(() => registries.value.filter((registry) => registry.isActive))
 const applications = computed(() => catalog.value?.applications ?? [])
 const resources = computed(() => catalog.value?.resources ?? [])
+const builds = computed(() => catalog.value?.builds ?? [])
 
 const showRegistryForm = ref(false)
 const showApplicationForm = ref(false)
@@ -70,15 +91,38 @@ const rolloutRelease = ref<Release | null>(null)
 const selectedResourceIds = ref<string[]>([])
 const trackLatest = ref(false)
 const saving = ref(false)
+const buildingApplicationId = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 
 const registryForm = reactive({
+  registryId: '',
   name: 'GitHub Container Registry',
   host: 'ghcr.io',
   username: '',
   token: '',
 })
+watch(
+  () => registryForm.registryId,
+  (registryId) => {
+    const registry = registries.value.find((item) => item.id === registryId)
+    if (!registry) {
+      Object.assign(registryForm, {
+        name: 'GitHub Container Registry',
+        host: 'ghcr.io',
+        username: '',
+        token: '',
+      })
+      return
+    }
+    Object.assign(registryForm, {
+      name: registry.name,
+      host: registry.host,
+      username: registry.username,
+      token: '',
+    })
+  },
+)
 const applicationForm = reactive({
   name: '',
   slug: '',
@@ -107,17 +151,42 @@ const templateForm = reactive({
 })
 
 watch(
-  registries,
+  activeRegistries,
   (items) => {
-    if (!applicationForm.registryId && items[0]) applicationForm.registryId = items[0].id
+    if (!items.some((registry) => registry.id === applicationForm.registryId)) {
+      applicationForm.registryId = items[0]?.id ?? ''
+    }
   },
   { immediate: true },
 )
+
+const selectedRegistry = computed(() =>
+  activeRegistries.value.find((registry) => registry.id === applicationForm.registryId),
+)
+const imageRepositoryHint = computed(() => {
+  const registry = selectedRegistry.value
+  if (!registry) return 'Daftarkan registry aktif terlebih dahulu.'
+  return `Contoh: ${registry.host}/${registry.username.toLowerCase()}/my-app · tanpa https:// atau tag.`
+})
 
 function releasesFor(applicationId: string) {
   return (catalog.value?.releases ?? [])
     .filter((release) => release.applicationId === applicationId)
     .slice(0, 5)
+}
+
+function buildsFor(applicationId: string) {
+  return builds.value.filter((build) => build.applicationId === applicationId).slice(0, 3)
+}
+
+function activeBuild(applicationId: string) {
+  return buildsFor(applicationId).find((build) => ['queued', 'running'].includes(build.status))
+}
+
+function buildTone(buildStatus: ApplicationBuild['status']) {
+  if (buildStatus === 'succeeded') return 'success' as const
+  if (buildStatus === 'failed' || buildStatus === 'cancelled') return 'danger' as const
+  return 'warning' as const
 }
 
 function registryName(registryId: string) {
@@ -133,14 +202,37 @@ function clearFeedback() {
   actionError.value = null
 }
 
+function openRegistryDialog() {
+  registryForm.registryId = ''
+  showRegistryForm.value = true
+}
+
+function closeRegistryDialog() {
+  registryForm.registryId = ''
+  showRegistryForm.value = false
+}
+
 async function createRegistry() {
   saving.value = true
   clearFeedback()
   try {
-    await $fetch('/api/infrastructure/registries', { method: 'POST', body: registryForm })
-    actionMessage.value = `Registry ${registryForm.host} berhasil disimpan.`
+    if (registryForm.registryId) {
+      await $fetch(`/api/infrastructure/registries/${registryForm.registryId}`, {
+        method: 'PATCH',
+        body: {
+          name: registryForm.name,
+          username: registryForm.username,
+          token: registryForm.token,
+        },
+      })
+      actionMessage.value = `Credential registry ${registryForm.host} berhasil diperbarui.`
+    } else {
+      await $fetch('/api/infrastructure/registries', { method: 'POST', body: registryForm })
+      actionMessage.value = `Registry ${registryForm.host} berhasil disimpan.`
+    }
     showRegistryForm.value = false
     Object.assign(registryForm, {
+      registryId: '',
       name: 'GitHub Container Registry',
       host: 'ghcr.io',
       username: '',
@@ -158,6 +250,11 @@ async function createApplication() {
   saving.value = true
   clearFeedback()
   try {
+    applicationForm.imageRepository = applicationForm.imageRepository
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/+$/, '')
+      .toLowerCase()
     await $fetch('/api/infrastructure/applications', { method: 'POST', body: applicationForm })
     actionMessage.value = `Application ${applicationForm.name} berhasil dibuat.`
     showApplicationForm.value = false
@@ -169,7 +266,7 @@ async function createApplication() {
       dockerfilePath: 'Dockerfile',
       buildContext: '.',
       imageRepository: '',
-      registryId: registries.value[0]?.id ?? '',
+      registryId: activeRegistries.value[0]?.id ?? '',
       autoDeploy: false,
     })
     await refresh()
@@ -272,6 +369,29 @@ async function createRelease() {
   }
 }
 
+async function queueBuild(application: DeployableApplication) {
+  buildingApplicationId.value = application.id
+  clearFeedback()
+  try {
+    const response = await $fetch<{ data: { build: ApplicationBuild } }>(
+      `/api/infrastructure/applications/${application.id}/builds`,
+      {
+        method: 'POST',
+        headers: {
+          'Idempotency-Key': `application-build:${application.id}:${crypto.randomUUID()}`,
+        },
+        body: {},
+      },
+    )
+    actionMessage.value = `Build ${response.data.build.version} masuk antrean pada builder node.`
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Gagal mengantrekan build image.')
+  } finally {
+    buildingApplicationId.value = null
+  }
+}
+
 function openRollout(release: Release) {
   rolloutRelease.value = release
   selectedResourceIds.value = resources.value
@@ -301,6 +421,21 @@ async function rollout() {
     saving.value = false
   }
 }
+
+let buildRefreshTimer: number | undefined
+onMounted(() => {
+  buildRefreshTimer = window.setInterval(() => {
+    if (
+      document.visibilityState === 'visible' &&
+      builds.value.some((build) => ['queued', 'running'].includes(build.status))
+    ) {
+      void refresh()
+    }
+  }, 5000)
+})
+onBeforeUnmount(() => {
+  if (buildRefreshTimer) window.clearInterval(buildRefreshTimer)
+})
 </script>
 
 <template>
@@ -318,7 +453,7 @@ async function rollout() {
       </div>
       <div class="flex flex-wrap gap-2">
         <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
-        <UiButton variant="secondary" @click="showRegistryForm = true"
+        <UiButton variant="secondary" @click="openRegistryDialog"
           ><ShieldCheck :size="15" /> Registry</UiButton
         >
         <UiButton :disabled="!registries.length" @click="showApplicationForm = true"
@@ -346,13 +481,12 @@ async function rollout() {
         <div>
           <h2 class="font-semibold text-ink">Hubungkan container registry terlebih dahulu</h2>
           <p class="mt-1 text-sm text-muted">
-            Untuk GHCR private, gunakan personal access token (classic) dengan scope
-            <code>read:packages</code>.
+            Untuk native build ke GHCR, gunakan personal access token (classic) dengan scope
+            <code>write:packages</code>. Jika registry hanya digunakan untuk deploy,
+            <code>read:packages</code> sudah cukup.
           </p>
         </div>
-        <UiButton @click="showRegistryForm = true"
-          ><ShieldCheck :size="15" /> Tambah registry</UiButton
-        >
+        <UiButton @click="openRegistryDialog"><ShieldCheck :size="15" /> Tambah registry</UiButton>
       </div>
     </UiCard>
 
@@ -389,7 +523,7 @@ async function rollout() {
             </div>
           </div>
           <UiBadge :tone="application.autoDeploy ? 'success' : 'neutral'">{{
-            application.autoDeploy ? 'Auto deploy' : 'Manual'
+            application.autoDeploy ? 'Auto rollout' : 'Manual rollout'
           }}</UiBadge>
         </div>
         <dl class="mt-4 space-y-2 border-t pt-4 text-xs">
@@ -408,6 +542,67 @@ async function rollout() {
             <dd class="text-ink">{{ registryName(application.registryId) }}</dd>
           </div>
         </dl>
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">Native build</h3>
+            <p class="mt-1 text-[11px] text-muted">
+              GitHub source → builder node → {{ registryName(application.registryId) }}
+            </p>
+          </div>
+          <UiButton
+            size="sm"
+            :disabled="
+              !catalog?.builderAvailable ||
+              !!activeBuild(application.id) ||
+              buildingApplicationId === application.id
+            "
+            :title="
+              !catalog?.builderAvailable
+                ? 'Enroll builder node yang online terlebih dahulu'
+                : activeBuild(application.id)
+                  ? 'Build masih berjalan'
+                  : 'Clone repository dan build image pada worker terpisah'
+            "
+            @click="queueBuild(application)"
+          >
+            <Hammer :size="13" />
+            {{ buildingApplicationId === application.id ? 'Mengantrekan…' : 'Build image' }}
+          </UiButton>
+        </div>
+        <div v-if="buildsFor(application.id).length" class="mt-2 space-y-2">
+          <div
+            v-for="build in buildsFor(application.id)"
+            :key="build.id"
+            class="rounded-md border border-line-strong px-3 py-2.5"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="truncate font-mono text-xs font-semibold text-ink">
+                  {{ build.version }}
+                </p>
+                <p class="mt-0.5 truncate text-[10px] text-muted">
+                  {{ build.nodeName }} · {{ format.dateTime(build.createdAt) }}
+                </p>
+              </div>
+              <UiBadge :tone="buildTone(build.status)" dot>{{ build.status }}</UiBadge>
+            </div>
+            <p v-if="build.errorMessage" class="mt-2 text-xs leading-5 text-danger">
+              {{ build.errorMessage }}
+            </p>
+            <details v-if="build.logExcerpt" class="mt-2 text-xs">
+              <summary class="cursor-pointer text-brand">Log build</summary>
+              <pre
+                class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-canvas p-2 font-mono text-[10px] leading-4 text-muted"
+                >{{ build.logExcerpt }}</pre>
+            </details>
+          </div>
+        </div>
+        <p
+          v-else-if="!catalog?.builderAvailable"
+          class="mt-2 rounded-md border border-dashed px-3 py-3 text-center text-xs text-muted"
+        >
+          Belum ada builder node online.
+        </p>
         <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">Release terbaru</h3>
           <div class="flex gap-2">
@@ -448,7 +643,7 @@ async function rollout() {
           v-else
           class="mt-2 rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted"
         >
-          Belum ada release dari CI.
+          Belum ada release. Jalankan native build atau kirim release dari CI.
         </p>
       </UiCard>
     </div>
@@ -457,9 +652,10 @@ async function rollout() {
       <div class="flex items-start gap-3">
         <GitBranch :size="19" class="mt-0.5 shrink-0 text-brand" />
         <div>
-          <h2 class="text-sm font-semibold text-ink">Integrasi CI</h2>
+          <h2 class="text-sm font-semibold text-ink">Native builder dan CI eksternal</h2>
           <p class="mt-1 text-xs leading-5 text-muted">
-            Workflow repository melakukan build + push ke GHCR, lalu POST ke
+            Tombol <strong>Build image</strong> menjalankan build pada node role builder. CI
+            eksternal tetap dapat melakukan build + push, lalu POST ke
             <code class="text-ink">/api/infrastructure/releases/callback</code> menggunakan secret
             <code class="text-ink">NUXT_RELEASE_WEBHOOK_SECRET</code>. Contoh lengkap tersedia di
             <code class="text-ink">docs/APPLICATION-RELEASES.md</code>.
@@ -577,14 +773,32 @@ async function rollout() {
 
     <UiDialog
       v-if="showRegistryForm"
-      title="Tambah private registry"
-      description="Token dienkripsi di database dan hanya dikirim ke agent saat docker pull."
+      title="Registry credential"
+      description="Token dienkripsi di database dan hanya dikirim ke agent saat image pull atau build push."
       :close-disabled="saving"
-      @close="showRegistryForm = false"
+      @close="closeRegistryDialog"
     >
       <form id="registry-form" class="grid gap-4" @submit.prevent="createRegistry">
+        <label v-if="registries.length" class="block">
+          <span class="mb-2 block text-xs font-semibold text-muted">Mode</span>
+          <select
+            v-model="registryForm.registryId"
+            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+          >
+            <option value="">Tambah registry baru</option>
+            <option v-for="registry in registries" :key="registry.id" :value="registry.id">
+              Perbarui {{ registry.name }} · {{ registry.host }}
+            </option>
+          </select>
+        </label>
         <UiInput v-model="registryForm.name" label="Nama" required />
-        <UiInput v-model="registryForm.host" label="Registry host" required placeholder="ghcr.io" />
+        <UiInput
+          v-model="registryForm.host"
+          label="Registry host"
+          required
+          placeholder="ghcr.io"
+          :disabled="!!registryForm.registryId"
+        />
         <UiInput
           v-model="registryForm.username"
           label="Username / owner"
@@ -601,10 +815,14 @@ async function rollout() {
       </form>
       <template #footer
         ><div class="flex justify-end gap-2">
-          <UiButton variant="secondary" :disabled="saving" @click="showRegistryForm = false"
+          <UiButton variant="secondary" :disabled="saving" @click="closeRegistryDialog"
             >Batal</UiButton
           ><UiButton type="submit" form="registry-form" :disabled="saving">{{
-            saving ? 'Menyimpan…' : 'Simpan registry'
+            saving
+              ? 'Menyimpan…'
+              : registryForm.registryId
+                ? 'Perbarui credential'
+                : 'Simpan registry'
           }}</UiButton>
         </div></template
       >
@@ -635,6 +853,7 @@ async function rollout() {
           class="md:col-span-2"
           label="Git repository URL"
           type="url"
+          hint="Native builder mendukung repository public HTTPS github.com."
           required
         />
         <UiInput v-model="applicationForm.defaultBranch" label="Default branch" required />
@@ -647,7 +866,7 @@ async function rollout() {
             required
             class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
           >
-            <option v-for="registry in registries" :key="registry.id" :value="registry.id">
+            <option v-for="registry in activeRegistries" :key="registry.id" :value="registry.id">
               {{ registry.name }} · {{ registry.host }}
             </option>
           </select></label
@@ -656,6 +875,7 @@ async function rollout() {
           v-model="applicationForm.imageRepository"
           class="md:col-span-2"
           label="Image repository tanpa tag"
+          :hint="imageRepositoryHint"
           required
           placeholder="ghcr.io/owner/my-app"
         />

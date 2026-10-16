@@ -1,11 +1,13 @@
-import { and, asc, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
 import type { CreateNativeDatabaseClusterInput } from '../../shared/schemas/native-database-clusters'
 import type { ProvisionNativeServiceDatabaseInput } from '../../shared/schemas/native-service-databases'
 import { useDatabase, type Database } from '../database/client'
 import {
   auditLogs,
   customers,
+  infrastructureBackupTargets,
   infrastructureDatabaseClusters,
+  infrastructureDatabaseBackups,
   infrastructureNodes,
   infrastructureOperations,
   infrastructureResources,
@@ -49,6 +51,34 @@ export interface ReprovisionNativeServiceDatabaseRecord {
   connectionUriEncrypted?: string
 }
 
+export interface CreateDatabaseBackupRecord {
+  backupId: string
+  allocationId: string
+  operationId: string
+  actorUserId: string
+  idempotencyKey: string
+  expiresAt: Date
+  policyId?: string
+  storageTargetId?: string
+  objectKey?: string
+  objectStorage?: {
+    provider: 's3'
+    endpoint: string
+    region: string
+    bucket: string
+    objectKey: string
+    pathStyle: boolean
+  }
+}
+
+export interface RestoreDatabaseBackupRecord {
+  backupId: string
+  operationId: string
+  actorUserId: string
+  idempotencyKey: string
+  expiresAt: Date
+}
+
 export class NativeDatabaseClusterRepository {
   constructor(private readonly database: Database = useDatabase()) {}
 
@@ -86,7 +116,7 @@ export class NativeDatabaseClusterRepository {
   }
 
   async overview() {
-    const [clusters, candidates, allocations, eligibleServices, eligibleApplications] =
+    const [clusters, candidates, allocations, eligibleServices, eligibleApplications, backups] =
       await Promise.all([
         this.database
           .select({
@@ -244,6 +274,22 @@ export class NativeDatabaseClusterRepository {
             ),
           )
           .orderBy(asc(infrastructureResources.name)),
+        this.database
+          .select({
+            id: infrastructureDatabaseBackups.id,
+            serviceDatabaseId: infrastructureDatabaseBackups.serviceDatabaseId,
+            status: infrastructureDatabaseBackups.status,
+            checksumSha256: infrastructureDatabaseBackups.checksumSha256,
+            sizeBytes: infrastructureDatabaseBackups.sizeBytes,
+            lastError: infrastructureDatabaseBackups.lastError,
+            completedAt: infrastructureDatabaseBackups.completedAt,
+            restoredAt: infrastructureDatabaseBackups.restoredAt,
+            createdAt: infrastructureDatabaseBackups.createdAt,
+            updatedAt: infrastructureDatabaseBackups.updatedAt,
+          })
+          .from(infrastructureDatabaseBackups)
+          .where(isNull(infrastructureDatabaseBackups.deletedAt))
+          .orderBy(desc(infrastructureDatabaseBackups.createdAt)),
       ])
 
     return {
@@ -262,6 +308,14 @@ export class NativeDatabaseClusterRepository {
       })),
       eligibleServices,
       eligibleApplications,
+      backups: backups.map((backup) => ({
+        ...backup,
+        sizeBytes: backup.sizeBytes?.toString() ?? null,
+        completedAt: backup.completedAt?.toISOString() ?? null,
+        restoredAt: backup.restoredAt?.toISOString() ?? null,
+        createdAt: backup.createdAt.toISOString(),
+        updatedAt: backup.updatedAt.toISOString(),
+      })),
     }
   }
 
@@ -690,6 +744,153 @@ export class NativeDatabaseClusterRepository {
       return { allocation: context.allocation, operation, replayed: false }
     })
   }
+
+  async createBackup(input: CreateDatabaseBackupRecord) {
+    return this.database.transaction(async (transaction) => {
+      const [existingOperation] = await transaction
+        .select()
+        .from(infrastructureOperations)
+        .where(eq(infrastructureOperations.idempotencyKey, input.idempotencyKey))
+        .limit(1)
+      if (existingOperation) return { operation: existingOperation, replayed: true }
+
+      const [context] = await transaction
+        .select({
+          allocation: infrastructureServiceDatabases,
+          cluster: infrastructureDatabaseClusters,
+          resource: infrastructureResources,
+          nodeStatus: infrastructureNodes.status,
+          nodeActive: infrastructureNodes.isActive,
+          nodeDraining: infrastructureNodes.isDraining,
+          agentVersion: infrastructureNodes.agentVersion,
+        })
+        .from(infrastructureServiceDatabases)
+        .innerJoin(infrastructureDatabaseClusters, eq(infrastructureDatabaseClusters.id, infrastructureServiceDatabases.databaseClusterId))
+        .innerJoin(infrastructureResources, eq(infrastructureResources.id, infrastructureDatabaseClusters.primaryResourceId))
+        .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
+        .where(and(eq(infrastructureServiceDatabases.id, input.allocationId), isNull(infrastructureServiceDatabases.deletedAt)))
+        .limit(1)
+        .for('update')
+      if (!context) return null
+      if (context.allocation.status !== 'active' || !context.cluster.isActive || context.cluster.status !== 'active' || context.resource.observedState !== 'running' || !context.nodeActive || context.nodeDraining || !['online', 'degraded'].includes(context.nodeStatus)) {
+        return { unavailable: true as const }
+      }
+      if (!supportsDatabaseBackup(context.agentVersion)) return { incompatibleAgent: true as const }
+
+      const [operation] = await transaction.insert(infrastructureOperations).values({
+        id: input.operationId,
+        nodeId: context.resource.nodeId,
+        resourceId: context.resource.id,
+        actorUserId: input.actorUserId,
+        idempotencyKey: input.idempotencyKey,
+        action: 'database.backup.create',
+        expiresAt: input.expiresAt,
+        payload: {
+          backupId: input.backupId,
+          allocationId: context.allocation.id,
+          clusterId: context.cluster.id,
+          resourceId: context.resource.id,
+          databaseName: context.allocation.databaseName,
+          provisionerUsername: context.cluster.provisionerUsername,
+          storageTargetId: input.storageTargetId,
+          objectStorage: input.objectStorage,
+        },
+      }).returning()
+      if (!operation) throw new Error('Failed to create database backup operation.')
+      const [backup] = await transaction.insert(infrastructureDatabaseBackups).values({
+        id: input.backupId,
+        serviceDatabaseId: context.allocation.id,
+        createOperationId: operation.id,
+        policyId: input.policyId,
+        storageTargetId: input.storageTargetId,
+        objectKey: input.objectKey,
+        createdBy: input.actorUserId,
+      }).returning()
+      if (!backup) throw new Error('Failed to create database backup record.')
+      await transaction.insert(auditLogs).values({
+        actorUserId: input.actorUserId,
+        action: 'infrastructure.database-backup.requested',
+        entityType: 'infrastructure_database_backup',
+        entityId: backup.id,
+        metadata: { allocationId: context.allocation.id, operationId: operation.id },
+      })
+      return { backup, operation, replayed: false }
+    })
+  }
+
+  async restoreBackup(input: RestoreDatabaseBackupRecord) {
+    return this.database.transaction(async (transaction) => {
+      const [existingOperation] = await transaction.select().from(infrastructureOperations)
+        .where(eq(infrastructureOperations.idempotencyKey, input.idempotencyKey)).limit(1)
+      if (existingOperation) return { operation: existingOperation, replayed: true }
+      const [context] = await transaction.select({
+        backup: infrastructureDatabaseBackups,
+        allocation: infrastructureServiceDatabases,
+        cluster: infrastructureDatabaseClusters,
+        resource: infrastructureResources,
+        nodeStatus: infrastructureNodes.status,
+        nodeActive: infrastructureNodes.isActive,
+        nodeDraining: infrastructureNodes.isDraining,
+        agentVersion: infrastructureNodes.agentVersion,
+        targetEndpoint: infrastructureBackupTargets.endpoint,
+        targetRegion: infrastructureBackupTargets.region,
+        targetBucket: infrastructureBackupTargets.bucket,
+        targetPathStyle: infrastructureBackupTargets.pathStyle,
+      }).from(infrastructureDatabaseBackups)
+        .innerJoin(infrastructureServiceDatabases, eq(infrastructureServiceDatabases.id, infrastructureDatabaseBackups.serviceDatabaseId))
+        .innerJoin(infrastructureDatabaseClusters, eq(infrastructureDatabaseClusters.id, infrastructureServiceDatabases.databaseClusterId))
+        .innerJoin(infrastructureResources, eq(infrastructureResources.id, infrastructureDatabaseClusters.primaryResourceId))
+        .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
+        .leftJoin(infrastructureBackupTargets, eq(infrastructureBackupTargets.id, infrastructureDatabaseBackups.storageTargetId))
+        .where(eq(infrastructureDatabaseBackups.id, input.backupId)).limit(1).for('update')
+      if (!context) return null
+      if (context.backup.status !== 'available' || !context.backup.checksumSha256 || context.allocation.status !== 'active' || !context.cluster.isActive || context.resource.observedState !== 'running' || !context.nodeActive || context.nodeDraining || !['online', 'degraded'].includes(context.nodeStatus)) {
+        return { unavailable: true as const }
+      }
+      if (!supportsDatabaseBackup(context.agentVersion)) return { incompatibleAgent: true as const }
+      const [operation] = await transaction.insert(infrastructureOperations).values({
+        id: input.operationId,
+        nodeId: context.resource.nodeId,
+        resourceId: context.resource.id,
+        actorUserId: input.actorUserId,
+        idempotencyKey: input.idempotencyKey,
+        action: 'database.backup.restore',
+        expiresAt: input.expiresAt,
+        payload: {
+          backupId: context.backup.id,
+          allocationId: context.allocation.id,
+          clusterId: context.cluster.id,
+          resourceId: context.resource.id,
+          databaseName: context.allocation.databaseName,
+          provisionerUsername: context.cluster.provisionerUsername,
+          checksumSha256: context.backup.checksumSha256,
+          storageTargetId: context.backup.storageTargetId,
+          objectStorage: context.backup.storageTargetId && context.backup.objectKey && context.targetEndpoint && context.targetRegion && context.targetBucket
+            ? {
+                provider: 's3',
+                endpoint: context.targetEndpoint,
+                region: context.targetRegion,
+                bucket: context.targetBucket,
+                objectKey: context.backup.objectKey,
+                pathStyle: context.targetPathStyle ?? false,
+              }
+            : undefined,
+        },
+      }).returning()
+      if (!operation) throw new Error('Failed to create database restore operation.')
+      await transaction.update(infrastructureDatabaseBackups).set({
+        restoreOperationId: operation.id, status: 'restoring', lastError: null, updatedAt: new Date(),
+      }).where(eq(infrastructureDatabaseBackups.id, context.backup.id))
+      await transaction.insert(auditLogs).values({
+        actorUserId: input.actorUserId,
+        action: 'infrastructure.database-backup.restore-requested',
+        entityType: 'infrastructure_database_backup',
+        entityId: context.backup.id,
+        metadata: { allocationId: context.allocation.id, operationId: operation.id },
+      })
+      return { backup: context.backup, operation, replayed: false }
+    })
+  }
 }
 
 function supportsClusterActivation(version: string | null) {
@@ -702,4 +903,10 @@ function supportsServiceDatabaseProvisioning(version: string | null) {
   if (!version) return false
   const [major = 0, minor = 0] = version.split('.').map(Number)
   return major > 0 || minor >= 5
+}
+
+function supportsDatabaseBackup(version: string | null) {
+  if (!version) return false
+  const [major = 0, minor = 0] = version.split('.').map(Number)
+  return major > 0 || minor >= 10
 }

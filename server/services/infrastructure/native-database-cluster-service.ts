@@ -147,6 +147,73 @@ export class NativeDatabaseClusterService {
     return this.reprovisionServiceDatabase(allocationId, actorUserId, idempotencyKey, 'rotate')
   }
 
+  async createBackup(
+    allocationId: string,
+    actorUserId: string,
+    idempotencyKey: string,
+    destination?: {
+      policyId: string
+      storageTargetId: string
+      endpoint: string
+      region: string
+      bucket: string
+      prefix: string
+      pathStyle: boolean
+    },
+  ) {
+    const backupId = randomUUID()
+    const objectKey = destination
+      ? `${destination.prefix.replace(/\/+$/, '')}/postgresql/${allocationId}/${backupId}.dump`
+      : undefined
+    const result = await this.repository.createBackup({
+      backupId,
+      allocationId,
+      operationId: randomUUID(),
+      actorUserId,
+      idempotencyKey,
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+      policyId: destination?.policyId,
+      storageTargetId: destination?.storageTargetId,
+      objectKey,
+      objectStorage: destination && objectKey
+        ? {
+            provider: 's3',
+            endpoint: destination.endpoint,
+            region: destination.region,
+            bucket: destination.bucket,
+            objectKey,
+            pathStyle: destination.pathStyle,
+          }
+        : undefined,
+    })
+    if (!result) throw DomainError.notFound('Alokasi database tidak ditemukan.')
+    if ('unavailable' in result) {
+      throw DomainError.invalidState('Database, cluster, atau node belum siap untuk backup.')
+    }
+    if ('incompatibleAgent' in result) {
+      throw DomainError.invalidState('Backup workload membutuhkan OC Agent 0.10.0 atau lebih baru.')
+    }
+    return result
+  }
+
+  async restoreBackup(backupId: string, actorUserId: string, idempotencyKey: string) {
+    const result = await this.repository.restoreBackup({
+      backupId,
+      operationId: randomUUID(),
+      actorUserId,
+      idempotencyKey,
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    })
+    if (!result) throw DomainError.notFound('Backup database tidak ditemukan.')
+    if ('unavailable' in result) {
+      throw DomainError.invalidState('Backup, database, cluster, atau node belum siap direstore.')
+    }
+    if ('incompatibleAgent' in result) {
+      throw DomainError.invalidState('Restore workload membutuhkan OC Agent 0.10.0 atau lebih baru.')
+    }
+    return result
+  }
+
   private async reprovisionServiceDatabase(
     allocationId: string,
     actorUserId: string,

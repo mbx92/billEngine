@@ -315,6 +315,10 @@ diimpor, dikonfigurasi, atau dijalankan oleh aplikasi.
   operation record.
 - Agent menolak action yang tidak dikenal, expired, replayed, tidak ditandatangani,
   atau berada di luar policy node.
+- Agent `0.8.0+` menerima upgrade/rollback sebagai operation terstruktur. Binary
+  diverifikasi menggunakan version dan SHA-256 dari operation terautentikasi,
+  diganti oleh helper systemd root, serta otomatis di-rollback jika heartbeat
+  versi target tidak muncul dalam batas waktu.
 
 ## 11. Arsitektur Target
 
@@ -576,9 +580,14 @@ endpoint, atau proses Coolify.
 
 ### Fase 5 — Database, storage, backup, dan monitoring
 
-- Migrasikan shared PostgreSQL provisioning ke resource/operation baru.
-- Implementasikan volume policy, backup, restore, dan verifikasi checksum.
-- Tambahkan metrics backend, dashboard, alert, capacity, dan disk watermark.
+- [x] Migrasikan shared PostgreSQL provisioning ke resource/operation baru.
+- [x] Implementasikan backup/restore logical database workload dan verifikasi checksum.
+- [x] Tambahkan snapshot CPU/RAM/disk, heartbeat offline, operation stuck, dashboard,
+  dan metrics Prometheus.
+- [x] Tambahkan menu Backup, S3-compatible object storage, scheduled policy,
+  retention count, dan email failure alert untuk PostgreSQL workload.
+- [ ] Tambahkan restore rehearsal otomatis, backup database Billing terjadwal,
+  driver database eksternal/MySQL/Redis, dan volume backup non-PostgreSQL.
 
 Exit criteria: capability memiliki test, runbook, alert, backup, dan prosedur
 recovery yang tervalidasi.

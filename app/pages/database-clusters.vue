@@ -3,11 +3,13 @@ import {
   CheckCircle2,
   Copy,
   Database,
+  Download,
   Eye,
   KeyRound,
   Plus,
   RefreshCw,
   RotateCw,
+  RotateCcw,
   Server,
   ShieldCheck,
 } from '@lucide/vue'
@@ -114,6 +116,19 @@ interface NativeDatabaseClusterOverview {
   allocations: ServiceDatabaseAllocation[]
   eligibleServices: EligibleService[]
   eligibleApplications: EligibleApplication[]
+  backups: DatabaseBackup[]
+}
+
+interface DatabaseBackup {
+  id: string
+  serviceDatabaseId: string
+  status: 'queued' | 'creating' | 'available' | 'restoring' | 'failed' | 'deleting'
+  checksumSha256: string | null
+  sizeBytes: string | null
+  lastError: string | null
+  completedAt: string | null
+  restoredAt: string | null
+  createdAt: string
 }
 
 const {
@@ -130,8 +145,10 @@ const provisioning = ref(false)
 const revealing = ref(false)
 const pendingReveal = ref<ServiceDatabaseAllocation | null>(null)
 const pendingRotation = ref<ServiceDatabaseAllocation | null>(null)
+const pendingRestore = ref<{ allocation: ServiceDatabaseAllocation; backup: DatabaseBackup } | null>(null)
 const revealedCredential = ref<RevealedDatabaseCredential | null>(null)
 const busyAllocationIds = ref<string[]>([])
+const busyBackupIds = ref<string[]>([])
 const actionMessage = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const toast = useToast()
@@ -149,6 +166,7 @@ onMounted(() => {
     if (
       overview.value?.clusters.some((cluster) => cluster.status === 'validating') ||
       overview.value?.allocations.some((allocation) => allocation.status === 'provisioning')
+      || overview.value?.backups.some((backup) => ['queued', 'creating', 'restoring', 'deleting'].includes(backup.status))
     ) {
       void refresh()
     }
@@ -313,6 +331,57 @@ async function runAllocationAction(
   } finally {
     busyAllocationIds.value = busyAllocationIds.value.filter((id) => id !== allocation.id)
   }
+}
+
+function backupsForAllocation(allocationId: string) {
+  return (overview.value?.backups ?? []).filter((backup) => backup.serviceDatabaseId === allocationId)
+}
+
+async function createBackup(allocation: ServiceDatabaseAllocation) {
+  busyAllocationIds.value.push(allocation.id)
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    await $fetch(`/api/infrastructure/database-clusters/databases/${allocation.id}/backups`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `database-backup:${crypto.randomUUID()}` },
+    })
+    actionMessage.value = `Backup ${allocation.databaseName} masuk antrean pada node ${allocation.nodeName}.`
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Backup database gagal dijadwalkan.')
+  } finally {
+    busyAllocationIds.value = busyAllocationIds.value.filter((id) => id !== allocation.id)
+  }
+}
+
+async function restoreBackup() {
+  if (!pendingRestore.value) return
+  const { backup, allocation } = pendingRestore.value
+  busyBackupIds.value.push(backup.id)
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    await $fetch(`/api/infrastructure/database-backups/${backup.id}/restore`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `database-restore:${crypto.randomUUID()}` },
+    })
+    actionMessage.value = `Restore ${allocation.databaseName} masuk antrean.`
+    pendingRestore.value = null
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Restore database gagal dijadwalkan.')
+    pendingRestore.value = null
+  } finally {
+    busyBackupIds.value = busyBackupIds.value.filter((id) => id !== backup.id)
+  }
+}
+
+function humanBytes(value: string | null) {
+  if (!value) return '—'
+  const bytes = Number(value)
+  if (!Number.isFinite(bytes)) return value
+  return `${(bytes / 1024 ** 2).toLocaleString('id-ID', { maximumFractionDigits: 1 })} MiB`
 }
 
 async function copyValue(value: string) {
@@ -573,7 +642,63 @@ function statusTone(clusterStatus: ClusterStatus) {
                 <UiButton variant="secondary" class="flex-1" @click="pendingRotation = allocation">
                   <RotateCw :size="15" /> Rotate
                 </UiButton>
+                <UiButton
+                  variant="secondary"
+                  class="flex-1"
+                  :disabled="busyAllocationIds.includes(allocation.id)"
+                  @click="createBackup(allocation)"
+                >
+                  <Download :size="15" /> Backup
+                </UiButton>
               </template>
+            </div>
+            <div v-if="backupsForAllocation(allocation.id).length" class="mt-4 border-t pt-4">
+              <p class="mb-2 text-xs font-semibold text-ink">Backup workload terbaru</p>
+              <div class="space-y-2">
+                <div
+                  v-for="backup in backupsForAllocation(allocation.id).slice(0, 3)"
+                  :key="backup.id"
+                  class="rounded border bg-canvas px-3 py-2 text-xs"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="min-w-0">
+                      <p class="font-mono text-ink">
+                        {{ new Date(backup.createdAt).toLocaleString('id-ID') }} ·
+                        {{ humanBytes(backup.sizeBytes) }}
+                      </p>
+                      <p v-if="backup.checksumSha256" class="mt-1 truncate font-mono text-muted">
+                        sha256:{{ backup.checksumSha256 }}
+                      </p>
+                      <p v-if="backup.lastError" class="mt-1 text-danger">
+                        {{ backup.lastError }}
+                      </p>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <UiBadge
+                        :tone="
+                          backup.status === 'available'
+                            ? 'success'
+                            : backup.status === 'failed'
+                              ? 'danger'
+                              : 'warning'
+                        "
+                        dot
+                      >
+                        {{ backup.status }}
+                      </UiBadge>
+                      <UiButton
+                        v-if="backup.status === 'available'"
+                        variant="ghost"
+                        size="sm"
+                        :disabled="busyBackupIds.includes(backup.id)"
+                        @click="pendingRestore = { allocation, backup }"
+                      >
+                        <RotateCcw :size="14" /> Restore
+                      </UiButton>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </UiCard>
         </div>
@@ -820,6 +945,17 @@ function statusTone(clusterStatus: ClusterStatus) {
       :pending="busyAllocationIds.includes(pendingRotation.id)"
       @confirm="runAllocationAction(pendingRotation, 'rotate')"
       @cancel="pendingRotation = null"
+    />
+
+    <UiConfirmDialog
+      v-if="pendingRestore"
+      :title="`Restore ${pendingRestore.allocation.databaseName}?`"
+      description="Isi database workload saat ini akan diganti secara transaksional dari backup terpilih. Pastikan aplikasi tidak sedang menulis data selama restore."
+      confirm-label="Restore database"
+      destructive
+      :pending="busyBackupIds.includes(pendingRestore.backup.id)"
+      @confirm="restoreBackup"
+      @cancel="pendingRestore = null"
     />
 
     <UiDialog

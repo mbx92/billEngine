@@ -7,8 +7,11 @@ import type {
 } from '../../shared/schemas/infrastructure'
 import { useDatabase, type Database } from '../database/client'
 import {
+  applicationBuilds,
   auditLogs,
   infrastructureDatabaseClusters,
+  infrastructureDatabaseBackups,
+  infrastructureBackupPolicies,
   infrastructureNodes,
   infrastructureOperations,
   infrastructureResources,
@@ -79,6 +82,7 @@ export class NativeInfrastructureRepository {
             eq(infrastructureNodes.isActive, true),
             eq(infrastructureNodes.isDraining, false),
             inArray(infrastructureNodes.status, ['online', 'degraded']),
+            inArray(infrastructureNodes.role, ['deployment', 'hybrid']),
           ),
         )
         .limit(1)
@@ -410,7 +414,7 @@ export class NativeInfrastructureRepository {
   async claimNextOperation(nodeId: string, workerId: string) {
     const now = new Date()
     return this.database.transaction(async (transaction) => {
-      await transaction
+      const expiredOperations = await transaction
         .update(infrastructureOperations)
         .set({ status: 'expired', completedAt: now, updatedAt: now })
         .where(
@@ -420,6 +424,39 @@ export class NativeInfrastructureRepository {
             lte(infrastructureOperations.expiresAt, now),
           ),
         )
+        .returning({ id: infrastructureOperations.id, action: infrastructureOperations.action })
+
+      const expiredBuildOperationIds = expiredOperations
+        .filter((operation) => operation.action === 'application.build')
+        .map((operation) => operation.id)
+      if (expiredBuildOperationIds.length > 0) {
+        await transaction
+          .update(applicationBuilds)
+          .set({
+            status: 'failed',
+            errorCode: 'build_operation_expired',
+            errorMessage: 'Build kedaluwarsa sebelum dijalankan oleh builder node.',
+            completedAt: now,
+            updatedAt: now,
+          })
+          .where(inArray(applicationBuilds.operationId, expiredBuildOperationIds))
+      }
+
+      if (
+        expiredOperations.some((operation) =>
+          ['agent.upgrade', 'agent.rollback'].includes(operation.action),
+        )
+      ) {
+        await transaction
+          .update(infrastructureNodes)
+          .set({
+            agentUpdateStatus: 'failed',
+            agentLastUpdateAt: now,
+            agentLastUpdateError: 'Operation agent kedaluwarsa sebelum dijalankan.',
+            updatedAt: now,
+          })
+          .where(eq(infrastructureNodes.id, nodeId))
+      }
 
       const [operation] = await transaction
         .select()
@@ -527,15 +564,53 @@ export class NativeInfrastructureRepository {
             gatewayVersion:
               typeof input.result?.image === 'string' ? input.result.image : undefined,
             gatewayContainerId:
-              typeof input.result?.containerId === 'string'
-                ? input.result.containerId
-                : undefined,
+              typeof input.result?.containerId === 'string' ? input.result.containerId : undefined,
             gatewayLastObservedAt: now,
-            gatewayLastError:
-              gatewayStatus === 'healthy' ? null : (input.errorMessage ?? null),
+            gatewayLastError: gatewayStatus === 'healthy' ? null : (input.errorMessage ?? null),
             updatedAt: now,
           })
           .where(eq(infrastructureNodes.id, nodeId))
+      }
+
+      if (['agent.upgrade', 'agent.rollback'].includes(operation.action)) {
+        const updateStatus =
+          status === 'succeeded'
+            ? ('succeeded' as const)
+            : status === 'failed'
+              ? ('failed' as const)
+              : ('staging' as const)
+        const previousVersion =
+          typeof input.result?.previousVersion === 'string' && input.result.previousVersion.trim()
+            ? input.result.previousVersion
+            : undefined
+        await transaction
+          .update(infrastructureNodes)
+          .set({
+            previousAgentVersion: previousVersion,
+            agentUpdateStatus: updateStatus,
+            agentLastUpdateAt: status === 'succeeded' || status === 'failed' ? now : undefined,
+            agentLastUpdateError: status === 'failed' ? (input.errorMessage ?? null) : null,
+            updatedAt: now,
+          })
+          .where(eq(infrastructureNodes.id, nodeId))
+
+        if (status === 'succeeded' || status === 'failed') {
+          await transaction.insert(auditLogs).values({
+            actorUserId: operation.actorUserId,
+            action:
+              status === 'succeeded'
+                ? `infrastructure.${operation.action}.succeeded`
+                : `infrastructure.${operation.action}.failed`,
+            entityType: 'infrastructure_node',
+            entityId: nodeId,
+            metadata: {
+              operationId: operation.id,
+              targetVersion: operation.payload.version ?? null,
+              previousVersion: previousVersion ?? null,
+              errorCode: input.errorCode ?? null,
+            },
+          })
+        }
       }
 
       if (
@@ -592,9 +667,7 @@ export class NativeInfrastructureRepository {
                   hostname: route.hostname,
                   targetPort: route.targetPort,
                   billingGateEnabled: route.billingGateEnabled,
-                  billingGateUrl: route.billingGateEnabled
-                    ? billingGateInternalUrl
-                    : undefined,
+                  billingGateUrl: route.billingGateEnabled ? billingGateInternalUrl : undefined,
                 },
               })
               .onConflictDoNothing({ target: infrastructureOperations.idempotencyKey })
@@ -821,6 +894,157 @@ export class NativeInfrastructureRepository {
               redeployOperationId,
               errorCode: input.errorCode ?? null,
             },
+          })
+        }
+      }
+      if (
+        operation.action === 'database.backup.create' &&
+        ['running', 'succeeded', 'failed'].includes(status)
+      ) {
+        const succeeded = status === 'succeeded'
+        const result = input.result ?? {}
+        const sizeValue = typeof result.sizeBytes === 'string' ? result.sizeBytes : null
+        const [backup] = await transaction
+          .update(infrastructureDatabaseBackups)
+          .set({
+            status: status === 'running' ? 'creating' : succeeded ? 'available' : 'failed',
+            storagePath:
+              succeeded && typeof result.storagePath === 'string' ? result.storagePath : undefined,
+            checksumSha256:
+              succeeded && typeof result.checksumSha256 === 'string'
+                ? result.checksumSha256
+                : undefined,
+            sizeBytes: succeeded && sizeValue ? BigInt(sizeValue) : undefined,
+            lastError:
+              status === 'failed' ? (input.errorMessage ?? 'Backup database gagal.') : null,
+            completedAt: succeeded ? now : undefined,
+            updatedAt: now,
+          })
+          .where(eq(infrastructureDatabaseBackups.createOperationId, operation.id))
+          .returning({
+            id: infrastructureDatabaseBackups.id,
+            policyId: infrastructureDatabaseBackups.policyId,
+            serviceDatabaseId: infrastructureDatabaseBackups.serviceDatabaseId,
+          })
+        if (backup && status !== 'running') {
+          await transaction.insert(auditLogs).values({
+            actorUserId: operation.actorUserId,
+            action: succeeded
+              ? 'infrastructure.database-backup.completed'
+              : 'infrastructure.database-backup.failed',
+            entityType: 'infrastructure_database_backup',
+            entityId: backup.id,
+            metadata: { operationId: operation.id, errorCode: input.errorCode ?? null },
+          })
+        }
+        if (backup && succeeded && backup.policyId) {
+          const [policy] = await transaction
+            .select({ retentionCount: infrastructureBackupPolicies.retentionCount })
+            .from(infrastructureBackupPolicies)
+            .where(eq(infrastructureBackupPolicies.id, backup.policyId))
+            .limit(1)
+          if (policy) {
+            const expired = await transaction
+              .select({
+                id: infrastructureDatabaseBackups.id,
+                serviceDatabaseId: infrastructureDatabaseBackups.serviceDatabaseId,
+                storageTargetId: infrastructureDatabaseBackups.storageTargetId,
+                objectKey: infrastructureDatabaseBackups.objectKey,
+              })
+              .from(infrastructureDatabaseBackups)
+              .where(
+                and(
+                  eq(infrastructureDatabaseBackups.policyId, backup.policyId),
+                  eq(infrastructureDatabaseBackups.status, 'available'),
+                  isNull(infrastructureDatabaseBackups.deletedAt),
+                ),
+              )
+              .orderBy(desc(infrastructureDatabaseBackups.createdAt))
+              .offset(policy.retentionCount)
+            for (const item of expired) {
+              const deleteId = randomUUID()
+              await transaction
+                .insert(infrastructureOperations)
+                .values({
+                  id: deleteId,
+                  nodeId: operation.nodeId,
+                  resourceId: operation.resourceId,
+                  actorUserId: operation.actorUserId,
+                  idempotencyKey: `database-backup-retention:${item.id}`,
+                  action: 'database.backup.delete',
+                  expiresAt: new Date(now.getTime() + 60 * 60_000),
+                  payload: {
+                    backupId: item.id,
+                    allocationId: item.serviceDatabaseId,
+                    storageTargetId: item.storageTargetId,
+                    objectStorage:
+                      item.storageTargetId && item.objectKey && operation.payload.objectStorage
+                        ? { ...operation.payload.objectStorage, objectKey: item.objectKey }
+                        : undefined,
+                  },
+                })
+                .onConflictDoNothing({ target: infrastructureOperations.idempotencyKey })
+              await transaction
+                .update(infrastructureDatabaseBackups)
+                .set({ status: 'deleting', expiresAt: now, updatedAt: now })
+                .where(eq(infrastructureDatabaseBackups.id, item.id))
+            }
+          }
+        }
+      }
+      if (
+        operation.action === 'database.backup.restore' &&
+        (status === 'succeeded' || status === 'failed')
+      ) {
+        const succeeded = status === 'succeeded'
+        const [backup] = await transaction
+          .update(infrastructureDatabaseBackups)
+          .set({
+            status: 'available',
+            lastError: succeeded ? null : (input.errorMessage ?? 'Restore database gagal.'),
+            restoredAt: succeeded ? now : undefined,
+            updatedAt: now,
+          })
+          .where(eq(infrastructureDatabaseBackups.restoreOperationId, operation.id))
+          .returning({ id: infrastructureDatabaseBackups.id })
+        if (backup) {
+          await transaction.insert(auditLogs).values({
+            actorUserId: operation.actorUserId,
+            action: succeeded
+              ? 'infrastructure.database-backup.restored'
+              : 'infrastructure.database-backup.restore-failed',
+            entityType: 'infrastructure_database_backup',
+            entityId: backup.id,
+            metadata: { operationId: operation.id, errorCode: input.errorCode ?? null },
+          })
+        }
+      }
+      if (
+        operation.action === 'database.backup.delete' &&
+        (status === 'succeeded' || status === 'failed')
+      ) {
+        const backupId =
+          typeof operation.payload.backupId === 'string' ? operation.payload.backupId : null
+        if (backupId) {
+          await transaction
+            .update(infrastructureDatabaseBackups)
+            .set({
+              status: status === 'succeeded' ? 'deleted' : 'failed',
+              deletedAt: status === 'succeeded' ? now : null,
+              lastError:
+                status === 'failed' ? (input.errorMessage ?? 'Retensi backup gagal.') : null,
+              updatedAt: now,
+            })
+            .where(eq(infrastructureDatabaseBackups.id, backupId))
+          await transaction.insert(auditLogs).values({
+            actorUserId: operation.actorUserId,
+            action:
+              status === 'succeeded'
+                ? 'infrastructure.database-backup.deleted-by-retention'
+                : 'infrastructure.database-backup.retention-failed',
+            entityType: 'infrastructure_database_backup',
+            entityId: backupId,
+            metadata: { operationId: operation.id, errorCode: input.errorCode ?? null },
           })
         }
       }
