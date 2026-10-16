@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import type { ApplicationSpec } from '../../../shared/schemas/infrastructure'
 import type {
   CreateApplicationReleaseInput,
   CreateContainerRegistryInput,
@@ -23,83 +24,114 @@ import {
   encryptInfrastructureCredential,
 } from '../../utils/credentials'
 import { DomainError } from '../../utils/errors'
+import { releaseImageSource, validateLocalImageNode, validateSecretDelivery } from './local-image'
 
 export class InfrastructureReleaseService {
   constructor(private readonly database: Database = useDatabase()) {}
 
   async catalog() {
-    const [registries, applications, releases, resources, builds, builders] = await Promise.all([
-      this.database
-        .select({
-          id: containerRegistries.id,
-          name: containerRegistries.name,
-          host: containerRegistries.host,
-          username: containerRegistries.username,
-          isActive: containerRegistries.isActive,
-          createdAt: containerRegistries.createdAt,
-        })
-        .from(containerRegistries)
-        .orderBy(asc(containerRegistries.name)),
-      this.database.select().from(deployableApplications).orderBy(asc(deployableApplications.name)),
-      this.database.select().from(applicationReleases).orderBy(desc(applicationReleases.createdAt)),
-      this.database
-        .select({
-          id: infrastructureResources.id,
-          name: infrastructureResources.name,
-          nodeName: infrastructureNodes.name,
-          applicationId: infrastructureResources.applicationId,
-          releaseId: infrastructureResources.releaseId,
-          releasePolicy: infrastructureResources.releasePolicy,
-          imageReference: infrastructureResources.imageReference,
-          observedState: infrastructureResources.observedState,
-        })
-        .from(infrastructureResources)
-        .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
-        .where(
-          and(
-            eq(infrastructureResources.kind, 'application'),
-            isNull(infrastructureResources.deletedAt),
+    const [registries, applications, releases, resources, builds, builders, localNodes] =
+      await Promise.all([
+        this.database
+          .select({
+            id: containerRegistries.id,
+            name: containerRegistries.name,
+            host: containerRegistries.host,
+            username: containerRegistries.username,
+            isActive: containerRegistries.isActive,
+            createdAt: containerRegistries.createdAt,
+          })
+          .from(containerRegistries)
+          .orderBy(asc(containerRegistries.name)),
+        this.database
+          .select()
+          .from(deployableApplications)
+          .orderBy(asc(deployableApplications.name)),
+        this.database
+          .select()
+          .from(applicationReleases)
+          .orderBy(desc(applicationReleases.createdAt)),
+        this.database
+          .select({
+            id: infrastructureResources.id,
+            name: infrastructureResources.name,
+            nodeId: infrastructureResources.nodeId,
+            nodeName: infrastructureNodes.name,
+            applicationId: infrastructureResources.applicationId,
+            releaseId: infrastructureResources.releaseId,
+            releasePolicy: infrastructureResources.releasePolicy,
+            imageReference: infrastructureResources.imageReference,
+            observedState: infrastructureResources.observedState,
+          })
+          .from(infrastructureResources)
+          .innerJoin(
+            infrastructureNodes,
+            eq(infrastructureNodes.id, infrastructureResources.nodeId),
+          )
+          .where(
+            and(
+              eq(infrastructureResources.kind, 'application'),
+              isNull(infrastructureResources.deletedAt),
+            ),
+          )
+          .orderBy(asc(infrastructureResources.name)),
+        this.database
+          .select({
+            id: applicationBuilds.id,
+            applicationId: applicationBuilds.applicationId,
+            nodeId: applicationBuilds.nodeId,
+            nodeName: infrastructureNodes.name,
+            releaseId: applicationBuilds.releaseId,
+            status: applicationBuilds.status,
+            version: applicationBuilds.version,
+            commitSha: applicationBuilds.commitSha,
+            imageDigest: applicationBuilds.imageDigest,
+            imageReference: applicationBuilds.imageReference,
+            logExcerpt: applicationBuilds.logExcerpt,
+            errorCode: applicationBuilds.errorCode,
+            errorMessage: applicationBuilds.errorMessage,
+            startedAt: applicationBuilds.startedAt,
+            completedAt: applicationBuilds.completedAt,
+            createdAt: applicationBuilds.createdAt,
+            updatedAt: applicationBuilds.updatedAt,
+          })
+          .from(applicationBuilds)
+          .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, applicationBuilds.nodeId))
+          .orderBy(desc(applicationBuilds.createdAt))
+          .limit(50),
+        this.database
+          .select({
+            id: infrastructureNodes.id,
+            name: infrastructureNodes.name,
+            role: infrastructureNodes.role,
+            capabilities: infrastructureNodes.capabilities,
+          })
+          .from(infrastructureNodes)
+          .where(
+            and(
+              eq(infrastructureNodes.isActive, true),
+              eq(infrastructureNodes.isDraining, false),
+              inArray(infrastructureNodes.status, ['online', 'degraded']),
+              inArray(infrastructureNodes.role, ['builder', 'hybrid']),
+              sql`${infrastructureNodes.lastHeartbeatAt} >= now() - interval '90 seconds'`,
+              sql`${infrastructureNodes.capabilities} @> '["image-build"]'::jsonb`,
+            ),
           ),
-        )
-        .orderBy(asc(infrastructureResources.name)),
-      this.database
-        .select({
-          id: applicationBuilds.id,
-          applicationId: applicationBuilds.applicationId,
-          nodeId: applicationBuilds.nodeId,
-          nodeName: infrastructureNodes.name,
-          releaseId: applicationBuilds.releaseId,
-          status: applicationBuilds.status,
-          version: applicationBuilds.version,
-          commitSha: applicationBuilds.commitSha,
-          imageDigest: applicationBuilds.imageDigest,
-          imageReference: applicationBuilds.imageReference,
-          logExcerpt: applicationBuilds.logExcerpt,
-          errorCode: applicationBuilds.errorCode,
-          errorMessage: applicationBuilds.errorMessage,
-          startedAt: applicationBuilds.startedAt,
-          completedAt: applicationBuilds.completedAt,
-          createdAt: applicationBuilds.createdAt,
-          updatedAt: applicationBuilds.updatedAt,
-        })
-        .from(applicationBuilds)
-        .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, applicationBuilds.nodeId))
-        .orderBy(desc(applicationBuilds.createdAt))
-        .limit(50),
-      this.database
-        .select({ id: infrastructureNodes.id })
-        .from(infrastructureNodes)
-        .where(
-          and(
-            eq(infrastructureNodes.isActive, true),
-            eq(infrastructureNodes.isDraining, false),
-            inArray(infrastructureNodes.status, ['online', 'degraded']),
-            inArray(infrastructureNodes.role, ['builder', 'hybrid']),
-            sql`${infrastructureNodes.lastHeartbeatAt} >= now() - interval '90 seconds'`,
-            sql`${infrastructureNodes.capabilities} @> '["image-build"]'::jsonb`,
-          ),
-        ),
-    ])
+        this.database
+          .select({
+            id: infrastructureNodes.id,
+            name: infrastructureNodes.name,
+            status: infrastructureNodes.status,
+            isDraining: infrastructureNodes.isDraining,
+            lastHeartbeatAt: infrastructureNodes.lastHeartbeatAt,
+            capabilities: infrastructureNodes.capabilities,
+          })
+          .from(infrastructureNodes)
+          .where(
+            and(eq(infrastructureNodes.isActive, true), eq(infrastructureNodes.role, 'hybrid')),
+          )
+          .orderBy(asc(infrastructureNodes.name)),
+      ])
 
     return {
       registries: registries.map(serializeDates),
@@ -114,6 +146,16 @@ export class InfrastructureReleaseService {
         updatedAt: build.updatedAt.toISOString(),
       })),
       builderAvailable: builders.length > 0,
+      localBuilders: localNodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        ready:
+          !node.isDraining &&
+          ['online', 'degraded'].includes(node.status) &&
+          Boolean(node.lastHeartbeatAt && node.lastHeartbeatAt.getTime() >= Date.now() - 90_000) &&
+          node.capabilities.includes('image-build') &&
+          node.capabilities.includes('local-image-build'),
+      })),
     }
   }
 
@@ -181,22 +223,50 @@ export class InfrastructureReleaseService {
   }
 
   async createApplication(input: CreateDeployableApplicationInput, actorUserId: string) {
-    const [registry] = await this.database
-      .select({ id: containerRegistries.id, host: containerRegistries.host })
-      .from(containerRegistries)
-      .where(
-        and(eq(containerRegistries.id, input.registryId), eq(containerRegistries.isActive, true)),
-      )
-      .limit(1)
-    if (!registry) throw DomainError.notFound('Registry tidak ditemukan atau tidak aktif.')
-    if (!input.imageRepository.startsWith(`${registry.host}/`)) {
-      throw DomainError.validation(`Image repository harus berada di ${registry.host}.`)
+    if (input.imageStorage === 'local') {
+      const [node] = await this.database
+        .select({ id: infrastructureNodes.id })
+        .from(infrastructureNodes)
+        .where(
+          and(
+            eq(infrastructureNodes.id, input.buildNodeId!),
+            eq(infrastructureNodes.isActive, true),
+            eq(infrastructureNodes.role, 'hybrid'),
+          ),
+        )
+        .limit(1)
+      if (!node)
+        throw DomainError.validation(
+          'Pilih server hybrid aktif untuk menyimpan dan menjalankan image lokal.',
+        )
+    } else {
+      const [registry] = await this.database
+        .select({ id: containerRegistries.id, host: containerRegistries.host })
+        .from(containerRegistries)
+        .where(
+          and(
+            eq(containerRegistries.id, input.registryId!),
+            eq(containerRegistries.isActive, true),
+          ),
+        )
+        .limit(1)
+      if (!registry) throw DomainError.notFound('Registry tidak ditemukan atau tidak aktif.')
+      if (!input.imageRepository?.startsWith(`${registry.host}/`)) {
+        throw DomainError.validation(`Image repository harus berada di ${registry.host}.`)
+      }
     }
 
     try {
       const [application] = await this.database
         .insert(deployableApplications)
-        .values({ ...input, createdBy: actorUserId })
+        .values({
+          ...input,
+          imageRepository:
+            input.imageStorage === 'local' ? `oc-local/${input.slug}` : input.imageRepository!,
+          registryId: input.imageStorage === 'local' ? null : input.registryId,
+          buildNodeId: input.imageStorage === 'local' ? input.buildNodeId : null,
+          createdBy: actorUserId,
+        })
         .returning()
       if (!application) throw new Error('Failed to create deployable application.')
       return serializeDates(application)
@@ -227,7 +297,7 @@ export class InfrastructureReleaseService {
     return release ? serializeDates(release) : null
   }
 
-  async receiveRelease(input: ReleaseCallbackInput) {
+  async receiveRelease(input: ReleaseCallbackInput, buildNodeId?: string) {
     const [application] = await this.database
       .select()
       .from(deployableApplications)
@@ -235,7 +305,7 @@ export class InfrastructureReleaseService {
       .limit(1)
     if (!application) throw DomainError.notFound('Application slug tidak ditemukan.')
 
-    const release = await this.persistRelease(application, input, null)
+    const release = await this.persistRelease(application, input, null, buildNodeId)
     const operations = application.autoDeploy
       ? await this.rolloutTrackedResources(application.id, release.id, null)
       : []
@@ -331,8 +401,17 @@ export class InfrastructureReleaseService {
     application: typeof deployableApplications.$inferSelect,
     input: CreateApplicationReleaseInput,
     actorUserId: string | null,
+    buildNodeId?: string,
   ) {
-    const imageReference = `${application.imageRepository}@${input.imageDigest}`
+    const local = application.imageStorage === 'local'
+    if (local && (!buildNodeId || buildNodeId !== application.buildNodeId)) {
+      throw DomainError.validation(
+        'Release lokal hanya dapat dicatat dari hasil build pada server Application.',
+      )
+    }
+    const imageReference = local
+      ? input.imageDigest
+      : `${application.imageRepository}@${input.imageDigest}`
     return this.database.transaction(async (transaction) => {
       const [inserted] = await transaction
         .insert(applicationReleases)
@@ -342,6 +421,7 @@ export class InfrastructureReleaseService {
           commitSha: input.commitSha,
           imageDigest: input.imageDigest,
           imageReference,
+          localNodeId: local ? buildNodeId : null,
         })
         .onConflictDoNothing()
         .returning()
@@ -429,6 +509,31 @@ export class InfrastructureReleaseService {
     actorUserId: string | null,
     policy: 'manual' | 'track_latest',
   ) {
+    const source = releaseImageSource(release)
+    const constrainedNodeIds = [
+      ...new Set(
+        resources
+          .filter(
+            (resource) =>
+              release.localNodeId || resource.desiredSpec.secretDelivery === 'environment',
+          )
+          .map((resource) => resource.nodeId),
+      ),
+    ]
+    if (constrainedNodeIds.length) {
+      const nodes = await transaction
+        .select({ id: infrastructureNodes.id, capabilities: infrastructureNodes.capabilities })
+        .from(infrastructureNodes)
+        .where(inArray(infrastructureNodes.id, constrainedNodeIds))
+      const capabilities = new Map(nodes.map((node) => [node.id, node.capabilities]))
+      for (const resource of resources) {
+        validateLocalImageNode(source, resource.nodeId, capabilities.get(resource.nodeId) ?? [])
+        validateSecretDelivery(
+          resource.desiredSpec as ApplicationSpec,
+          capabilities.get(resource.nodeId) ?? [],
+        )
+      }
+    }
     const operations = []
     for (const resource of resources) {
       if (resource.releaseId === release.id) {
@@ -447,7 +552,7 @@ export class InfrastructureReleaseService {
       const revision = resource.desiredRevision + 1
       const desiredSpec = {
         ...resource.desiredSpec,
-        source: { type: 'image', reference: release.imageReference },
+        source,
       }
       await transaction
         .update(infrastructureResources)

@@ -4,6 +4,7 @@ import type {
   AgentInventoryInput,
   CreateNodeEnrollmentInput,
   EnrollNodeInput,
+  UpdateNodeRoleInput,
 } from '../../shared/schemas/infrastructure'
 import { useDatabase, type Database } from '../database/client'
 import {
@@ -39,6 +40,20 @@ export interface QueueAgentOperationRecord {
   action: AgentOperationAction
   targetVersion: string
   payload: Record<string, unknown>
+  expiresAt: Date
+}
+
+export interface UpdateNodeRoleRecord extends UpdateNodeRoleInput {
+  nodeId: string
+  actorUserId: string
+  gatewayImage: string
+}
+
+export interface QueueImageDeleteRecord {
+  nodeId: string
+  imageId: string
+  actorUserId: string
+  idempotencyKey: string
   expiresAt: Date
 }
 
@@ -82,6 +97,7 @@ export class InfrastructureControlRepository {
           utilizationObservedAt: infrastructureNodes.utilizationObservedAt,
           labels: infrastructureNodes.labels,
           capabilities: infrastructureNodes.capabilities,
+          imageInventory: infrastructureNodes.imageInventory,
           lastHeartbeatAt: infrastructureNodes.lastHeartbeatAt,
           lastInventoryAt: infrastructureNodes.lastInventoryAt,
           lastError: infrastructureNodes.lastError,
@@ -124,8 +140,9 @@ export class InfrastructureControlRepository {
         (!row.lastHeartbeatAt || row.lastHeartbeatAt.getTime() < staleBefore)
           ? 'offline'
           : row.status
+      const { imageInventory, ...node } = row
       return {
-        ...row,
+        ...node,
         status,
         capacityMemoryBytes: row.capacityMemoryBytes?.toString() ?? null,
         capacityDiskBytes: row.capacityDiskBytes?.toString() ?? null,
@@ -135,6 +152,9 @@ export class InfrastructureControlRepository {
         stuckOperationCount: Number(stuckByNode.get(row.id)?.total ?? 0),
         oldestStuckOperationAt: stuckByNode.get(row.id)?.oldestAt?.toISOString() ?? null,
         resourceCount: Number(row.resourceCount),
+        images: imageInventory,
+        imageCount: imageInventory.length,
+        usedImageCount: imageInventory.filter((image) => image.used).length,
         lastHeartbeatAt: row.lastHeartbeatAt?.toISOString() ?? null,
         lastInventoryAt: row.lastInventoryAt?.toISOString() ?? null,
         gatewayLastObservedAt: row.gatewayLastObservedAt?.toISOString() ?? null,
@@ -374,10 +394,12 @@ export class InfrastructureControlRepository {
         id: infrastructureNodes.id,
         status: infrastructureNodes.status,
         isDraining: infrastructureNodes.isDraining,
+        role: infrastructureNodes.role,
       })
 
     if (
       updated &&
+      updated.role !== 'builder' &&
       gateway &&
       gateway.status !== 'healthy' &&
       supportsGatewayHealthcheckV3(input.agentVersion)
@@ -415,7 +437,11 @@ export class InfrastructureControlRepository {
     return this.database.transaction(async (transaction) => {
       const [node] = await transaction
         .update(infrastructureNodes)
-        .set({ lastInventoryAt: observedAt, updatedAt: new Date() })
+        .set({
+          lastInventoryAt: observedAt,
+          updatedAt: new Date(),
+          ...(input.images ? { imageInventory: input.images } : {}),
+        })
         .where(and(eq(infrastructureNodes.id, nodeId), eq(infrastructureNodes.isActive, true)))
         .returning({ id: infrastructureNodes.id })
 
@@ -463,6 +489,94 @@ export class InfrastructureControlRepository {
     })
   }
 
+  async updateNodeRole(input: UpdateNodeRoleRecord) {
+    const now = new Date()
+    return this.database.transaction(async (transaction) => {
+      const [node] = await transaction
+        .select({
+          id: infrastructureNodes.id,
+          name: infrastructureNodes.name,
+          role: infrastructureNodes.role,
+          isActive: infrastructureNodes.isActive,
+          status: infrastructureNodes.status,
+          capabilities: infrastructureNodes.capabilities,
+        })
+        .from(infrastructureNodes)
+        .where(eq(infrastructureNodes.id, input.nodeId))
+        .limit(1)
+        .for('update')
+
+      if (!node) return null
+      if (!node.isActive || node.status === 'revoked') return { inactive: true as const }
+      if (
+        ['builder', 'hybrid'].includes(input.role) &&
+        !node.capabilities.includes('image-build')
+      ) {
+        return { missingBuilderCapability: true as const }
+      }
+
+      if (input.role === 'builder') {
+        const [resourceSummary] = await transaction
+          .select({ total: count() })
+          .from(infrastructureResources)
+          .where(
+            and(
+              eq(infrastructureResources.nodeId, input.nodeId),
+              isNull(infrastructureResources.deletedAt),
+            ),
+          )
+        const activeResources = Number(resourceSummary?.total ?? 0)
+        if (activeResources > 0) return { activeResources }
+      }
+
+      if (node.role === input.role) {
+        return { id: node.id, name: node.name, role: node.role, previousRole: node.role }
+      }
+
+      const needsGateway = node.role === 'builder' && input.role !== 'builder'
+      const [updated] = await transaction
+        .update(infrastructureNodes)
+        .set({
+          role: input.role,
+          gatewayStatus: needsGateway ? 'pending' : undefined,
+          gatewayLastError: needsGateway ? null : undefined,
+          updatedAt: now,
+        })
+        .where(eq(infrastructureNodes.id, input.nodeId))
+        .returning({
+          id: infrastructureNodes.id,
+          name: infrastructureNodes.name,
+          role: infrastructureNodes.role,
+        })
+      if (!updated) return null
+
+      if (needsGateway) {
+        await transaction.insert(infrastructureOperations).values({
+          nodeId: input.nodeId,
+          actorUserId: input.actorUserId,
+          idempotencyKey: `gateway.ensure:${input.nodeId}:role:${now.getTime()}`,
+          action: 'gateway.ensure',
+          expiresAt: new Date(now.getTime() + 30 * 60_000),
+          payload: { image: input.gatewayImage },
+        })
+      }
+
+      await transaction.insert(auditLogs).values({
+        actorUserId: input.actorUserId,
+        action: 'infrastructure.node.role.updated',
+        entityType: 'infrastructure_node',
+        entityId: input.nodeId,
+        metadata: {
+          nodeName: node.name,
+          previousRole: node.role,
+          role: input.role,
+        },
+      })
+
+      return { ...updated, previousRole: node.role }
+    })
+  }
+
   async findNodeForAgentOperation(nodeId: string) {
     const [node] = await this.database
       .select({
@@ -474,6 +588,7 @@ export class InfrastructureControlRepository {
         previousAgentVersion: infrastructureNodes.previousAgentVersion,
         architecture: infrastructureNodes.architecture,
         agentUpdateStatus: infrastructureNodes.agentUpdateStatus,
+        capabilities: infrastructureNodes.capabilities,
         lastHeartbeatAt: infrastructureNodes.lastHeartbeatAt,
       })
       .from(infrastructureNodes)
@@ -555,6 +670,74 @@ export class InfrastructureControlRepository {
           operationId: operation.id,
           correlationId: operation.correlationId,
           targetVersion: input.targetVersion,
+        },
+      })
+
+      return { operation, replayed: false, conflict: false }
+    })
+  }
+
+  async queueImageDelete(input: QueueImageDeleteRecord) {
+    return this.database.transaction(async (transaction) => {
+      const [existingByKey] = await transaction
+        .select()
+        .from(infrastructureOperations)
+        .where(eq(infrastructureOperations.idempotencyKey, input.idempotencyKey))
+        .limit(1)
+      if (existingByKey) {
+        const sameRequest =
+          existingByKey.nodeId === input.nodeId &&
+          existingByKey.action === 'image.delete' &&
+          existingByKey.payload.imageId === input.imageId
+        return { operation: existingByKey, replayed: sameRequest, conflict: !sameRequest }
+      }
+
+      const [node] = await transaction
+        .select({
+          id: infrastructureNodes.id,
+          name: infrastructureNodes.name,
+          imageInventory: infrastructureNodes.imageInventory,
+        })
+        .from(infrastructureNodes)
+        .where(
+          and(
+            eq(infrastructureNodes.id, input.nodeId),
+            eq(infrastructureNodes.isActive, true),
+            inArray(infrastructureNodes.status, ['online', 'degraded']),
+          ),
+        )
+        .limit(1)
+        .for('update')
+      if (!node) return null
+
+      const image = node.imageInventory.find((candidate) => candidate.id === input.imageId)
+      if (!image) return { missingImage: true as const }
+      if (image.used) return { imageUsed: true as const }
+
+      const [operation] = await transaction
+        .insert(infrastructureOperations)
+        .values({
+          nodeId: input.nodeId,
+          actorUserId: input.actorUserId,
+          idempotencyKey: input.idempotencyKey,
+          action: 'image.delete',
+          maxAttempts: 1,
+          expiresAt: input.expiresAt,
+          payload: { imageId: input.imageId },
+        })
+        .returning()
+      if (!operation) throw new Error('Failed to create image delete operation.')
+
+      await transaction.insert(auditLogs).values({
+        actorUserId: input.actorUserId,
+        action: 'infrastructure.image.delete.requested',
+        entityType: 'infrastructure_node',
+        entityId: input.nodeId,
+        metadata: {
+          operationId: operation.id,
+          correlationId: operation.correlationId,
+          imageId: input.imageId,
+          references: image.references,
         },
       })
 

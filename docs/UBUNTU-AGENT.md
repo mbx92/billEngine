@@ -26,7 +26,29 @@ Agent `0.11.0+` mendukung role `builder`. Pilih role **Image builder** ketika me
 token dan pastikan `git` serta plugin `docker buildx` tersedia. Builder melaporkan capability
 `image-build`, membuat workspace sementara di `/var/lib/oc-agent/builds`, lalu mendorong image dan
 cache BuildKit ke registry Application. Builder murni tidak memasang Traefik dan tidak menerima
-deployment workload.
+deployment workload. Agent `0.11.1+` dapat menyinkronkan perubahan role melalui heartbeat. Role
+node yang sudah terdaftar dapat diubah dari halaman **Infrastructure → Nodes**. Mode **Hybrid**
+menerima deployment workload sekaligus pekerjaan build. Node dengan resource aktif harus memakai
+hybrid, bukan builder murni.
+
+Agent `0.12.0+` menambahkan capability `local-image-build`. Application mode **Local image**
+diikat ke satu server hybrid: Buildx memuat hasil build dan cache di Docker lokal tanpa login
+atau push ke registry. Release memakai Docker image ID dan hanya dapat dideploy pada server
+asal dengan `--pull=never`. Jika image hilang, deployment gagal sebelum container lama diganti.
+Base image dan paket dalam Dockerfile tetap dapat memerlukan unduhan saat build.
+
+Agent `0.12.3+` menulis dynamic route sebagai `.yaml`, menghilangkan map middleware kosong,
+dan meminta reload konfigurasi agar route internal dapat dibaca provider file Traefik.
+Route yang dibuat versi sebelumnya sebagai `.json` perlu dikonfigurasi ulang (redeploy resource)
+setelah upgrade; berkas JSON lama diganti oleh konfigurasi YAML dari operation tersebut.
+
+Agent `0.12.4+` melaporkan inventory Docker image pada setiap heartbeat, termasuk ukuran,
+referensi, dan apakah image masih dipakai oleh container. Dashboard Nodes menampilkan jumlah
+image dan status `Used`/`Unused`; inventory ini juga berjalan pada node mode builder.
+
+Agent `0.12.5+` dapat menghapus image `Unused` melalui dialog image pada halaman Nodes. Control
+plane dan agent sama-sama menolak image yang masih direferensikan container, dan penghapusan tidak
+menggunakan opsi force.
 
 Untuk scheduled backup, agent mengunggah dump langsung ke endpoint S3-compatible
 dengan AWS Signature V4. Access key dan secret key dienkripsi di control plane,

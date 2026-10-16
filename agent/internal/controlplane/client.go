@@ -56,6 +56,10 @@ type HeartbeatRequest struct {
 	Update          *AgentUpdate      `json:"update,omitempty"`
 }
 
+type HeartbeatResponse struct {
+	Role string `json:"role"`
+}
+
 type AgentUpdate struct {
 	PreviousVersion string `json:"previousVersion,omitempty"`
 }
@@ -63,10 +67,12 @@ type AgentUpdate struct {
 type InventoryRequest struct {
 	ObservedAt time.Time         `json:"observedAt"`
 	Resources  []docker.Resource `json:"resources"`
+	Images     []docker.Image    `json:"images,omitempty"`
 }
 
 type Operation struct {
 	ID                       string          `json:"id"`
+	NodeID                   string          `json:"nodeId"`
 	ResourceID               string          `json:"resourceId"`
 	CorrelationID            string          `json:"correlationId"`
 	Action                   string          `json:"action"`
@@ -114,8 +120,12 @@ func (c *Client) Enroll(ctx context.Context, request EnrollmentRequest) (Identit
 	return response.Data, nil
 }
 
-func (c *Client) Heartbeat(ctx context.Context, credential string, request HeartbeatRequest) error {
-	return c.do(ctx, http.MethodPost, "/api/infrastructure/agent/heartbeat", credential, request, nil)
+func (c *Client) Heartbeat(ctx context.Context, credential string, request HeartbeatRequest) (HeartbeatResponse, error) {
+	var response struct {
+		Data HeartbeatResponse `json:"data"`
+	}
+	err := c.do(ctx, http.MethodPost, "/api/infrastructure/agent/heartbeat", credential, request, &response)
+	return response.Data, err
 }
 
 func (c *Client) Inventory(ctx context.Context, credential string, request InventoryRequest) error {

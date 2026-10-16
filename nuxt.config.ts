@@ -79,7 +79,7 @@ export default defineNuxtConfig({
     infraCredentialsKey: developmentEnv.INFRA_CREDENTIALS_KEY || '',
     releaseWebhookSecret: developmentEnv.RELEASE_WEBHOOK_SECRET || '',
     agentArtifactDirectory: developmentEnv.AGENT_ARTIFACT_DIRECTORY || 'dist',
-    agentReleaseVersion: developmentEnv.AGENT_RELEASE_VERSION || '0.11.0',
+    agentReleaseVersion: developmentEnv.AGENT_RELEASE_VERSION || '0.12.5',
     nodeDiskWarningPercent: developmentEnv.NODE_DISK_WARNING_PERCENT || '80',
     nodeDiskCriticalPercent: developmentEnv.NODE_DISK_CRITICAL_PERCENT || '90',
     operationStuckMinutes: developmentEnv.OPERATION_STUCK_MINUTES || '15',

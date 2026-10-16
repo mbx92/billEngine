@@ -22,7 +22,9 @@ interface DeployableApplication {
   dockerfilePath: string
   buildContext: string
   imageRepository: string
-  registryId: string
+  imageStorage: 'local' | 'registry'
+  buildNodeId: string | null
+  registryId: string | null
   autoDeploy: boolean
 }
 
@@ -33,12 +35,14 @@ interface Release {
   commitSha: string
   imageDigest: string
   imageReference: string
+  localNodeId: string | null
   createdAt: string
 }
 
 interface Resource {
   id: string
   name: string
+  nodeId: string
   nodeName: string
   applicationId: string | null
   releaseId: string | null
@@ -50,6 +54,7 @@ interface Resource {
 interface ApplicationBuild {
   id: string
   applicationId: string
+  nodeId: string
   nodeName: string
   releaseId: string | null
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
@@ -70,6 +75,7 @@ interface Catalog {
   resources: Resource[]
   builds: ApplicationBuild[]
   builderAvailable: boolean
+  localBuilders: Array<{ id: string; name: string; ready: boolean }>
 }
 
 const format = useFormat()
@@ -130,6 +136,8 @@ const applicationForm = reactive({
   defaultBranch: 'main',
   dockerfilePath: 'Dockerfile',
   buildContext: '.',
+  imageStorage: 'local' as 'local' | 'registry',
+  buildNodeId: '',
   imageRepository: '',
   registryId: '',
   autoDeploy: false,
@@ -145,6 +153,7 @@ const templateForm = reactive({
   healthcheckPath: '',
   environmentKeysText: '',
   secretKeysText: '',
+  secretDelivery: 'environment' as 'files' | 'environment',
   volumeName: '',
   volumeMountTarget: '',
   trackLatest: true,
@@ -168,6 +177,37 @@ const imageRepositoryHint = computed(() => {
   if (!registry) return 'Daftarkan registry aktif terlebih dahulu.'
   return `Contoh: ${registry.host}/${registry.username.toLowerCase()}/my-app · tanpa https:// atau tag.`
 })
+const localBuilders = computed(() => catalog.value?.localBuilders ?? [])
+watch(
+  localBuilders,
+  (items) => {
+    if (!items.some((node) => node.id === applicationForm.buildNodeId)) {
+      applicationForm.buildNodeId = items.find((node) => node.ready)?.id ?? items[0]?.id ?? ''
+    }
+  },
+  { immediate: true },
+)
+
+function localNodeName(nodeId: string | null) {
+  return (
+    localBuilders.value.find((node) => node.id === nodeId)?.name ??
+    builds.value.find((build) => build.nodeId === nodeId)?.nodeName ??
+    'Server lokal'
+  )
+}
+
+function builderAvailable(application: DeployableApplication) {
+  return application.imageStorage === 'local'
+    ? localBuilders.value.some((node) => node.id === application.buildNodeId && node.ready)
+    : Boolean(catalog.value?.builderAvailable)
+}
+
+const rolloutResources = computed(() =>
+  resources.value.filter(
+    (resource) =>
+      !rolloutRelease.value?.localNodeId || resource.nodeId === rolloutRelease.value.localNodeId,
+  ),
+)
 
 function releasesFor(applicationId: string) {
   return (catalog.value?.releases ?? [])
@@ -189,7 +229,7 @@ function buildTone(buildStatus: ApplicationBuild['status']) {
   return 'warning' as const
 }
 
-function registryName(registryId: string) {
+function registryName(registryId: string | null) {
   return registries.value.find((registry) => registry.id === registryId)?.name ?? 'Unknown registry'
 }
 
@@ -255,7 +295,16 @@ async function createApplication() {
       .replace(/^https?:\/\//i, '')
       .replace(/\/+$/, '')
       .toLowerCase()
-    await $fetch('/api/infrastructure/applications', { method: 'POST', body: applicationForm })
+    await $fetch('/api/infrastructure/applications', {
+      method: 'POST',
+      body: {
+        ...applicationForm,
+        buildNodeId: applicationForm.imageStorage === 'local' ? applicationForm.buildNodeId : null,
+        registryId: applicationForm.imageStorage === 'registry' ? applicationForm.registryId : null,
+        imageRepository:
+          applicationForm.imageStorage === 'registry' ? applicationForm.imageRepository : undefined,
+      },
+    })
     actionMessage.value = `Application ${applicationForm.name} berhasil dibuat.`
     showApplicationForm.value = false
     Object.assign(applicationForm, {
@@ -265,6 +314,8 @@ async function createApplication() {
       defaultBranch: 'main',
       dockerfilePath: 'Dockerfile',
       buildContext: '.',
+      imageStorage: 'local',
+      buildNodeId: localBuilders.value[0]?.id ?? '',
       imageRepository: '',
       registryId: activeRegistries.value[0]?.id ?? '',
       autoDeploy: false,
@@ -294,6 +345,7 @@ function openTemplate(application: DeployableApplication) {
     healthcheckPath: '',
     environmentKeysText: '',
     secretKeysText: '',
+    secretDelivery: 'environment',
     volumeName: '',
     volumeMountTarget: '',
     trackLatest: true,
@@ -330,6 +382,7 @@ async function createTemplate() {
         healthcheckPath: templateForm.healthcheckPath || undefined,
         environmentKeys: parseEnvironmentKeys(templateForm.environmentKeysText),
         secretKeys: parseEnvironmentKeys(templateForm.secretKeysText),
+        secretDelivery: templateForm.secretDelivery,
         ...(templateForm.volumeName && templateForm.volumeMountTarget
           ? {
               volume: {
@@ -395,7 +448,11 @@ async function queueBuild(application: DeployableApplication) {
 function openRollout(release: Release) {
   rolloutRelease.value = release
   selectedResourceIds.value = resources.value
-    .filter((resource) => resource.applicationId === release.applicationId)
+    .filter(
+      (resource) =>
+        resource.applicationId === release.applicationId &&
+        (!release.localNodeId || resource.nodeId === release.localNodeId),
+    )
     .map((resource) => resource.id)
   trackLatest.value = false
 }
@@ -447,8 +504,8 @@ onBeforeUnmount(() => {
         </p>
         <h1 class="text-2xl font-semibold tracking-tight text-ink">Applications & Releases</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">
-          Build satu image per commit, lalu gunakan digest yang sama untuk banyak client.
-          Konfigurasi dan data setiap client tetap terpisah pada resource masing-masing.
+          Build image langsung di server hybrid tanpa registry, lalu deploy release pada server yang
+          sama. Mode registry tersedia untuk distribusi image ke beberapa server.
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -456,9 +513,7 @@ onBeforeUnmount(() => {
         <UiButton variant="secondary" @click="openRegistryDialog"
           ><ShieldCheck :size="15" /> Registry</UiButton
         >
-        <UiButton :disabled="!registries.length" @click="showApplicationForm = true"
-          ><Plus :size="15" /> Application</UiButton
-        >
+        <UiButton @click="showApplicationForm = true"><Plus :size="15" /> Application</UiButton>
       </div>
     </header>
 
@@ -476,22 +531,23 @@ onBeforeUnmount(() => {
       {{ actionError }}
     </p>
 
-    <UiCard v-if="status !== 'pending' && !registries.length" class="mb-4">
+    <UiCard v-if="catalog && !localBuilders.some((node) => node.ready)" class="mb-4">
       <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div>
-          <h2 class="font-semibold text-ink">Hubungkan container registry terlebih dahulu</h2>
+          <h2 class="font-semibold text-ink">Siapkan server hybrid untuk build lokal</h2>
           <p class="mt-1 text-sm text-muted">
-            Untuk native build ke GHCR, gunakan personal access token (classic) dengan scope
-            <code>write:packages</code>. Jika registry hanya digunakan untuk deploy,
-            <code>read:packages</code> sudah cukup.
+            Gunakan server mode hybrid dengan Git, Docker Buildx, dan agent 0.12.0 atau lebih baru.
+            Image hasil build disimpan di Docker server tersebut; registry tidak diperlukan.
           </p>
         </div>
-        <UiButton @click="openRegistryDialog"><ShieldCheck :size="15" /> Tambah registry</UiButton>
+        <NuxtLink to="/servers"><UiButton variant="secondary">Buka servers</UiButton></NuxtLink>
       </div>
     </UiCard>
 
-    <UiCard v-if="status === 'pending'" :padded="false"><UiSkeleton height="18rem" /></UiCard>
-    <UiCard v-else-if="error" :padded="false">
+    <UiCard v-if="status === 'pending' && !catalog" :padded="false"
+      ><UiSkeleton height="18rem"
+    /></UiCard>
+    <UiCard v-else-if="error && !catalog" :padded="false">
       <UiEmptyState
         title="Catalog gagal dimuat"
         description="Pastikan migration database terbaru sudah dijalankan."
@@ -500,7 +556,7 @@ onBeforeUnmount(() => {
     <UiCard v-else-if="!applications.length" :padded="false">
       <UiEmptyState
         title="Belum ada application"
-        description="Tambahkan registry, lalu daftarkan repository dan lokasi image hasil build."
+        description="Daftarkan repository, pilih Local image, lalu pilih server hybrid untuk build dan deployment."
       />
     </UiCard>
     <div v-else class="grid gap-4 lg:grid-cols-2">
@@ -538,30 +594,40 @@ onBeforeUnmount(() => {
             </dd>
           </div>
           <div class="flex justify-between gap-4">
-            <dt class="text-muted">Registry</dt>
-            <dd class="text-ink">{{ registryName(application.registryId) }}</dd>
+            <dt class="text-muted">Penyimpanan image</dt>
+            <dd class="text-ink">
+              {{
+                application.imageStorage === 'local'
+                  ? `Local · ${localNodeName(application.buildNodeId)}`
+                  : registryName(application.registryId)
+              }}
+            </dd>
           </div>
         </dl>
         <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">Native build</h3>
             <p class="mt-1 text-[11px] text-muted">
-              GitHub source → builder node → {{ registryName(application.registryId) }}
+              {{
+                application.imageStorage === 'local'
+                  ? `GitHub → build lokal di ${localNodeName(application.buildNodeId)} → deploy di server yang sama`
+                  : `GitHub → builder → ${registryName(application.registryId)}`
+              }}
             </p>
           </div>
           <UiButton
             size="sm"
             :disabled="
-              !catalog?.builderAvailable ||
+              !builderAvailable(application) ||
               !!activeBuild(application.id) ||
               buildingApplicationId === application.id
             "
             :title="
-              !catalog?.builderAvailable
-                ? 'Enroll builder node yang online terlebih dahulu'
+              !builderAvailable(application)
+                ? 'Pastikan server build online dan agent mendukung mode image yang dipilih'
                 : activeBuild(application.id)
                   ? 'Build masih berjalan'
-                  : 'Clone repository dan build image pada worker terpisah'
+                  : 'Clone repository dan build image pada server yang dipilih'
             "
             @click="queueBuild(application)"
           >
@@ -598,10 +664,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <p
-          v-else-if="!catalog?.builderAvailable"
+          v-else-if="!builderAvailable(application)"
           class="mt-2 rounded-md border border-dashed px-3 py-3 text-center text-xs text-muted"
         >
-          Belum ada builder node online.
+          Server build belum siap atau sedang offline.
         </p>
         <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">Release terbaru</h3>
@@ -614,7 +680,12 @@ onBeforeUnmount(() => {
             >
               <FileCode2 :size="13" /> Buat template
             </UiButton>
-            <UiButton size="sm" variant="secondary" @click="openRelease(application)">
+            <UiButton
+              v-if="application.imageStorage === 'registry'"
+              size="sm"
+              variant="secondary"
+              @click="openRelease(application)"
+            >
               <Plus :size="13" /> Catat release
             </UiButton>
           </div>
@@ -643,7 +714,7 @@ onBeforeUnmount(() => {
           v-else
           class="mt-2 rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted"
         >
-          Belum ada release. Jalankan native build atau kirim release dari CI.
+          Belum ada release. Klik Build image untuk membuat release pertama.
         </p>
       </UiCard>
     </div>
@@ -652,13 +723,12 @@ onBeforeUnmount(() => {
       <div class="flex items-start gap-3">
         <GitBranch :size="19" class="mt-0.5 shrink-0 text-brand" />
         <div>
-          <h2 class="text-sm font-semibold text-ink">Native builder dan CI eksternal</h2>
+          <h2 class="text-sm font-semibold text-ink">Dari repository ke aplikasi</h2>
           <p class="mt-1 text-xs leading-5 text-muted">
-            Tombol <strong>Build image</strong> menjalankan build pada node role builder. CI
-            eksternal tetap dapat melakukan build + push, lalu POST ke
-            <code class="text-ink">/api/infrastructure/releases/callback</code> menggunakan secret
-            <code class="text-ink">NUXT_RELEASE_WEBHOOK_SECRET</code>. Contoh lengkap tersedia di
-            <code class="text-ink">docs/APPLICATION-RELEASES.md</code>.
+            Daftarkan repository → Build image → Buat template → Deploy resource. Mode
+            <strong>Local image</strong> menyimpan image dan cache di server hybrid tanpa push ke
+            registry. Release lokal hanya dapat dideploy pada server asal. Mode registry tetap
+            mendukung build dan callback CI eksternal.
           </p>
         </div>
       </div>
@@ -730,8 +800,20 @@ onBeforeUnmount(() => {
               class="focus-ring w-full rounded-md border border-line-strong bg-canvas px-3 py-2 font-mono text-sm text-ink"
             />
             <span class="mt-1.5 block text-xs text-muted">
-              Disimpan terenkripsi dan dikirim sebagai secret file.
+              Disimpan terenkripsi; cara pengirimannya dipilih di bawah.
             </span>
+          </label>
+          <label class="block md:col-span-2">
+            <span class="mb-2 block text-xs font-semibold text-muted">Pengiriman secret</span>
+            <select
+              v-model="templateForm.secretDelivery"
+              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            >
+              <option value="environment">
+                Environment variable · SESSION_SECRET, DATABASE_URL (agent 0.12.0+)
+              </option>
+              <option value="files">Secret file · SESSION_SECRET_FILE, DATABASE_URL_FILE</option>
+            </select>
           </label>
           <UiInput
             v-model="templateForm.volumeName"
@@ -844,7 +926,7 @@ onBeforeUnmount(() => {
         <UiInput v-model="applicationForm.name" label="Nama" required />
         <UiInput
           v-model="applicationForm.slug"
-          label="Slug untuk callback"
+          label="Slug application"
           required
           pattern="[a-z0-9][a-z0-9-]*"
         />
@@ -859,7 +941,76 @@ onBeforeUnmount(() => {
         <UiInput v-model="applicationForm.defaultBranch" label="Default branch" required />
         <UiInput v-model="applicationForm.dockerfilePath" label="Dockerfile" required />
         <UiInput v-model="applicationForm.buildContext" label="Build context" required />
-        <label class="block"
+        <fieldset class="md:col-span-2">
+          <legend class="mb-2 text-xs font-semibold text-muted">Penyimpanan image</legend>
+          <div class="grid grid-cols-2 gap-1 rounded-lg border border-line-strong bg-canvas p-1">
+            <label
+              v-for="mode in ['local', 'registry'] as const"
+              :key="mode"
+              class="relative cursor-pointer rounded-md px-3 py-2 text-center text-sm"
+              :class="applicationForm.imageStorage === mode ? 'bg-brand text-white' : 'text-muted'"
+            >
+              <input
+                v-model="applicationForm.imageStorage"
+                type="radio"
+                name="image-storage"
+                :value="mode"
+                class="peer sr-only"
+              />
+              <span class="peer-focus-visible:underline">{{
+                mode === 'local' ? 'Local image' : 'Registry'
+              }}</span>
+            </label>
+          </div>
+        </fieldset>
+        <fieldset v-if="applicationForm.imageStorage === 'local'" class="md:col-span-2">
+          <legend class="mb-2 text-xs font-semibold text-muted">Server build & deployment</legend>
+          <div
+            v-if="localBuilders.length"
+            class="grid gap-1 rounded-lg border border-line-strong bg-canvas p-1 sm:grid-cols-2"
+          >
+            <label
+              v-for="node in localBuilders"
+              :key="node.id"
+              class="relative cursor-pointer rounded-md px-3 py-2.5"
+              :class="
+                applicationForm.buildNodeId === node.id
+                  ? 'bg-brand text-white'
+                  : 'text-muted hover:bg-surface'
+              "
+            >
+              <input
+                v-model="applicationForm.buildNodeId"
+                type="radio"
+                name="build-node"
+                :value="node.id"
+                required
+                class="peer sr-only"
+              />
+              <span class="flex items-center justify-between gap-3 peer-focus-visible:underline">
+                <span class="truncate text-sm font-semibold">{{ node.name }}</span>
+                <span
+                  class="shrink-0 text-[11px]"
+                  :class="applicationForm.buildNodeId === node.id ? 'text-white/80' : ''"
+                >
+                  {{ node.ready ? 'Siap' : 'Belum siap' }}
+                </span>
+              </span>
+            </label>
+          </div>
+          <div
+            v-else
+            class="rounded-lg border border-dashed border-line-strong px-3 py-3 text-sm text-muted"
+          >
+            Belum ada server hybrid.
+          </div>
+          <span class="mt-2 block text-xs text-muted">{{
+            localBuilders.length
+              ? 'Image disimpan dan dijalankan pada server ini. Build memerlukan server online dengan agent 0.12.0+.'
+              : 'Belum ada server hybrid siap. Perbarui agent ke 0.12.0+, lalu pastikan server online.'
+          }}</span>
+        </fieldset>
+        <label v-if="applicationForm.imageStorage === 'registry'" class="block"
           ><span class="mb-2 block text-xs font-semibold text-muted">Registry</span
           ><select
             v-model="applicationForm.registryId"
@@ -872,6 +1023,7 @@ onBeforeUnmount(() => {
           </select></label
         >
         <UiInput
+          v-if="applicationForm.imageStorage === 'registry'"
           v-model="applicationForm.imageRepository"
           class="md:col-span-2"
           label="Image repository tanpa tag"
@@ -887,7 +1039,7 @@ onBeforeUnmount(() => {
           /><span
             ><strong class="block text-sm text-ink">Auto deploy tracked resources</strong
             ><span class="mt-1 block text-xs text-muted"
-              >Release callback otomatis meredeploy resource yang sudah memilih track latest.</span
+              >Release baru otomatis meredeploy resource yang sudah memilih track latest.</span
             ></span
           ></label
         >
@@ -951,7 +1103,7 @@ onBeforeUnmount(() => {
       <form id="rollout-form" class="space-y-4" @submit.prevent="rollout">
         <div class="max-h-64 divide-y overflow-y-auto rounded-md border border-line-strong">
           <label
-            v-for="resource in resources"
+            v-for="resource in rolloutResources"
             :key="resource.id"
             class="flex cursor-pointer items-center gap-3 px-3 py-3 hover:bg-surface-raised"
           >

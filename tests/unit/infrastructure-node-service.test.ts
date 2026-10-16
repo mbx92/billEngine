@@ -13,8 +13,10 @@ function repository() {
     recordHeartbeat: vi.fn(),
     recordInventory: vi.fn(),
     revokeNode: vi.fn(),
+    updateNodeRole: vi.fn(),
     findNodeForAgentOperation: vi.fn(),
     queueAgentOperation: vi.fn(),
+    queueImageDelete: vi.fn(),
   }
 }
 

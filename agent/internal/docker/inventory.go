@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -30,6 +31,25 @@ type Gateway struct {
 	Error       string `json:"error,omitempty"`
 }
 
+type Image struct {
+	ID             string   `json:"id"`
+	References     []string `json:"references"`
+	SizeBytes      string   `json:"sizeBytes"`
+	CreatedAt      string   `json:"createdAt"`
+	Used           bool     `json:"used"`
+	ContainerCount int      `json:"containerCount"`
+}
+
+type imageInspect struct {
+	ID          string   `json:"Id"`
+	RepoTags    []string `json:"RepoTags"`
+	RepoDigests []string `json:"RepoDigests"`
+	Size        int64    `json:"Size"`
+	Created     string   `json:"Created"`
+}
+
+const maxInventoryImages = 1000
+
 type containerRow struct {
 	ID     string `json:"ID"`
 	Image  string `json:"Image"`
@@ -42,6 +62,111 @@ type containerRow struct {
 
 func Inventory(ctx context.Context) ([]Resource, error) {
 	return InventoryWith(ctx, runCommand)
+}
+
+func ImageInventory(ctx context.Context) ([]Image, error) {
+	return ImageInventoryWith(ctx, runCommand)
+}
+
+func ImageInventoryWith(ctx context.Context, run CommandRunner) ([]Image, error) {
+	imageOutput, err := run(ctx, "docker", "image", "ls", "--all", "--no-trunc", "--quiet")
+	if err != nil {
+		return nil, fmt.Errorf("list docker images: %w", err)
+	}
+
+	imageIDs := uniqueNonEmptyLines(imageOutput, maxInventoryImages)
+	if len(imageIDs) == 0 {
+		return []Image{}, nil
+	}
+
+	containerOutput, err := run(ctx, "docker", "container", "ls", "--all", "--quiet")
+	if err != nil {
+		return nil, fmt.Errorf("list docker containers for image usage: %w", err)
+	}
+	containerIDs := uniqueNonEmptyLines(containerOutput, 0)
+	containerCountByImage := make(map[string]int)
+	if len(containerIDs) > 0 {
+		args := append([]string{"container", "inspect", "--format", "{{.Image}}"}, containerIDs...)
+		usedImageOutput, inspectErr := run(ctx, "docker", args...)
+		if inspectErr != nil {
+			return nil, fmt.Errorf("inspect docker container images: %w", inspectErr)
+		}
+		for _, imageID := range strings.Split(strings.TrimSpace(string(usedImageOutput)), "\n") {
+			imageID = strings.TrimSpace(imageID)
+			if imageID != "" {
+				containerCountByImage[imageID]++
+			}
+		}
+	}
+
+	args := append([]string{"image", "inspect", "--format", "{{json .}}"}, imageIDs...)
+	inspectOutput, err := run(ctx, "docker", args...)
+	if err != nil {
+		return nil, fmt.Errorf("inspect docker images: %w", err)
+	}
+
+	images := make([]Image, 0, len(imageIDs))
+	for _, line := range strings.Split(strings.TrimSpace(string(inspectOutput)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var inspected imageInspect
+		if err := json.Unmarshal([]byte(line), &inspected); err != nil {
+			return nil, fmt.Errorf("decode docker image inventory: %w", err)
+		}
+		references := uniqueReferences(append(inspected.RepoTags, inspected.RepoDigests...))
+		containerCount := containerCountByImage[inspected.ID]
+		images = append(images, Image{
+			ID:             inspected.ID,
+			References:     references,
+			SizeBytes:      strconv.FormatInt(inspected.Size, 10),
+			CreatedAt:      inspected.Created,
+			Used:           containerCount > 0,
+			ContainerCount: containerCount,
+		})
+	}
+	return images, nil
+}
+
+func uniqueNonEmptyLines(output []byte, limit int) []string {
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		value := strings.TrimSpace(line)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+		if limit > 0 && len(values) >= limit {
+			break
+		}
+	}
+	return values
+}
+
+func uniqueReferences(values []string) []string {
+	seen := make(map[string]struct{})
+	references := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "<none>:<none>" || value == "<none>@<none>" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		references = append(references, value)
+		if len(references) >= 100 {
+			break
+		}
+	}
+	sort.Strings(references)
+	return references
 }
 
 func InspectGateway(ctx context.Context) Gateway {

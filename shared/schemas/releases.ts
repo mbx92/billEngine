@@ -60,24 +60,60 @@ export const updateContainerRegistrySchema = z.object({
   token: z.string().trim().min(1).max(4096),
 })
 
-export const createDeployableApplicationSchema = z.object({
-  name: z.string().trim().min(1).max(160),
-  slug: slugSchema,
-  repositoryUrl: z.string().trim().url().max(2048),
-  defaultBranch: z
-    .string()
-    .trim()
-    .min(1)
-    .max(255)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'Nama branch tidak valid.')
-    .refine((value) => !value.includes('..') && !value.includes('//'), 'Nama branch tidak valid.')
-    .default('main'),
-  dockerfilePath: relativeBuildPathSchema.default('Dockerfile'),
-  buildContext: relativeBuildPathSchema.default('.'),
-  imageRepository: imageRepositorySchema,
-  registryId: z.string().uuid(),
-  autoDeploy: z.boolean().default(false),
-})
+const deployableApplicationInputSchema = z
+  .object({
+    name: z.string().trim().min(1).max(160),
+    slug: slugSchema,
+    repositoryUrl: z.string().trim().url().max(2048),
+    defaultBranch: z
+      .string()
+      .trim()
+      .min(1)
+      .max(255)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'Nama branch tidak valid.')
+      .refine((value) => !value.includes('..') && !value.includes('//'), 'Nama branch tidak valid.')
+      .default('main'),
+    dockerfilePath: relativeBuildPathSchema.default('Dockerfile'),
+    buildContext: relativeBuildPathSchema.default('.'),
+    imageStorage: z.enum(['local', 'registry']).default('local'),
+    buildNodeId: z.string().uuid().nullish(),
+    imageRepository: imageRepositorySchema.optional(),
+    registryId: z.string().uuid().nullish(),
+    autoDeploy: z.boolean().default(false),
+  })
+  .superRefine((input, context) => {
+    if (input.imageStorage === 'local' && !input.buildNodeId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['buildNodeId'],
+        message: 'Pilih server hybrid untuk build dan deployment lokal.',
+      })
+    }
+    if (input.imageStorage === 'registry') {
+      for (const key of ['registryId', 'imageRepository'] as const) {
+        if (!input[key])
+          context.addIssue({
+            code: 'custom',
+            path: [key],
+            message: 'Wajib diisi untuk mode registry.',
+          })
+      }
+    }
+  })
+
+export const createDeployableApplicationSchema = z.preprocess((value) => {
+  // Existing API clients supplied registryId before imageStorage was introduced.
+  if (
+    value &&
+    typeof value === 'object' &&
+    !('imageStorage' in value) &&
+    'registryId' in value &&
+    value.registryId
+  ) {
+    return { ...value, imageStorage: 'registry' }
+  }
+  return value
+}, deployableApplicationInputSchema)
 
 export const createApplicationReleaseSchema = z.object({
   version: z.string().trim().min(1).max(160),

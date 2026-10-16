@@ -29,7 +29,9 @@ func TestEnrollAndHeartbeat(t *testing.T) {
 			if request.Header.Get("Authorization") != "Bearer oc_agent_secret" {
 				t.Fatal("heartbeat credential is missing")
 			}
-			response.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": map[string]string{
+				"role": "hybrid",
+			}})
 		case "/api/infrastructure/agent/inventory":
 			if request.Header.Get("Authorization") != "Bearer oc_agent_secret" {
 				t.Fatal("inventory credential is missing")
@@ -53,13 +55,17 @@ func TestEnrollAndHeartbeat(t *testing.T) {
 	if identity.Credential != "oc_agent_secret" {
 		t.Fatalf("unexpected credential: %q", identity.Credential)
 	}
-	if err := client.Heartbeat(context.Background(), identity.Credential, HeartbeatRequest{
+	heartbeat, err := client.Heartbeat(context.Background(), identity.Credential, HeartbeatRequest{
 		AgentVersion: "0.1.0", ProtocolVersion: ProtocolVersion,
 		OSRelease: "Ubuntu 24.04 LTS", Architecture: "amd64",
 		DockerVersion: "28", ComposeVersion: "2.39",
 		Capacity: platform.Capacity{CPUMilli: 4000, MemoryBytes: "1024", DiskBytes: "2048"},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("heartbeat: %v", err)
+	}
+	if heartbeat.Role != "hybrid" {
+		t.Fatalf("unexpected heartbeat role: %q", heartbeat.Role)
 	}
 	if err := client.Inventory(context.Background(), identity.Credential, InventoryRequest{}); err != nil {
 		t.Fatalf("inventory: %v", err)

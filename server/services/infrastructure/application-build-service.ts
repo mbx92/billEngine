@@ -57,27 +57,39 @@ export class ApplicationBuildService {
           dockerfilePath: deployableApplications.dockerfilePath,
           buildContext: deployableApplications.buildContext,
           imageRepository: deployableApplications.imageRepository,
-          registryHost: containerRegistries.host,
+          imageStorage: deployableApplications.imageStorage,
+          buildNodeId: deployableApplications.buildNodeId,
         })
         .from(deployableApplications)
-        .innerJoin(
-          containerRegistries,
-          eq(containerRegistries.id, deployableApplications.registryId),
-        )
-        .where(
-          and(eq(deployableApplications.id, applicationId), eq(containerRegistries.isActive, true)),
-        )
+        .where(eq(deployableApplications.id, applicationId))
         .limit(1)
         .for('update')
-      if (!application)
-        throw DomainError.notFound('Application atau registry aktif tidak ditemukan.')
+      if (!application) throw DomainError.notFound('Application tidak ditemukan.')
       if (!application.repositoryUrl.startsWith('https://github.com/')) {
         throw DomainError.validation(
           'Native builder saat ini hanya menerima repository HTTPS github.com.',
         )
       }
-      if (!application.imageRepository.startsWith(`${application.registryHost}/`)) {
-        throw DomainError.invalidState('Image repository tidak cocok dengan registry Application.')
+      if (application.imageStorage === 'registry') {
+        const [registry] = await transaction
+          .select({ host: containerRegistries.host })
+          .from(containerRegistries)
+          .innerJoin(
+            deployableApplications,
+            eq(deployableApplications.registryId, containerRegistries.id),
+          )
+          .where(
+            and(
+              eq(deployableApplications.id, applicationId),
+              eq(containerRegistries.isActive, true),
+            ),
+          )
+          .limit(1)
+        if (!registry || !application.imageRepository.startsWith(`${registry.host}/`)) {
+          throw DomainError.invalidState(
+            'Registry Application tidak aktif atau image repository tidak cocok.',
+          )
+        }
       }
 
       const [activeBuild] = await transaction
@@ -103,6 +115,13 @@ export class ApplicationBuildService {
             inArray(infrastructureNodes.role, ['builder', 'hybrid']),
             sql`${infrastructureNodes.lastHeartbeatAt} >= now() - interval '90 seconds'`,
             sql`${infrastructureNodes.capabilities} @> '["image-build"]'::jsonb`,
+            ...(application.imageStorage === 'local'
+              ? [
+                  eq(infrastructureNodes.id, application.buildNodeId!),
+                  eq(infrastructureNodes.role, 'hybrid'),
+                  sql`${infrastructureNodes.capabilities} @> '["local-image-build"]'::jsonb`,
+                ]
+              : []),
           ),
         )
         .orderBy(
@@ -113,7 +132,9 @@ export class ApplicationBuildService {
         .for('update', { skipLocked: true })
       if (!builder) {
         throw DomainError.invalidState(
-          'Tidak ada builder node online dengan capability image-build.',
+          application.imageStorage === 'local'
+            ? 'Server hybrid Application tidak siap. Pastikan online, tidak drain, dan agent 0.12.0+ mendukung local-image-build.'
+            : 'Tidak ada builder node online dengan capability image-build.',
         )
       }
 
@@ -138,6 +159,7 @@ export class ApplicationBuildService {
             dockerfilePath: application.dockerfilePath,
             buildContext: application.buildContext,
             imageRepository: application.imageRepository,
+            imageStorage: application.imageStorage,
             version,
           },
         })
@@ -254,10 +276,13 @@ export class ApplicationBuildService {
     }
 
     try {
-      const released = await new InfrastructureReleaseService(this.database).receiveRelease({
-        applicationSlug: record.applicationSlug,
-        ...releaseInput.data,
-      })
+      const released = await new InfrastructureReleaseService(this.database).receiveRelease(
+        {
+          applicationSlug: record.applicationSlug,
+          ...releaseInput.data,
+        },
+        record.build.nodeId,
+      )
       await this.database
         .update(applicationBuilds)
         .set({

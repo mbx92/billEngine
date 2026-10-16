@@ -43,6 +43,21 @@ describe('infrastructure template schema', () => {
     ).toThrow()
   })
 
+  it('accepts LAN port exposure without a domain and requires a host port', () => {
+    const input = {
+      nodeId: '00000000-0000-4000-8000-000000000001',
+      name: 'serene-book',
+      exposure: 'port',
+    }
+    expect(deployInfrastructureTemplateSchema.safeParse(input).success).toBe(false)
+    expect(deployInfrastructureTemplateSchema.parse({ ...input, hostPort: 18080 }).exposure).toBe(
+      'port',
+    )
+    expect(
+      deployInfrastructureTemplateSchema.parse({ nodeId: input.nodeId, name: input.name }).exposure,
+    ).toBe('domain')
+  })
+
   it('keeps secret input separate from the template definition', () => {
     const deployment = deployInfrastructureTemplateSchema.parse({
       nodeId: '00000000-0000-4000-8000-000000000001',

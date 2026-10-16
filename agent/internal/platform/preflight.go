@@ -29,12 +29,12 @@ type Capacity struct {
 }
 
 func DetectCapabilities(ctx context.Context) []string {
-	capabilities := []string{"container-runtime"}
+	capabilities := []string{"container-runtime", "secret-environment", "image-inventory", "image-delete"}
 	if _, err := commandVersion(ctx, runCommand, "git", "--version"); err != nil {
 		return capabilities
 	}
 	if _, err := commandVersion(ctx, runCommand, "docker", "buildx", "version"); err == nil {
-		capabilities = append(capabilities, "image-build")
+		capabilities = append(capabilities, "image-build", "local-image-build")
 	}
 	return capabilities
 }

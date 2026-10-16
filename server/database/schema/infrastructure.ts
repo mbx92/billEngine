@@ -100,6 +100,15 @@ export interface NodeCapacity {
   diskBytes: string
 }
 
+export interface InfrastructureNodeImage {
+  id: string
+  references: string[]
+  sizeBytes: string
+  createdAt: string
+  used: boolean
+  containerCount: number
+}
+
 export interface InfrastructureLabels {
   [key: string]: string
 }
@@ -135,10 +144,17 @@ export const deployableApplications = pgTable(
     defaultBranch: varchar('default_branch', { length: 255 }).notNull().default('main'),
     dockerfilePath: text('dockerfile_path').notNull().default('Dockerfile'),
     buildContext: text('build_context').notNull().default('.'),
-    imageRepository: text('image_repository').notNull(),
-    registryId: uuid('registry_id')
+    imageStorage: varchar('image_storage', { length: 24 })
+      .$type<'local' | 'registry'>()
       .notNull()
-      .references(() => containerRegistries.id, { onDelete: 'restrict' }),
+      .default('local'),
+    buildNodeId: uuid('build_node_id').references(() => infrastructureNodes.id, {
+      onDelete: 'restrict',
+    }),
+    imageRepository: text('image_repository').notNull(),
+    registryId: uuid('registry_id').references(() => containerRegistries.id, {
+      onDelete: 'restrict',
+    }),
     autoDeploy: boolean('auto_deploy').notNull().default(false),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -149,6 +165,10 @@ export const deployableApplications = pgTable(
     uniqueIndex('deployable_applications_image_repository_uidx').on(table.imageRepository),
     index('deployable_applications_registry_id_idx').on(table.registryId),
     check('deployable_applications_slug_check', sql`${table.slug} ~ '^[a-z0-9][a-z0-9-]*$'`),
+    check(
+      'deployable_applications_image_storage_check',
+      sql`(${table.imageStorage} = 'local' and ${table.buildNodeId} is not null and ${table.registryId} is null) or (${table.imageStorage} = 'registry' and ${table.registryId} is not null and ${table.buildNodeId} is null)`,
+    ),
   ],
 )
 
@@ -163,6 +183,9 @@ export const applicationReleases = pgTable(
     commitSha: varchar('commit_sha', { length: 64 }).notNull(),
     imageDigest: varchar('image_digest', { length: 71 }).notNull(),
     imageReference: text('image_reference').notNull(),
+    localNodeId: uuid('local_node_id').references(() => infrastructureNodes.id, {
+      onDelete: 'restrict',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -267,6 +290,10 @@ export const infrastructureNodes = pgTable(
     utilizationObservedAt: timestamp('utilization_observed_at', { withTimezone: true }),
     labels: jsonb('labels').$type<InfrastructureLabels>().notNull().default({}),
     capabilities: jsonb('capabilities').$type<InfrastructureCapabilities>().notNull().default([]),
+    imageInventory: jsonb('image_inventory')
+      .$type<InfrastructureNodeImage[]>()
+      .notNull()
+      .default([]),
     lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
     lastInventoryAt: timestamp('last_inventory_at', { withTimezone: true }),
     lastError: text('last_error'),

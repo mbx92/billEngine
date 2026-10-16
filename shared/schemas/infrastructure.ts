@@ -15,6 +15,7 @@ export const INFRASTRUCTURE_ACTIONS = [
   'application.delete',
   'application.set-limits',
   'application.build',
+  'image.delete',
   'database.cluster.activate',
   'database.service.ensure',
   'database.backup.create',
@@ -38,6 +39,14 @@ export const createNodeEnrollmentSchema = z.object({
   role: z.enum(NODE_ROLES).optional(),
   expiresInMinutes: z.number().int().min(5).max(1440).default(30),
   labels: labelsSchema.default({}),
+})
+
+export const updateNodeRoleSchema = z.object({
+  role: z.enum(NODE_ROLES),
+})
+
+export const deleteNodeImageSchema = z.object({
+  imageId: z.string().regex(/^sha256:[a-f0-9]{64}$/, 'Docker image ID tidak valid.'),
 })
 
 export const enrollNodeSchema = z.object({
@@ -124,15 +133,32 @@ const namedVolumeSchema = z.object({
   kind: z.enum(['ephemeral', 'persistent']).default('persistent'),
 })
 
-const imageSourceSchema = z.object({
-  type: z.literal('image'),
-  reference: z
-    .string()
-    .trim()
-    .min(1)
-    .max(500)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/, 'Image reference tidak valid.'),
-})
+const imageSourceSchema = z
+  .object({
+    type: z.literal('image'),
+    pullPolicy: z.enum(['always', 'never']).optional(),
+    nodeId: z.string().uuid().optional(),
+    reference: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/, 'Image reference tidak valid.'),
+  })
+  .superRefine((source, context) => {
+    if (
+      source.pullPolicy === 'never' &&
+      (!source.nodeId || !/^sha256:[a-f0-9]{64}$/.test(source.reference))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Image lokal wajib menggunakan image ID sha256 dan server asal.',
+      })
+    }
+    if (source.nodeId && source.pullPolicy !== 'never') {
+      context.addIssue({ code: 'custom', message: 'Server asal hanya berlaku untuk image lokal.' })
+    }
+  })
 
 const buildSourceSchema = z.object({
   type: z.literal('build'),
@@ -148,6 +174,7 @@ export const applicationSpecSchema = z.object({
   ports: z.array(applicationPortSchema).max(16).default([]),
   environment: z.record(environmentKeySchema, z.string().max(16_384)).default({}),
   secretReferences: z.record(environmentKeySchema, z.string().trim().min(1).max(2048)).default({}),
+  secretDelivery: z.enum(['files', 'environment']).optional(),
   volumes: z.array(namedVolumeSchema).max(16).default([]),
   restartPolicy: z.enum(['no', 'on-failure', 'unless-stopped']).default('unless-stopped'),
   healthcheck: healthcheckSchema.optional(),
@@ -221,12 +248,25 @@ export const inventoryResourceSchema = z.object({
   snapshot: z.record(z.string(), z.unknown()).default({}),
 })
 
+export const inventoryImageSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  references: z.array(z.string().trim().min(1).max(500)).max(100),
+  sizeBytes: z.string().regex(/^\d+$/),
+  createdAt: z.string().datetime({ offset: true }),
+  used: z.boolean(),
+  containerCount: z.number().int().nonnegative(),
+})
+
 export const agentInventorySchema = z.object({
   observedAt: z.string().datetime({ offset: true }),
   resources: z.array(inventoryResourceSchema).max(1000),
+  // Optional so agents before image inventory support can continue reporting resources.
+  images: z.array(inventoryImageSchema).max(1000).optional(),
 })
 
 export type CreateNodeEnrollmentInput = z.infer<typeof createNodeEnrollmentSchema>
+export type UpdateNodeRoleInput = z.infer<typeof updateNodeRoleSchema>
+export type DeleteNodeImageInput = z.infer<typeof deleteNodeImageSchema>
 export type EnrollNodeInput = z.infer<typeof enrollNodeSchema>
 export type AgentHeartbeatInput = z.infer<typeof agentHeartbeatSchema>
 export type ApplicationSpec = z.infer<typeof applicationSpecSchema>

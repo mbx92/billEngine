@@ -3,10 +3,13 @@ import {
   AlertTriangle,
   Copy,
   Download,
+  Package,
   Plus,
   RotateCcw,
   Server as ServerIcon,
+  Settings2,
   ShieldX,
+  Trash2,
   X,
 } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
@@ -14,6 +17,15 @@ import { copyText } from '~/lib/clipboard'
 
 definePageMeta({ middleware: 'auth' })
 useHead({ title: 'Nodes · Billing Infra' })
+
+interface NodeImage {
+  id: string
+  references: string[]
+  sizeBytes: string
+  createdAt: string
+  used: boolean
+  containerCount: number
+}
 
 interface InfrastructureNode {
   id: string
@@ -58,6 +70,9 @@ interface InfrastructureNode {
   capabilities: string[]
   lastHeartbeatAt: string | null
   resourceCount: number
+  imageCount: number
+  usedImageCount: number
+  images: NodeImage[]
 }
 
 interface EnrollmentResult {
@@ -69,6 +84,28 @@ interface EnrollmentResult {
   token: string
 }
 
+const nodeRoleOptions: Array<{
+  value: InfrastructureNode['role']
+  label: string
+  description: string
+}> = [
+  {
+    value: 'deployment',
+    label: 'Deployment',
+    description: 'Menerima workload dan menjalankan gateway.',
+  },
+  {
+    value: 'builder',
+    label: 'Image builder',
+    description: 'Hanya dipilih untuk pekerjaan build.',
+  },
+  {
+    value: 'hybrid',
+    label: 'Hybrid',
+    description: 'Menerima workload sekaligus pekerjaan build.',
+  },
+]
+
 const format = useFormat()
 const toast = useToast()
 const runtimeConfig = useRuntimeConfig()
@@ -77,6 +114,9 @@ const showEnrollmentForm = ref(false)
 const saving = ref(false)
 const revokingNodeId = ref<string | null>(null)
 const updatingNodeId = ref<string | null>(null)
+const editingRoleNode = ref<InfrastructureNode | null>(null)
+const selectedRole = ref<InfrastructureNode['role']>('deployment')
+const savingRole = ref(false)
 const pendingRevokeNode = ref<InfrastructureNode | null>(null)
 const pendingAgentAction = ref<{
   node: InfrastructureNode
@@ -85,6 +125,9 @@ const pendingAgentAction = ref<{
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const enrollment = ref<EnrollmentResult | null>(null)
+const imageDialogNodeId = ref<string | null>(null)
+const pendingImageDelete = ref<{ node: InfrastructureNode; image: NodeImage } | null>(null)
+const deletingImageId = ref<string | null>(null)
 const form = reactive({ nodeName: '', environment: 'staging', role: 'deployment', region: '' })
 const minimumAgentVersion = '0.8.0'
 
@@ -92,6 +135,21 @@ const { data, status, error, refresh } = await useFetch<{ data: InfrastructureNo
   '/api/infrastructure/nodes',
 )
 const nodes = computed(() => data.value?.data ?? [])
+const imageDialogNode = computed(
+  () => nodes.value.find((node) => node.id === imageDialogNodeId.value) ?? null,
+)
+const isInitialLoading = computed(() => status.value === 'pending' && data.value == null)
+const roleSelectionInvalid = computed(() => {
+  const node = editingRoleNode.value
+  if (!node || selectedRole.value === node.role) return true
+  if (
+    ['builder', 'hybrid'].includes(selectedRole.value) &&
+    !node.capabilities.includes('image-build')
+  ) {
+    return true
+  }
+  return selectedRole.value === 'builder' && node.resourceCount > 0
+})
 const controlPlaneUrl = computed(() => {
   return controlPlaneUrlForEnvironment(enrollment.value?.environment)
 })
@@ -137,6 +195,10 @@ function memoryUsagePercent(node: InfrastructureNode) {
   return `${((Number(node.memoryUsedBytes) / Number(node.capacityMemoryBytes)) * 100).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`
 }
 
+function imageDisplayName(image: NodeImage) {
+  return image.references[0] ?? `${image.id.slice(0, 19)}…`
+}
+
 function diskWatermarkTone(watermark: InfrastructureNode['diskWatermark']) {
   if (watermark === 'critical') return 'danger' as const
   if (watermark === 'warning') return 'warning' as const
@@ -153,6 +215,26 @@ function supportsCurrentFeatures(version: string | null) {
 function agentVersionTone(version: string | null) {
   if (!version) return 'neutral' as const
   return supportsCurrentFeatures(version) ? ('info' as const) : ('warning' as const)
+}
+
+function supportsRoleSync(version: string | null) {
+  if (!version) return false
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number)
+  return major > 0 || minor > 11 || (minor === 11 && patch >= 1)
+}
+
+function supportsImageInventory(version: string | null) {
+  if (!version) return false
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number)
+  return major > 0 || minor > 12 || (minor === 12 && patch >= 4)
+}
+
+function supportsImageDelete(node: InfrastructureNode) {
+  return node.capabilities.includes('image-delete')
+}
+
+function roleOptionDisabled(role: InfrastructureNode['role'], node: InfrastructureNode) {
+  return role !== 'deployment' && !node.capabilities.includes('image-build')
 }
 
 function gatewayStatusTone(gatewayStatus: InfrastructureNode['gatewayStatus']) {
@@ -273,7 +355,7 @@ async function runAgentAction(node: InfrastructureNode, action: 'upgrade' | 'rol
 let refreshTimer: number | undefined
 onMounted(() => {
   refreshTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') void refresh()
+    if (document.visibilityState === 'visible' && status.value !== 'pending') void refresh()
   }, 15_000)
 })
 
@@ -294,6 +376,66 @@ async function revokeNode(node: InfrastructureNode) {
   } finally {
     revokingNodeId.value = null
     pendingRevokeNode.value = null
+  }
+}
+
+async function deleteNodeImage() {
+  const pending = pendingImageDelete.value
+  if (!pending || pending.image.used) return
+
+  deletingImageId.value = pending.image.id
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    await $fetch(
+      `/api/infrastructure/nodes/${pending.node.id}/images/${encodeURIComponent(pending.image.id)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Idempotency-Key': `image-delete:${pending.node.id}:${pending.image.id}:${crypto.randomUUID()}`,
+        },
+      },
+    )
+    actionMessage.value = `Penghapusan image ${imageDisplayName(pending.image)} masuk antrean pada ${pending.node.name}.`
+    pendingImageDelete.value = null
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Gagal mengantrekan penghapusan image.')
+  } finally {
+    deletingImageId.value = null
+  }
+}
+
+function openRoleDialog(node: InfrastructureNode) {
+  editingRoleNode.value = node
+  selectedRole.value = node.role
+}
+
+function closeRoleDialog() {
+  if (!savingRole.value) editingRoleNode.value = null
+}
+
+async function updateNodeRole() {
+  const node = editingRoleNode.value
+  if (!node || roleSelectionInvalid.value) return
+
+  savingRole.value = true
+  actionError.value = null
+  actionMessage.value = null
+  try {
+    await $fetch(`/api/infrastructure/nodes/${node.id}/role`, {
+      method: 'PATCH',
+      body: { role: selectedRole.value },
+    })
+    actionMessage.value = supportsRoleSync(node.agentVersion)
+      ? `Mode ${node.name} diubah menjadi ${selectedRole.value}. Agent akan menyinkronkan mode pada heartbeat berikutnya.`
+      : `Mode scheduler ${node.name} diubah menjadi ${selectedRole.value}. Update agent ke v0.11.1+ agar perilaku lokal ikut tersinkron.`
+    editingRoleNode.value = null
+    await refresh()
+  } catch (caught) {
+    actionError.value = apiErrorMessage(caught, 'Gagal mengubah mode node.')
+  } finally {
+    savingRole.value = false
   }
 }
 
@@ -441,7 +583,7 @@ function closeEnrollment() {
       </div>
     </UiCard>
 
-    <div v-if="status === 'pending'" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <div v-if="isInitialLoading" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <UiSkeleton v-for="card in 3" :key="card" height="13rem" />
     </div>
 
@@ -502,6 +644,15 @@ function closeEnrollment() {
             <dd class="mt-1 font-mono text-ink">{{ format.count(node.resourceCount) }}</dd>
           </div>
           <div>
+            <dt class="text-muted">Docker images</dt>
+            <dd class="mt-1 flex flex-wrap items-center gap-2 font-mono text-ink">
+              <span>{{ format.count(node.imageCount) }}</span>
+              <UiBadge v-if="node.usedImageCount" tone="success">
+                {{ node.usedImageCount }} used
+              </UiBadge>
+            </dd>
+          </div>
+          <div>
             <dt class="text-muted">CPU usage</dt>
             <dd class="mt-1 font-mono text-ink">
               {{ usagePercent(node.cpuUsageBasisPoints) }}
@@ -552,6 +703,28 @@ function closeEnrollment() {
             <dt class="text-muted">Docker / Compose</dt>
             <dd class="mt-1 truncate font-mono text-ink">
               {{ node.dockerVersion || '—' }} / {{ node.composeVersion || '—' }}
+            </dd>
+          </div>
+          <div class="col-span-2">
+            <div class="flex items-center justify-between gap-3">
+              <dt class="text-muted">Image inventory</dt>
+              <UiButton
+                v-if="node.images.length"
+                variant="secondary"
+                size="sm"
+                type="button"
+                @click="imageDialogNodeId = node.id"
+              >
+                <Package :size="13" aria-hidden="true" />
+                Kelola images
+              </UiButton>
+            </div>
+            <dd v-if="!node.images.length" class="mt-1 text-xs text-muted">
+              {{
+                supportsImageInventory(node.agentVersion)
+                  ? 'Tidak ada image Docker pada server.'
+                  : 'Menunggu inventory dari agent v0.12.4+.'
+              }}
             </dd>
           </div>
           <div v-if="node.role !== 'builder'" class="col-span-2">
@@ -609,6 +782,10 @@ function closeEnrollment() {
           v-if="node.status !== 'revoked'"
           class="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4"
         >
+          <UiButton variant="secondary" size="sm" @click="openRoleDialog(node)">
+            <Settings2 :size="14" aria-hidden="true" />
+            Ubah mode
+          </UiButton>
           <UiButton
             v-if="node.upgradeAvailable && !node.remoteUpdateSupported"
             variant="secondary"
@@ -659,6 +836,194 @@ function closeEnrollment() {
         </div>
       </UiCard>
     </div>
+
+    <UiDialog
+      v-if="imageDialogNode"
+      :title="`Docker images · ${imageDialogNode.name}`"
+      description="Image Used dilindungi karena masih direferensikan container. Hanya image Unused yang dapat dihapus."
+      size="lg"
+      :close-disabled="Boolean(deletingImageId)"
+      @close="imageDialogNodeId = null"
+    >
+      <div class="max-h-[32rem] space-y-2 overflow-y-auto pr-1">
+        <div
+          v-for="image in imageDialogNode.images"
+          :key="image.id"
+          class="rounded-md border border-line-strong bg-canvas p-3"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="truncate font-mono text-sm text-ink" :title="imageDisplayName(image)">
+                {{ imageDisplayName(image) }}
+              </p>
+              <p class="mt-1 truncate font-mono text-[10px] text-muted" :title="image.id">
+                {{ image.id }}
+              </p>
+              <p class="mt-1.5 text-xs text-muted">
+                {{ humanBytes(image.sizeBytes) }} · {{ format.dateTime(image.createdAt) }}
+                <span v-if="image.used"> · {{ image.containerCount }} container</span>
+                <span v-if="image.references.length > 1">
+                  · {{ image.references.length }} references
+                </span>
+              </p>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <UiBadge :tone="image.used ? 'success' : 'neutral'" dot>
+                {{ image.used ? 'Used' : 'Unused' }}
+              </UiBadge>
+              <UiButton
+                variant="danger"
+                size="sm"
+                :disabled="
+                  image.used ||
+                  deletingImageId === image.id ||
+                  !supportsImageDelete(imageDialogNode) ||
+                  !['online', 'degraded'].includes(imageDialogNode.status)
+                "
+                :title="
+                  image.used
+                    ? 'Image masih digunakan oleh container'
+                    : !supportsImageDelete(imageDialogNode)
+                      ? 'Hapus image membutuhkan agent v0.12.5+'
+                      : 'Hapus image dari server'
+                "
+                @click="pendingImageDelete = { node: imageDialogNode, image }"
+              >
+                <Trash2 :size="14" aria-hidden="true" />
+                Hapus
+              </UiButton>
+            </div>
+          </div>
+        </div>
+        <p v-if="!imageDialogNode.images.length" class="py-8 text-center text-sm text-muted">
+          Tidak ada image Docker pada server ini.
+        </p>
+      </div>
+
+      <p
+        v-if="!supportsImageDelete(imageDialogNode)"
+        class="mt-4 rounded border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+      >
+        Perbarui agent ke v0.12.5+ untuk menghapus image dari dashboard.
+      </p>
+
+      <template #footer>
+        <div class="flex justify-end">
+          <UiButton
+            variant="secondary"
+            :disabled="Boolean(deletingImageId)"
+            @click="imageDialogNodeId = null"
+          >
+            Tutup
+          </UiButton>
+        </div>
+      </template>
+    </UiDialog>
+
+    <UiDialog
+      v-if="editingRoleNode"
+      :title="`Ubah mode ${editingRoleNode.name}`"
+      description="Mode menentukan apakah node menerima deployment workload, pekerjaan build, atau keduanya."
+      size="md"
+      :close-disabled="savingRole"
+      @close="closeRoleDialog"
+    >
+      <fieldset :disabled="savingRole">
+        <legend class="mb-2 text-xs font-semibold text-muted">Mode node</legend>
+        <div class="grid gap-2 sm:grid-cols-3">
+          <label
+            v-for="option in nodeRoleOptions"
+            :key="option.value"
+            class="relative rounded-md border p-3 transition"
+            :class="[
+              selectedRole === option.value
+                ? 'border-brand bg-brand/10'
+                : 'border-line-strong bg-canvas hover:border-muted hover:bg-surface-raised',
+              roleOptionDisabled(option.value, editingRoleNode)
+                ? 'cursor-not-allowed opacity-50'
+                : 'cursor-pointer',
+            ]"
+          >
+            <input
+              v-model="selectedRole"
+              type="radio"
+              name="node-role"
+              :value="option.value"
+              :disabled="roleOptionDisabled(option.value, editingRoleNode)"
+              :autofocus="option.value === editingRoleNode.role"
+              class="peer sr-only"
+            />
+            <span
+              class="pointer-events-none absolute inset-0 rounded-md peer-focus-visible:ring-2 peer-focus-visible:ring-brand peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface"
+            />
+            <span class="flex items-center justify-between gap-2 text-sm font-semibold text-ink">
+              {{ option.label }}
+              <span
+                class="size-3.5 rounded-full border-2"
+                :class="
+                  selectedRole === option.value
+                    ? 'border-brand bg-brand shadow-[inset_0_0_0_3px_var(--color-surface)]'
+                    : 'border-line-strong bg-surface'
+                "
+                aria-hidden="true"
+              />
+            </span>
+            <span class="mt-1.5 block text-xs leading-5 text-muted">
+              {{ option.description }}
+            </span>
+          </label>
+        </div>
+      </fieldset>
+
+      <p
+        v-if="!editingRoleNode.capabilities.includes('image-build')"
+        class="mt-4 rounded border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning"
+      >
+        Git atau Docker Buildx belum tersedia. Install keduanya lalu restart OC Agent agar mode
+        builder dan hybrid dapat dipilih.
+      </p>
+      <p
+        v-else-if="selectedRole === 'builder' && editingRoleNode.resourceCount > 0"
+        class="mt-4 rounded border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning"
+      >
+        Node masih memiliki {{ format.count(editingRoleNode.resourceCount) }} resource. Pilih hybrid
+        atau pindahkan resource sebelum menggunakan mode builder murni.
+      </p>
+      <p
+        v-else-if="!supportsRoleSync(editingRoleNode.agentVersion)"
+        class="mt-4 rounded border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning"
+      >
+        Scheduler langsung memakai mode baru, tetapi agent
+        {{ editingRoleNode.agentVersion || 'lama' }}
+        perlu diperbarui ke v0.11.1+ agar perilaku lokal ikut tersinkron melalui heartbeat.
+      </p>
+      <p v-else class="mt-4 text-xs leading-5 text-muted">
+        Perubahan scheduler berlaku langsung dan agent menerapkan perilaku mode baru pada heartbeat
+        berikutnya.
+      </p>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UiButton variant="secondary" :disabled="savingRole" @click="closeRoleDialog">
+            Batal
+          </UiButton>
+          <UiButton :disabled="savingRole || roleSelectionInvalid" @click="updateNodeRole">
+            {{ savingRole ? 'Menyimpan…' : 'Simpan mode' }}
+          </UiButton>
+        </div>
+      </template>
+    </UiDialog>
+
+    <UiConfirmDialog
+      v-if="pendingImageDelete"
+      :title="`Hapus image ${imageDisplayName(pendingImageDelete.image)}?`"
+      :description="`Semua tag lokal untuk image ini akan dihapus dari ${pendingImageDelete.node.name}. Image tidak dapat dipulihkan tanpa build atau pull ulang.`"
+      confirm-label="Hapus image"
+      destructive
+      :pending="deletingImageId === pendingImageDelete.image.id"
+      @confirm="deleteNodeImage"
+      @cancel="pendingImageDelete = null"
+    />
 
     <UiConfirmDialog
       v-if="pendingAgentAction"

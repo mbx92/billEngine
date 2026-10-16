@@ -4,6 +4,7 @@ import type {
   AgentInventoryInput,
   CreateNodeEnrollmentInput,
   EnrollNodeInput,
+  UpdateNodeRoleInput,
 } from '../../../shared/schemas/infrastructure'
 import { InfrastructureControlRepository } from '../../repositories/infrastructure-control'
 import { DomainError } from '../../utils/errors'
@@ -29,8 +30,10 @@ type ControlRepository = Pick<
   | 'recordHeartbeat'
   | 'recordInventory'
   | 'revokeNode'
+  | 'updateNodeRole'
   | 'findNodeForAgentOperation'
   | 'queueAgentOperation'
+  | 'queueImageDelete'
 >
 
 export class InfrastructureNodeService {
@@ -155,6 +158,30 @@ export class InfrastructureNodeService {
     return result
   }
 
+  async updateRole(nodeId: string, input: UpdateNodeRoleInput, actorUserId: string) {
+    const result = await this.repository.updateNodeRole({
+      nodeId,
+      role: input.role,
+      actorUserId,
+      gatewayImage: configuredGatewayImage(),
+    })
+    if (!result) throw DomainError.notFound('Node tidak ditemukan.')
+    if ('inactive' in result) {
+      throw DomainError.invalidState('Role node yang sudah dicabut tidak dapat diubah.')
+    }
+    if ('missingBuilderCapability' in result) {
+      throw DomainError.invalidState(
+        'Node belum memiliki capability image-build. Pastikan Git dan Docker Buildx tersedia, lalu restart OC Agent.',
+      )
+    }
+    if ('activeResources' in result) {
+      throw DomainError.invalidState(
+        `Node masih memiliki ${result.activeResources} resource aktif. Gunakan mode hybrid atau pindahkan resource terlebih dahulu.`,
+      )
+    }
+    return result
+  }
+
   async upgradeAgent(nodeId: string, actorUserId: string, idempotencyKey: string) {
     const node = await this.requireUpdatableNode(nodeId)
     if (!supportsRemoteAgentUpdate(node.agentVersion)) {
@@ -236,6 +263,34 @@ export class InfrastructureNodeService {
     if (result.conflict) {
       throw DomainError.conflict('Node masih memiliki operation upgrade atau rollback aktif.')
     }
+    return result
+  }
+
+  async deleteImage(nodeId: string, imageId: string, actorUserId: string, idempotencyKey: string) {
+    const node = await this.requireUpdatableNode(nodeId)
+    const versionComparison = compareSemanticVersions(node.agentVersion, '0.12.5')
+    if (versionComparison === null || versionComparison < 0) {
+      throw DomainError.invalidState('Hapus image membutuhkan OC Agent 0.12.5 atau lebih baru.')
+    }
+    if (!node.capabilities.includes('image-delete')) {
+      throw DomainError.invalidState('Agent belum melaporkan capability image-delete.')
+    }
+
+    const result = await this.repository.queueImageDelete({
+      nodeId,
+      imageId,
+      actorUserId,
+      idempotencyKey,
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+    })
+    if (!result) throw DomainError.invalidState('Node tidak aktif atau sedang offline.')
+    if ('missingImage' in result) throw DomainError.notFound('Image tidak ditemukan pada node.')
+    if ('imageUsed' in result) {
+      throw DomainError.invalidState(
+        'Image masih digunakan oleh container dan tidak dapat dihapus.',
+      )
+    }
+    if (result.conflict) throw DomainError.conflict('Idempotency key digunakan oleh request lain.')
     return result
   }
 

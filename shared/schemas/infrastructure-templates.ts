@@ -46,10 +46,18 @@ export const deployInfrastructureTemplateSchema = z
       .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'Subdomain tidak valid.')
       .optional(),
     classification: z.enum(['billable', 'internal', 'ignored']).default('internal'),
+    exposure: z.enum(['domain', 'port']).default('domain'),
     hostPort: z.number().int().min(1).max(65535).optional(),
     values: z.record(z.string(), z.string().max(16_384)).default({}),
   })
   .superRefine((input, context) => {
+    if (input.exposure === 'port' && !input.hostPort) {
+      context.addIssue({
+        code: 'custom',
+        path: ['hostPort'],
+        message: 'Host port wajib diisi untuk akses langsung.',
+      })
+    }
     if (input.classification === 'billable' && !input.serviceId) {
       context.addIssue({
         code: 'custom',
@@ -88,6 +96,7 @@ export const createApplicationTemplateSchema = z
       .optional(),
     environmentKeys: z.array(templateEnvironmentKeySchema).max(24).default([]),
     secretKeys: z.array(templateEnvironmentKeySchema).max(24).default([]),
+    secretDelivery: z.enum(['files', 'environment']).default('files'),
     volume: z
       .object({
         name: z

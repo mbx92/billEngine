@@ -47,8 +47,10 @@ type applicationPayload struct {
 
 type applicationSpec struct {
 	Source struct {
-		Type      string `json:"type"`
-		Reference string `json:"reference"`
+		Type       string `json:"type"`
+		Reference  string `json:"reference"`
+		PullPolicy string `json:"pullPolicy"`
+		NodeID     string `json:"nodeId"`
 	} `json:"source"`
 	Limits struct {
 		CPUMilli    int    `json:"cpuMilli"`
@@ -61,6 +63,7 @@ type applicationSpec struct {
 	} `json:"ports"`
 	Environment      map[string]string `json:"environment"`
 	SecretReferences map[string]string `json:"secretReferences"`
+	SecretDelivery   string            `json:"secretDelivery"`
 	Volumes          []struct {
 		Name        string `json:"name"`
 		MountTarget string `json:"mountTarget"`
@@ -129,7 +132,12 @@ type applicationBuildPayload struct {
 	DockerfilePath  string `json:"dockerfilePath"`
 	BuildContext    string `json:"buildContext"`
 	ImageRepository string `json:"imageRepository"`
+	ImageStorage    string `json:"imageStorage"`
 	Version         string `json:"version"`
+}
+
+type imageDeletePayload struct {
+	ImageID string `json:"imageId"`
 }
 
 type routePayload struct {
@@ -251,6 +259,8 @@ func executeWithInput(
 		return ensureApplication(ctx, operation, secrets, registry, secretDirectory, run, runInput)
 	case "application.build":
 		return buildApplicationImage(ctx, operation, registry, secretDirectory, run, runInput)
+	case "image.delete":
+		return deleteImage(ctx, operation, run)
 	case "application.start", "application.stop", "application.restart", "application.delete":
 		return lifecycle(ctx, operation, secretDirectory, run)
 	case "database.cluster.activate":
@@ -266,6 +276,99 @@ func executeWithInput(
 	default:
 		return nil, &Error{Code: "unsupported", Message: "agent action is not supported"}
 	}
+}
+
+func deleteImage(
+	ctx context.Context,
+	operation controlplane.Operation,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	var payload imageDeletePayload
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil {
+		return nil, &Error{Code: "invalid_payload", Message: "image delete payload is invalid"}
+	}
+	if !imageDigestPattern.MatchString(payload.ImageID) {
+		return nil, &Error{Code: "invalid_image_id", Message: "Docker image ID is invalid"}
+	}
+
+	inspectOutput, err := run(ctx, "docker", "image", "inspect", "--format", "{{json .}}", payload.ImageID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(string(inspectOutput)), "no such image") {
+			return map[string]any{
+				"imageId":       payload.ImageID,
+				"deleted":       false,
+				"alreadyAbsent": true,
+			}, nil
+		}
+		return nil, &Error{Code: "image_inspect_failed", Message: "Docker image could not be inspected", Retryable: true}
+	}
+	var inspected struct {
+		ID          string   `json:"Id"`
+		RepoTags    []string `json:"RepoTags"`
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(inspectOutput))), &inspected); err != nil {
+		return nil, &Error{Code: "image_inspect_failed", Message: "Docker image metadata is invalid", Retryable: true}
+	}
+	if inspected.ID != payload.ImageID {
+		return nil, &Error{Code: "image_id_mismatch", Message: "Docker returned a different image ID"}
+	}
+
+	containerOutput, err := run(ctx, "docker", "container", "ls", "--all", "--quiet")
+	if err != nil {
+		return nil, &Error{Code: "image_usage_check_failed", Message: "Docker containers could not be listed", Retryable: true}
+	}
+	containerIDs := nonEmptyLines(containerOutput)
+	if len(containerIDs) > 0 {
+		args := append([]string{"container", "inspect", "--format", "{{.Image}}"}, containerIDs...)
+		usedImageOutput, inspectErr := run(ctx, "docker", args...)
+		if inspectErr != nil {
+			return nil, &Error{Code: "image_usage_check_failed", Message: "Docker container images could not be inspected", Retryable: true}
+		}
+		for _, imageID := range nonEmptyLines(usedImageOutput) {
+			if imageID == payload.ImageID {
+				return nil, &Error{Code: "image_in_use", Message: "Image is still used by a Docker container"}
+			}
+		}
+	}
+
+	removeTargets := make([]string, 0, len(inspected.RepoTags))
+	for _, reference := range inspected.RepoTags {
+		if reference != "" && reference != "<none>:<none>" {
+			removeTargets = append(removeTargets, reference)
+		}
+	}
+	if len(removeTargets) == 0 {
+		for _, reference := range inspected.RepoDigests {
+			if reference != "" && reference != "<none>@<none>" {
+				removeTargets = append(removeTargets, reference)
+			}
+		}
+	}
+	if len(removeTargets) == 0 {
+		removeTargets = append(removeTargets, payload.ImageID)
+	}
+	args := append([]string{"image", "rm"}, removeTargets...)
+	removeOutput, err := run(ctx, "docker", args...)
+	if err != nil {
+		message := strings.ToLower(string(removeOutput))
+		if strings.Contains(message, "used by") || strings.Contains(message, "being used") {
+			return nil, &Error{Code: "image_in_use", Message: "Image became used before it could be deleted"}
+		}
+		return nil, &Error{Code: "image_delete_failed", Message: "Docker image could not be deleted", Retryable: true}
+	}
+
+	return map[string]any{"imageId": payload.ImageID, "deleted": true}, nil
+}
+
+func nonEmptyLines(output []byte) []string {
+	lines := make([]string, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if value := strings.TrimSpace(line); value != "" {
+			lines = append(lines, value)
+		}
+	}
+	return lines
 }
 
 const applicationBuildDirectory = "/var/lib/oc-agent/builds"
@@ -293,8 +396,15 @@ func buildApplicationImage(
 		repositoryURL.RawQuery != "" || repositoryURL.Fragment != "" {
 		return nil, invalidSpec("builder only accepts HTTPS github.com repositories")
 	}
-	if registry == nil || registry.Host == "" || registry.Username == "" || registry.Token == "" ||
-		!strings.HasPrefix(payload.ImageRepository, registry.Host+"/") {
+	local := payload.ImageStorage == "local"
+	if payload.ImageStorage != "" && payload.ImageStorage != "local" && payload.ImageStorage != "registry" {
+		return nil, invalidSpec("unsupported image storage mode")
+	}
+	if local && !regexp.MustCompile(`^oc-local/[a-z0-9][a-z0-9-]*$`).MatchString(payload.ImageRepository) {
+		return nil, invalidSpec("invalid local image repository")
+	}
+	if !local && (registry == nil || registry.Host == "" || registry.Username == "" || registry.Token == "" ||
+		!strings.HasPrefix(payload.ImageRepository, registry.Host+"/")) {
 		return nil, invalidSpec("registry credential does not match the build image repository")
 	}
 	dockerfilePath, pathErr := safeBuildPath(payload.DockerfilePath)
@@ -336,6 +446,9 @@ func buildApplicationImage(
 	commitSHA := strings.ToLower(strings.TrimSpace(string(commitOutput)))
 	if !regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(commitSHA) {
 		return nil, invalidSpec("repository returned an invalid commit SHA")
+	}
+	if local {
+		return buildLocalApplicationImage(ctx, payload, sourceDirectory, dockerfilePath, buildContext, commitSHA, run)
 	}
 
 	if secretDirectory == "" || !filepath.IsAbs(secretDirectory) {
@@ -428,6 +541,43 @@ func buildApplicationImage(
 		"imageDigest":    digest,
 		"imageReference": payload.ImageRepository + "@" + digest,
 		"logExcerpt":     tailText(string(buildOutput), 8000),
+	}, nil
+}
+
+func buildLocalApplicationImage(
+	ctx context.Context,
+	payload applicationBuildPayload,
+	sourceDirectory, dockerfilePath, buildContext, commitSHA string,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	// Load directly into this node's Docker image store and retain its local cache.
+	imageTag := payload.ImageRepository + ":" + payload.BuildID
+	output, err := run(ctx, "docker", "buildx", "build",
+		"--builder", "default", "--load", "--progress", "plain",
+		"--file", filepath.Join(sourceDirectory, dockerfilePath),
+		"--tag", imageTag,
+		"--label", "org.opencontainers.image.revision="+commitSHA,
+		"--label", "org.opencontainers.image.source="+payload.RepositoryURL,
+		filepath.Join(sourceDirectory, buildContext),
+	)
+	if err != nil {
+		return nil, commandError("image_build_failed", err, false)
+	}
+	inspected, err := run(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", imageTag)
+	if err != nil {
+		return nil, commandError("local_image_inspect_failed", err, false)
+	}
+	imageID := strings.TrimSpace(string(inspected))
+	if !imageDigestPattern.MatchString(imageID) {
+		return nil, &Error{Code: "image_digest_invalid", Message: "Docker did not return a valid local image ID"}
+	}
+	return map[string]any{
+		"buildId":        payload.BuildID,
+		"version":        payload.Version,
+		"commitSha":      commitSHA,
+		"imageDigest":    imageID,
+		"imageReference": imageID,
+		"logExcerpt":     tailText(string(output), 8000),
 	}, nil
 }
 
@@ -669,9 +819,11 @@ func deleteRoute(
 		return nil, invalidSpec("agent data directory must be absolute")
 	}
 	routeName := "route-" + strings.ReplaceAll(payload.RouteID, "-", "")
-	path := filepath.Join(filepath.Dir(secretDirectory), "gateway", "dynamic", routeName+".json")
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, &Error{Code: "route_delete_failed", Message: "route configuration could not be removed", Retryable: true}
+	for _, extension := range []string{".yaml", ".json"} {
+		path := filepath.Join(filepath.Dir(secretDirectory), "gateway", "dynamic", routeName+extension)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, &Error{Code: "route_delete_failed", Message: "route configuration could not be removed", Retryable: true}
+		}
 	}
 	if _, err := runGatewayHealthcheck(ctx, run); err != nil {
 		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik did not accept the route deletion", Retryable: true}
@@ -746,6 +898,10 @@ func configureRoute(
 			"middlewares": dynamicMiddlewares,
 		},
 	}
+	// Traefik rejects an empty middleware map as a standalone configuration node.
+	if len(dynamicMiddlewares) == 0 {
+		delete(configuration["http"].(map[string]any), "middlewares")
+	}
 	contents, err := json.Marshal(configuration)
 	if err != nil {
 		return nil, invalidSpec("route configuration could not be encoded")
@@ -754,7 +910,8 @@ func configureRoute(
 	if err := os.MkdirAll(dynamicDirectory, 0o700); err != nil {
 		return nil, &Error{Code: "route_write_failed", Message: "route directory could not be created", Retryable: true}
 	}
-	path := filepath.Join(dynamicDirectory, routeName+".json")
+	// JSON is valid YAML. Traefik's directory provider only loads .yaml/.yml/.toml.
+	path := filepath.Join(dynamicDirectory, routeName+".yaml")
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, contents, 0o600); err != nil {
 		return nil, &Error{Code: "route_write_failed", Message: "route configuration could not be written", Retryable: true}
@@ -763,10 +920,27 @@ func configureRoute(
 		_ = os.Remove(temporary)
 		return nil, &Error{Code: "route_write_failed", Message: "route configuration could not be activated", Retryable: true}
 	}
+	legacyPath := filepath.Join(dynamicDirectory, routeName+".json")
+	if err := os.Remove(legacyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, &Error{Code: "route_write_failed", Message: "legacy route configuration could not be removed", Retryable: true}
+	}
+	if _, err := run(ctx, "docker", "kill", "--signal", "HUP", gatewayContainerName); err != nil {
+		return nil, commandError("gateway_reload_failed", err, true)
+	}
 	if _, err := runGatewayHealthcheck(ctx, run); err != nil {
 		return nil, &Error{Code: "gateway_not_ready", Message: "Traefik did not accept the route configuration", Retryable: true}
 	}
-	return map[string]any{"routeId": payload.RouteID, "hostname": payload.Hostname, "active": true}, nil
+	logs, _ := run(ctx, "docker", "logs", "--tail", "20", gatewayContainerName)
+	logExcerpt := string(logs)
+	for _, secret := range secrets {
+		if secret != "" {
+			logExcerpt = strings.ReplaceAll(logExcerpt, secret, "[redacted]")
+		}
+	}
+	mounts, _ := run(ctx, "docker", "inspect", "--format", "{{json .Mounts}}", gatewayContainerName)
+	return map[string]any{"routeId": payload.RouteID, "hostname": payload.Hostname, "active": true,
+		"configurationFile": path, "gatewayLogExcerpt": tailText(logExcerpt, 6000), "gatewayMounts": strings.TrimSpace(string(mounts)),
+	}, nil
 }
 
 func ensureGateway(
@@ -1074,17 +1248,43 @@ func ensureApplication(
 	if strings.HasPrefix(payload.Spec.Source.Reference, "-") {
 		return nil, invalidSpec("invalid image reference")
 	}
+	if payload.Spec.Source.PullPolicy != "" && payload.Spec.Source.PullPolicy != "always" && payload.Spec.Source.PullPolicy != "never" {
+		return nil, invalidSpec("unsupported image pull policy")
+	}
+	local := payload.Spec.Source.PullPolicy == "never"
+	if local && (!imageDigestPattern.MatchString(payload.Spec.Source.Reference) || !uuidPattern.MatchString(payload.Spec.Source.NodeID)) {
+		return nil, invalidSpec("local image requires an immutable image ID and origin node")
+	}
+	if local && payload.Spec.Source.NodeID != operation.NodeID {
+		return nil, invalidSpec("local image belongs to a different node")
+	}
 	if payload.Kind == "" {
 		payload.Kind = "application"
 	}
 	if payload.Kind != "application" && payload.Kind != "database" {
 		return nil, invalidSpec("invalid resource kind")
 	}
-	secretFiles, secretErr := materializeSecrets(payload, secrets, secretDirectory)
-	if secretErr != nil {
-		return nil, secretErr
+	secretFiles := map[string]string{}
+	secretEnvironmentFile := ""
+	if payload.Spec.SecretDelivery == "environment" {
+		path, secretErr := materializeSecretEnvironment(payload, secrets, secretDirectory)
+		if secretErr != nil {
+			return nil, secretErr
+		}
+		secretEnvironmentFile = path
+		if path != "" {
+			defer os.Remove(path)
+		}
+	} else if payload.Spec.SecretDelivery == "" || payload.Spec.SecretDelivery == "files" {
+		files, secretErr := materializeSecrets(payload, secrets, secretDirectory)
+		if secretErr != nil {
+			return nil, secretErr
+		}
+		secretFiles = files
+	} else {
+		return nil, invalidSpec("unsupported secret delivery mode")
 	}
-	args, err := createArgs(payload, secretFiles)
+	args, err := createArgs(payload, secretFiles, secretEnvironmentFile)
 	if err != nil {
 		return nil, invalidSpec(err.Error())
 	}
@@ -1106,7 +1306,12 @@ func ensureApplication(
 		}
 	}
 
-	if pullErr := pullImage(
+	if local {
+		inspected, err := run(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", payload.Spec.Source.Reference)
+		if err != nil || strings.TrimSpace(string(inspected)) != payload.Spec.Source.Reference {
+			return nil, &Error{Code: "local_image_missing", Message: "Local release image is missing on this server; rebuild the application before deploying"}
+		}
+	} else if pullErr := pullImage(
 		ctx,
 		payload.Spec.Source.Reference,
 		registry,
@@ -1139,6 +1344,9 @@ func ensureApplication(
 		return nil, commandError("container_start_failed", err, true)
 	}
 	result := map[string]any{"externalId": containerID, "containerName": containerName}
+	if local {
+		result["imageDigest"] = payload.Spec.Source.Reference
+	}
 	if separator := strings.LastIndex(payload.Spec.Source.Reference, "@sha256:"); separator >= 0 {
 		result["imageDigest"] = payload.Spec.Source.Reference[separator+1:]
 	}
@@ -1240,7 +1448,7 @@ func lifecycle(
 	return map[string]any{"externalId": name}, nil
 }
 
-func createArgs(payload applicationPayload, secretFiles map[string]string) ([]string, error) {
+func createArgs(payload applicationPayload, secretFiles map[string]string, secretEnvironmentFile string) ([]string, error) {
 	if payload.Spec.Limits.CPUMilli < 50 {
 		return nil, errors.New("CPU limit is below the minimum")
 	}
@@ -1260,6 +1468,12 @@ func createArgs(payload applicationPayload, secretFiles map[string]string) ([]st
 		"--restart", payload.Spec.RestartPolicy,
 		"--cpus", strconv.FormatFloat(float64(payload.Spec.Limits.CPUMilli)/1000, 'f', 3, 64),
 		"--memory", payload.Spec.Limits.MemoryBytes,
+	}
+	if payload.Spec.Source.PullPolicy == "never" {
+		args = append(args, "--pull=never")
+	}
+	if secretEnvironmentFile != "" {
+		args = append(args, "--env-file", secretEnvironmentFile)
 	}
 
 	environmentKeys := make([]string, 0, len(payload.Spec.Environment))
@@ -1308,6 +1522,49 @@ func createArgs(payload applicationPayload, secretFiles map[string]string) ([]st
 	}
 	args = append(args, payload.Spec.Source.Reference)
 	return args, nil
+}
+
+func materializeSecretEnvironment(payload applicationPayload, secrets map[string]string, secretDirectory string) (string, *Error) {
+	if len(payload.Spec.SecretReferences) == 0 {
+		return "", nil
+	}
+	if !filepath.IsAbs(secretDirectory) {
+		return "", invalidSpec("secret directory must be absolute")
+	}
+	keys := make([]string, 0, len(payload.Spec.SecretReferences))
+	for key := range payload.Spec.SecretReferences {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var content strings.Builder
+	for _, key := range keys {
+		if !environmentKeyPattern.MatchString(key) {
+			return "", invalidSpec("invalid secret environment key")
+		}
+		value, ok := secrets[key]
+		if !ok || value == "" {
+			return "", &Error{Code: "secret_unavailable", Message: "a required operation secret is unavailable", Retryable: true}
+		}
+		if strings.ContainsAny(value, "\r\n\x00") {
+			return "", invalidSpec("environment delivery requires single-line secret values; use file delivery for multiline secrets")
+		}
+		content.WriteString(key + "=" + value + "\n")
+	}
+	if err := os.MkdirAll(secretDirectory, 0o700); err != nil {
+		return "", &Error{Code: "secret_write_failed", Message: "secret directory could not be created", Retryable: true}
+	}
+	file, err := os.CreateTemp(secretDirectory, payload.ResourceID+"-env-*")
+	if err != nil {
+		return "", &Error{Code: "secret_write_failed", Message: "secret environment could not be created", Retryable: true}
+	}
+	path := file.Name()
+	_, writeErr := file.WriteString(content.String())
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+		return "", &Error{Code: "secret_write_failed", Message: "secret environment could not be written", Retryable: true}
+	}
+	return path, nil
 }
 
 func materializeSecrets(

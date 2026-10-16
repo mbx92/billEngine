@@ -3,6 +3,10 @@ import type { ApplicationSpec } from '../../shared/schemas/infrastructure'
 import type { InfrastructureTemplateDefinition } from '../../shared/schemas/infrastructure-templates'
 import { useDatabase, type Database } from '../database/client'
 import {
+  validateLocalImageNode,
+  validateSecretDelivery,
+} from '../services/infrastructure/local-image'
+import {
   auditLogs,
   infrastructureNodes,
   infrastructureOperations,
@@ -136,6 +140,7 @@ export class InfrastructureTemplateRepository {
           id: infrastructureNodes.id,
           agentVersion: infrastructureNodes.agentVersion,
           gatewayStatus: infrastructureNodes.gatewayStatus,
+          capabilities: infrastructureNodes.capabilities,
         })
         .from(infrastructureNodes)
         .where(
@@ -150,6 +155,8 @@ export class InfrastructureTemplateRepository {
         .limit(1)
         .for('update')
       if (!node) return null
+      validateLocalImageNode(input.spec.source, node.id, node.capabilities)
+      validateSecretDelivery(input.spec, node.capabilities)
       if (!supportsTemplateSecrets(node.agentVersion)) {
         return { incompatibleAgent: true as const, minimumAgentVersion: '0.3.0' }
       }

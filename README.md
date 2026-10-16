@@ -50,10 +50,12 @@ npm run test:e2e
 
 ## Application deployments
 
-GitHub Actions publishes an immutable container image and registers it as an Application Release.
-Alternatively, an OC Agent `0.11.0+` enrolled with the `builder` role can clone a public HTTPS
-GitHub repository, build it through an isolated Docker Buildx worker, push it to the configured OCI
-registry, and register the resulting digest without consuming GitHub Actions minutes.
+New Applications default to **Local image**. OC Agent `0.12.0+` on a **hybrid** server clones a
+public HTTPS GitHub repository, builds it with Docker Buildx, and loads the image directly into
+that server's Docker image store. No container registry or GitHub Actions job is required.
+Each release records the immutable image ID and can only deploy to its origin server.
+Optional registry mode supports distribution to multiple servers, either through the native
+builder or a GitHub Actions release callback. See [docs/APPLICATION-RELEASES.md](docs/APPLICATION-RELEASES.md).
 The **Infrastructure → Templates** page deploys that release to an enrolled Ubuntu server. The
 **Infrastructure → Deployments** page shows the resulting operation queue and execution history,
 while **Resources** shows the desired and last-observed runtime state.

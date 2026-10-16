@@ -73,6 +73,8 @@ function actionLabel(action: string) {
     'agent.rollback': 'Rollback OC Agent',
     'gateway.ensure': 'Bootstrap Traefik gateway',
     'application.ensure': 'Deploy application',
+    'application.build': 'Build application image',
+    'image.delete': 'Delete Docker image',
     'application.deploy': 'Deploy application',
     'application.start': 'Start application',
     'application.stop': 'Stop application',

@@ -38,11 +38,12 @@ type LifecycleAction =
   | 'application.delete'
 
 interface ApplicationSpec {
-  source: { type: 'image'; reference: string }
+  source: { type: 'image'; reference: string; pullPolicy?: 'always' | 'never'; nodeId?: string }
   limits: { cpuMilli: number; memoryBytes: string }
   ports: Array<{ containerPort: number; hostPort?: number; protocol: 'tcp' | 'udp' }>
   environment: Record<string, string>
   secretReferences: Record<string, string>
+  secretDelivery?: 'files' | 'environment'
   volumes: Array<{
     name: string
     mountTarget: string
@@ -72,6 +73,8 @@ interface InfrastructureResource {
   nodeId: string
   nodeName: string
   customerId: string | null
+  templateId: string | null
+  templateName: string | null
   applicationId: string | null
   releaseId: string | null
   releasePolicy: 'manual' | 'track_latest'
@@ -146,6 +149,22 @@ const { data: nodeData, refresh: refreshNodes } = await useFetch<{ data: Infrast
 )
 
 const resources = computed(() => data.value?.data ?? [])
+const resourceSections = computed(() =>
+  [
+    {
+      key: 'template',
+      title: 'Applications dari Templates',
+      description: 'Dibuat melalui deployment template dan tetap tertaut ke template asal.',
+      items: resources.value.filter((resource) => Boolean(resource.templateId)),
+    },
+    {
+      key: 'native',
+      title: 'Applications Native',
+      description: 'Container image yang dideploy langsung tanpa template.',
+      items: resources.value.filter((resource) => !resource.templateId),
+    },
+  ].filter((section) => section.items.length > 0),
+)
 const availableNodes = computed(() =>
   (nodeData.value?.data ?? []).filter(
     (node) =>
@@ -248,7 +267,7 @@ function applicationSpec() {
     environment[key] = line.slice(separator + 1)
   }
   return {
-    source: { type: 'image' as const, reference: form.imageReference.trim() },
+    source: { ...existing?.source, type: 'image' as const, reference: form.imageReference.trim() },
     limits: {
       cpuMilli: Number(form.cpuMilli),
       memoryBytes: String(Math.trunc(Number(form.memoryMiB) * 1024 * 1024)),
@@ -264,6 +283,7 @@ function applicationSpec() {
       : [],
     environment,
     secretReferences: existing?.secretReferences ?? {},
+    secretDelivery: existing?.secretDelivery,
     volumes: existing?.volumes ?? [],
     restartPolicy: form.restartPolicy,
     ...(healthcheckPath
@@ -377,18 +397,28 @@ function stateTone(state: ResourceState) {
   return 'neutral' as const
 }
 
+function directResourceHref(resource: InfrastructureResource) {
+  if (!resource.desiredSpec.ports.some((port) => port.hostPort)) return null
+  try {
+    const url = new URL(resource.desiredSpec.environment.APP_URL || '')
+    return ['http:', 'https:'].includes(url.protocol) ? url.origin : null
+  } catch {
+    return null
+  }
+}
+
 function resourceRouteHref(resource: InfrastructureResource) {
   if (/^demo-customer-[1-3]$/.test(resource.externalId)) {
     return `/demo/${resource.externalId}`
   }
-  return `https://${resource.routeHostname}`
+  return directResourceHref(resource) || `https://${resource.routeHostname}`
 }
 
 function resourceRouteLabel(resource: InfrastructureResource) {
   if (/^demo-customer-[1-3]$/.test(resource.externalId)) {
     return `Buka preview lokal · ${resource.routeStatus}`
   }
-  return `${resource.routeHostname} · ${resource.routeStatus}`
+  return directResourceHref(resource) || `${resource.routeHostname} · ${resource.routeStatus}`
 }
 
 async function revealResourceCredentials() {
@@ -450,10 +480,10 @@ async function copyCredential(key: string, value: string) {
         <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
           Infrastructure / applications
         </p>
-        <h1 class="text-2xl font-semibold tracking-tight text-ink">Native Applications</h1>
+        <h1 class="text-2xl font-semibold tracking-tight text-ink">Application Resources</h1>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">
-          Desired state disimpan di control plane. OC Agent pada node Ubuntu mengambil operasi
-          melalui HTTPS dan menjalankannya secara asynchronous di Docker.
+          Application dari Templates dan container native ditampilkan terpisah. Desired state
+          disimpan di control plane dan dijalankan OC Agent secara asynchronous di Docker.
         </p>
       </div>
       <div class="flex gap-2">
@@ -505,7 +535,7 @@ async function copyCredential(key: string, value: string) {
     <UiCard v-else-if="error" :padded="false">
       <UiEmptyState
         title="Gagal memuat applications"
-        description="Control plane tidak dapat membaca resource native."
+        description="Control plane tidak dapat membaca application resources."
       >
         <UiButton variant="secondary" size="sm" @click="refresh">Coba lagi</UiButton>
       </UiEmptyState>
@@ -513,7 +543,7 @@ async function copyCredential(key: string, value: string) {
 
     <UiCard v-else-if="resources.length === 0" :padded="false">
       <UiEmptyState
-        title="Belum ada aplikasi native"
+        title="Belum ada application resource"
         :description="
           availableNodes.length > 0
             ? 'Deploy image container pertama ke node Ubuntu yang aktif.'
@@ -540,9 +570,17 @@ async function copyCredential(key: string, value: string) {
               <th class="px-4 py-3 text-right font-semibold">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody v-for="(section, sectionIndex) in resourceSections" :key="section.key">
+            <tr :class="sectionIndex > 0 ? 'border-t-2 border-line-strong' : ''">
+              <th colspan="7" class="bg-canvas/40 px-4 py-3 text-left">
+                <span class="block text-xs font-semibold text-ink">{{ section.title }}</span>
+                <span class="mt-0.5 block text-[11px] font-normal text-muted">
+                  {{ section.description }}
+                </span>
+              </th>
+            </tr>
             <tr
-              v-for="resource in resources"
+              v-for="resource in section.items"
               :key="resource.id"
               class="border-b last:border-0 hover:bg-surface-raised/60"
             >
@@ -555,14 +593,17 @@ async function copyCredential(key: string, value: string) {
                       {{ resource.imageReference || resource.externalId }}
                     </span>
                     <span
-                      v-if="resource.applicationId"
+                      v-if="resource.templateId"
                       class="mt-1 block text-[10px] font-semibold tracking-wide text-brand uppercase"
                     >
-                      Application ·
-                      {{ resource.releasePolicy === 'track_latest' ? 'track latest' : 'manual' }}
+                      Template · {{ resource.templateName ?? 'Unknown' }}
+                      <template v-if="resource.applicationId">
+                        ·
+                        {{ resource.releasePolicy === 'track_latest' ? 'track latest' : 'manual' }}
+                      </template>
                     </span>
                     <a
-                      v-if="resource.routeHostname"
+                      v-if="resource.routeHostname || directResourceHref(resource)"
                       class="mt-1 block max-w-72 truncate font-mono text-[11px] text-brand hover:underline"
                       :href="resourceRouteHref(resource)"
                       target="_blank"
@@ -711,8 +752,13 @@ async function copyCredential(key: string, value: string) {
           v-model="form.imageReference"
           class="sm:col-span-2"
           label="Container image"
+          :readonly="editingResource?.desiredSpec.source.pullPolicy === 'never'"
           placeholder="ghcr.io/acme/customer-portal:1.0.0"
-          hint="Gunakan tag immutable atau digest untuk deployment yang dapat direproduksi."
+          :hint="
+            editingResource?.desiredSpec.source.pullPolicy === 'never'
+              ? 'Release lokal memakai image ID tetap. Gunakan rollout di Applications untuk mengganti release.'
+              : 'Gunakan tag immutable atau digest untuk deployment yang dapat direproduksi.'
+          "
           required
         />
         <label class="block">

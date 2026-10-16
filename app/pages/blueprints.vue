@@ -33,11 +33,13 @@ interface InfrastructureTemplate {
     commitSha: string
     imageDigest: string
     imageReference: string
+    localNodeId: string | null
   } | null
   definition: {
     engine: 'generic' | 'postgresql' | 'mysql' | 'redis'
     resourceKind: 'application' | 'database'
     spec: {
+      secretDelivery?: 'files' | 'environment'
       source: { type: 'image'; reference: string }
       ports: Array<{ containerPort: number; protocol: 'tcp' | 'udp' }>
       volumes: Array<{ name: string; mountTarget: string; kind: 'ephemeral' | 'persistent' }>
@@ -55,6 +57,7 @@ interface InfrastructureNode {
   isActive: boolean
   isDraining: boolean
   agentVersion: string | null
+  capabilities: string[]
   gatewayStatus: 'pending' | 'installing' | 'healthy' | 'failed' | 'unknown'
 }
 
@@ -77,6 +80,24 @@ const [
 ])
 
 const templates = computed(() => templateResponse.value?.data ?? [])
+const templateSections = computed(() =>
+  [
+    {
+      key: 'application',
+      title: 'Application dari repository',
+      description:
+        'Template runtime yang dibuat dari Application dan selalu memakai release hasil build repository.',
+      items: templates.value.filter((template) => Boolean(template.applicationId)),
+    },
+    {
+      key: 'native',
+      title: 'Template native',
+      description:
+        'Service bawaan yang dapat langsung dideploy tanpa membuat Application atau release terlebih dahulu.',
+      items: templates.value.filter((template) => !template.applicationId),
+    },
+  ].filter((section) => section.items.length > 0),
+)
 const nodes = computed(() =>
   (nodeResponse.value?.data ?? []).filter(
     (node) =>
@@ -102,6 +123,7 @@ const form = reactive({
   subdomain: '',
   hostPort: '',
   classification: 'internal' as 'billable' | 'internal' | 'ignored',
+  exposure: 'domain' as 'domain' | 'port',
   values: {} as Record<string, string>,
 })
 
@@ -109,6 +131,7 @@ function openDeploy(template: InfrastructureTemplate) {
   actionMessage.value = null
   actionError.value = null
   selectedTemplate.value = template
+  form.exposure = template.resolvedRelease?.localNodeId ? 'port' : 'domain'
   form.nodeId = nodesForTemplate(template)[0]?.id ?? ''
   form.serviceId = ''
   form.name = `${template.slug}-01`
@@ -124,10 +147,27 @@ function openDeploy(template: InfrastructureTemplate) {
 }
 
 function nodesForTemplate(template: InfrastructureTemplate) {
-  const compatible = template.applicationId
-    ? nodes.value.filter((node) => supportsApplicationRegistry(node.agentVersion))
+  const eligible = template.resolvedRelease?.localNodeId
+    ? nodes.value.filter(
+        (node) =>
+          node.id === template.resolvedRelease?.localNodeId &&
+          node.capabilities.includes('local-image-build'),
+      )
     : nodes.value
-  return template.definition.resourceKind === 'application'
+  const secretCompatible = eligible.filter(
+    (node) =>
+      template.definition.spec.secretDelivery !== 'environment' ||
+      node.capabilities.includes('secret-environment'),
+  )
+  const compatible = template.applicationId
+    ? secretCompatible.filter((node) => supportsApplicationRegistry(node.agentVersion))
+    : secretCompatible
+  const useGateway =
+    template.definition.resourceKind === 'application' &&
+    (selectedTemplate.value?.id === template.id
+      ? form.exposure === 'domain'
+      : !template.resolvedRelease?.localNodeId)
+  return useGateway
     ? compatible.filter(
         (node) => supportsGatewayRoutes(node.agentVersion) && node.gatewayStatus === 'healthy',
       )
@@ -140,6 +180,19 @@ function defaultHostPort(template: InfrastructureTemplate) {
   if (template.definition.engine === 'redis') return 6379
   return template.definition.spec.ports[0]?.containerPort ?? 3000
 }
+
+watch(
+  () => form.exposure,
+  (exposure) => {
+    if (exposure === 'port' && form.classification === 'billable') form.classification = 'internal'
+    if (
+      selectedTemplate.value &&
+      !nodesForTemplate(selectedTemplate.value).some((node) => node.id === form.nodeId)
+    ) {
+      form.nodeId = nodesForTemplate(selectedTemplate.value)[0]?.id ?? ''
+    }
+  },
+)
 
 async function deployTemplate() {
   if (!selectedTemplate.value) return
@@ -156,15 +209,18 @@ async function deployTemplate() {
         serviceId: form.serviceId || undefined,
         name: form.name,
         subdomain: template.definition.resourceKind === 'application' ? form.subdomain : undefined,
+        exposure: form.exposure,
         hostPort:
-          template.definition.resourceKind === 'application' ? undefined : Number(form.hostPort),
+          template.definition.resourceKind === 'application' && form.exposure === 'domain'
+            ? undefined
+            : Number(form.hostPort),
         classification: form.classification,
         values: form.values,
       },
     })
     selectedTemplate.value = null
     actionMessage.value =
-      template.definition.resourceKind === 'application'
+      template.definition.resourceKind === 'application' && form.exposure === 'domain'
         ? `${template.name} sedang dideploy. ${form.subdomain}.${platformDomain.value} akan diaktifkan setelah container berhasil.`
         : `${template.name} sedang dideploy. Progresnya dapat dilihat di halaman Resources.`
   } catch (caught) {
@@ -248,61 +304,77 @@ function supportsGatewayRoutes(version: string | null) {
     <UiCard v-else-if="!templates.length" :padded="false">
       <UiEmptyState title="Belum ada template" description="Jalankan migration database terbaru." />
     </UiCard>
-    <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      <UiCard v-for="template in templates" :key="template.id">
-        <div class="flex items-start justify-between gap-4">
-          <div class="flex size-10 items-center justify-center rounded-lg bg-brand/10 text-brand">
-            <Database v-if="template.category === 'database'" :size="20" />
-            <Box v-else :size="20" />
-          </div>
-          <div class="flex gap-2">
-            <UiBadge tone="info">{{ categoryLabel(template.category) }}</UiBadge>
-            <UiBadge v-if="template.applicationId" tone="success">Application</UiBadge>
-            <UiBadge v-if="template.isBuiltin" tone="neutral">Built-in</UiBadge>
-          </div>
+    <div v-else class="space-y-8">
+      <section
+        v-for="(section, sectionIndex) in templateSections"
+        :key="section.key"
+        :class="sectionIndex > 0 ? 'border-t border-line pt-8' : ''"
+      >
+        <div class="mb-4">
+          <h2 class="text-base font-semibold text-ink">{{ section.title }}</h2>
+          <p class="mt-1 text-sm text-muted">{{ section.description }}</p>
         </div>
-        <h2 class="mt-4 text-base font-semibold text-ink">{{ template.name }}</h2>
-        <p class="mt-1 min-h-10 text-sm leading-5 text-muted">{{ template.description }}</p>
-        <dl class="mt-4 space-y-2 border-t pt-4 text-xs">
-          <div class="flex justify-between gap-3">
-            <dt class="text-muted">Image</dt>
-            <dd class="truncate font-mono text-ink">
-              {{ template.definition.spec.source.reference }}
-            </dd>
-          </div>
-          <div v-if="template.resolvedRelease" class="flex justify-between gap-3">
-            <dt class="text-muted">Release</dt>
-            <dd class="font-mono text-ink">
-              {{ template.resolvedRelease.version }} ·
-              {{
-                template.releasePolicy === 'track_latest' ? 'track latest' : 'pinned after deploy'
-              }}
-            </dd>
-          </div>
-          <div class="flex justify-between gap-3">
-            <dt class="text-muted">Container port</dt>
-            <dd class="font-mono text-ink">
-              {{ template.definition.spec.ports[0]?.containerPort ?? '—' }}
-            </dd>
-          </div>
-          <div class="flex justify-between gap-3">
-            <dt class="text-muted">Storage</dt>
-            <dd class="text-ink">
-              {{ template.definition.spec.volumes.length ? 'Persistent volume' : 'Ephemeral' }}
-            </dd>
-          </div>
-        </dl>
-        <UiButton
-          class="mt-5 w-full"
-          :disabled="
-            !nodesForTemplate(template).length ||
-            (Boolean(template.applicationId) && !template.resolvedRelease)
-          "
-          @click="openDeploy(template)"
-        >
-          <Rocket :size="15" /> Deploy
-        </UiButton>
-      </UiCard>
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <UiCard v-for="template in section.items" :key="template.id">
+            <div class="flex items-start justify-between gap-4">
+              <div
+                class="flex size-10 items-center justify-center rounded-lg bg-brand/10 text-brand"
+              >
+                <Database v-if="template.category === 'database'" :size="20" />
+                <Box v-else :size="20" />
+              </div>
+              <div class="flex gap-2">
+                <UiBadge tone="info">{{ categoryLabel(template.category) }}</UiBadge>
+                <UiBadge v-if="template.applicationId" tone="success">Application</UiBadge>
+                <UiBadge v-if="template.isBuiltin" tone="neutral">Built-in</UiBadge>
+              </div>
+            </div>
+            <h3 class="mt-4 text-base font-semibold text-ink">{{ template.name }}</h3>
+            <p class="mt-1 min-h-10 text-sm leading-5 text-muted">{{ template.description }}</p>
+            <dl class="mt-4 space-y-2 border-t pt-4 text-xs">
+              <div class="flex justify-between gap-3">
+                <dt class="text-muted">Image</dt>
+                <dd class="truncate font-mono text-ink">
+                  {{ template.definition.spec.source.reference }}
+                </dd>
+              </div>
+              <div v-if="template.resolvedRelease" class="flex justify-between gap-3">
+                <dt class="text-muted">Release</dt>
+                <dd class="font-mono text-ink">
+                  {{ template.resolvedRelease.version }} ·
+                  {{
+                    template.releasePolicy === 'track_latest'
+                      ? 'track latest'
+                      : 'pinned after deploy'
+                  }}
+                </dd>
+              </div>
+              <div class="flex justify-between gap-3">
+                <dt class="text-muted">Container port</dt>
+                <dd class="font-mono text-ink">
+                  {{ template.definition.spec.ports[0]?.containerPort ?? '—' }}
+                </dd>
+              </div>
+              <div class="flex justify-between gap-3">
+                <dt class="text-muted">Storage</dt>
+                <dd class="text-ink">
+                  {{ template.definition.spec.volumes.length ? 'Persistent volume' : 'Ephemeral' }}
+                </dd>
+              </div>
+            </dl>
+            <UiButton
+              class="mt-5 w-full"
+              :disabled="
+                !nodesForTemplate(template).length ||
+                (Boolean(template.applicationId) && !template.resolvedRelease)
+              "
+              @click="openDeploy(template)"
+            >
+              <Rocket :size="15" /> Deploy
+            </UiButton>
+          </UiCard>
+        </div>
+      </section>
     </div>
 
     <UiDialog
@@ -337,6 +409,12 @@ function supportsGatewayRoutes(version: string | null) {
                 {{ node.name }} · {{ node.environment }} · {{ node.status }}
               </option>
             </select>
+            <span
+              v-if="selectedTemplate.resolvedRelease?.localNodeId"
+              class="mt-2 block text-xs text-muted"
+            >
+              Image lokal hanya tersedia pada server tempat build dijalankan.
+            </span>
           </label>
           <UiInput
             v-model="form.name"
@@ -344,8 +422,21 @@ function supportsGatewayRoutes(version: string | null) {
             required
             pattern="[a-z0-9][a-z0-9-]*"
           />
+          <label v-if="selectedTemplate.definition.resourceKind === 'application'" class="block">
+            <span class="mb-2 block text-xs font-semibold text-muted">Akses aplikasi</span>
+            <select
+              v-model="form.exposure"
+              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            >
+              <option value="port">Port server · akses LAN langsung</option>
+              <option value="domain">Domain · melalui gateway</option>
+            </select>
+          </label>
           <UiInput
-            v-if="selectedTemplate.definition.resourceKind === 'application'"
+            v-if="
+              selectedTemplate.definition.resourceKind === 'application' &&
+              form.exposure === 'domain'
+            "
             v-model="form.subdomain"
             label="Subdomain"
             required
@@ -368,7 +459,15 @@ function supportsGatewayRoutes(version: string | null) {
               class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
             >
               <option value="internal">Internal</option>
-              <option value="billable">Billable</option>
+              <option
+                value="billable"
+                :disabled="
+                  selectedTemplate.definition.resourceKind === 'application' &&
+                  form.exposure === 'port'
+                "
+              >
+                Billable
+              </option>
               <option value="ignored">Ignored</option>
             </select>
           </label>

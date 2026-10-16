@@ -7,6 +7,10 @@ import type {
 } from '../../shared/schemas/infrastructure'
 import { useDatabase, type Database } from '../database/client'
 import {
+  validateLocalImageNode,
+  validateSecretDelivery,
+} from '../services/infrastructure/local-image'
+import {
   applicationBuilds,
   auditLogs,
   infrastructureDatabaseClusters,
@@ -16,6 +20,7 @@ import {
   infrastructureOperations,
   infrastructureResources,
   infrastructureServiceDatabases,
+  infrastructureTemplates,
   resourceObservations,
   resourceRoutes,
   resourceSecretReferences,
@@ -74,7 +79,7 @@ export class NativeInfrastructureRepository {
       if (existing) return { operation: existing, replayed: true }
 
       const [node] = await transaction
-        .select({ id: infrastructureNodes.id })
+        .select({ id: infrastructureNodes.id, capabilities: infrastructureNodes.capabilities })
         .from(infrastructureNodes)
         .where(
           and(
@@ -88,6 +93,8 @@ export class NativeInfrastructureRepository {
         .limit(1)
         .for('update')
       if (!node) return null
+      validateLocalImageNode(input.input.spec.source, node.id, node.capabilities)
+      validateSecretDelivery(input.input.spec, node.capabilities)
 
       const [resource] = await transaction
         .insert(infrastructureResources)
@@ -167,6 +174,8 @@ export class NativeInfrastructureRepository {
         nodeId: infrastructureResources.nodeId,
         nodeName: infrastructureNodes.name,
         customerId: infrastructureResources.customerId,
+        templateId: infrastructureResources.templateId,
+        templateName: infrastructureTemplates.name,
         applicationId: infrastructureResources.applicationId,
         releaseId: infrastructureResources.releaseId,
         releasePolicy: infrastructureResources.releasePolicy,
@@ -190,6 +199,10 @@ export class NativeInfrastructureRepository {
       })
       .from(infrastructureResources)
       .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
+      .leftJoin(
+        infrastructureTemplates,
+        eq(infrastructureTemplates.id, infrastructureResources.templateId),
+      )
       .leftJoin(resourceRoutes, eq(resourceRoutes.resourceId, infrastructureResources.id))
       .where(isNull(infrastructureResources.deletedAt))
       .orderBy(asc(infrastructureResources.name))
@@ -269,6 +282,13 @@ export class NativeInfrastructureRepository {
         .for('update')
       if (!resource) return null
 
+      const [node] = await transaction
+        .select({ capabilities: infrastructureNodes.capabilities })
+        .from(infrastructureNodes)
+        .where(eq(infrastructureNodes.id, resource.nodeId))
+        .limit(1)
+      validateLocalImageNode(input.input.spec.source, resource.nodeId, node?.capabilities ?? [])
+      validateSecretDelivery(input.input.spec, node?.capabilities ?? [])
       const revision = resource.desiredRevision + 1
       const [updatedResource] = await transaction
         .update(infrastructureResources)
@@ -611,6 +631,42 @@ export class NativeInfrastructureRepository {
             },
           })
         }
+      }
+
+      if (operation.action === 'image.delete' && terminal) {
+        const imageId =
+          typeof operation.payload.imageId === 'string' ? operation.payload.imageId : null
+        if (imageId && status === 'succeeded') {
+          const [node] = await transaction
+            .select({ imageInventory: infrastructureNodes.imageInventory })
+            .from(infrastructureNodes)
+            .where(eq(infrastructureNodes.id, nodeId))
+            .limit(1)
+            .for('update')
+          if (node) {
+            await transaction
+              .update(infrastructureNodes)
+              .set({
+                imageInventory: node.imageInventory.filter((image) => image.id !== imageId),
+                updatedAt: now,
+              })
+              .where(eq(infrastructureNodes.id, nodeId))
+          }
+        }
+        await transaction.insert(auditLogs).values({
+          actorUserId: operation.actorUserId,
+          action:
+            status === 'succeeded'
+              ? 'infrastructure.image.delete.succeeded'
+              : 'infrastructure.image.delete.failed',
+          entityType: 'infrastructure_node',
+          entityId: nodeId,
+          metadata: {
+            operationId: operation.id,
+            imageId,
+            errorCode: input.errorCode ?? null,
+          },
+        })
       }
 
       if (

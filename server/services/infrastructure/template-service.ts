@@ -13,6 +13,7 @@ import { DomainError } from '../../utils/errors'
 import { validateApplicationPolicy } from './policy'
 import { InfrastructureReleaseService } from './release-service'
 import { ApplicationBuildService } from './application-build-service'
+import { releaseImageSource, validateLocalImageNode } from './local-image'
 
 export class InfrastructureTemplateService {
   constructor(private readonly repository = new InfrastructureTemplateRepository()) {}
@@ -32,7 +33,7 @@ export class InfrastructureTemplateService {
                 ...definition,
                 spec: {
                   ...definition.spec,
-                  source: { type: 'image' as const, reference: resolvedRelease.imageReference },
+                  source: releaseImageSource(resolvedRelease),
                 },
               }
             : definition,
@@ -72,7 +73,8 @@ export class InfrastructureTemplateService {
       engine: 'generic',
       resourceKind: 'application',
       spec: {
-        source: { type: 'image', reference: release.imageReference },
+        source: releaseImageSource(release),
+        secretDelivery: input.secretDelivery,
         limits: {
           cpuMilli: input.cpuMilli,
           memoryBytes: String(input.memoryMiB * 1024 * 1024),
@@ -143,9 +145,16 @@ export class InfrastructureTemplateService {
     if (template.applicationId && !release) {
       throw DomainError.invalidState('Application template belum memiliki release.')
     }
+    if (release) validateLocalImageNode(releaseImageSource(release), input.nodeId)
     const isApplication = definition.resourceKind === 'application'
-    if (!isApplication && !input.hostPort) {
-      throw DomainError.validation('Host port wajib diisi untuk template database atau cache.')
+    const useGateway = isApplication && input.exposure !== 'port'
+    if (!useGateway && !input.hostPort) {
+      throw DomainError.validation('Host port wajib diisi untuk akses langsung ke server.')
+    }
+    if (isApplication && !useGateway && input.classification === 'billable') {
+      throw DomainError.validation(
+        'Akses port langsung hanya untuk resource internal atau ignored. Gunakan domain untuk resource billable.',
+      )
     }
     const targetPort = definition.spec.ports.find((port) => port.protocol === 'tcp')?.containerPort
     if (isApplication && !targetPort) {
@@ -154,13 +163,13 @@ export class InfrastructureTemplateService {
     const platformDomain = String(useRuntimeConfig().platformDomain || '')
       .trim()
       .toLowerCase()
-    if (isApplication && !platformDomain) {
+    if (useGateway && !platformDomain) {
       throw DomainError.invalidState('Platform domain belum dikonfigurasi.')
     }
-    const hostname = isApplication
+    const hostname = useGateway
       ? `${input.subdomain || input.name}.${platformDomain}`.toLowerCase()
       : undefined
-    if (isApplication && input.classification === 'billable') {
+    if (useGateway && input.classification === 'billable') {
       const config = useRuntimeConfig()
       if (!config.billingGateInternalUrl || !config.billingGateSharedKey) {
         throw DomainError.invalidState(
@@ -197,13 +206,11 @@ export class InfrastructureTemplateService {
     }
 
     const ports = definition.spec.ports.map((port, index) =>
-      !isApplication && index === 0 ? { ...port, hostPort: input.hostPort } : port,
+      !useGateway && index === 0 ? { ...port, hostPort: input.hostPort } : port,
     )
     const spec = {
       ...definition.spec,
-      source: release
-        ? { type: 'image' as const, reference: release.imageReference }
-        : definition.spec.source,
+      source: release ? releaseImageSource(release) : definition.spec.source,
       ports,
       environment,
       secretReferences,
@@ -230,7 +237,7 @@ export class InfrastructureTemplateService {
         serviceId: input.serviceId,
         hostname,
         targetPort,
-        billingGateEnabled: isApplication && input.classification === 'billable',
+        billingGateEnabled: useGateway && input.classification === 'billable',
         name: input.name,
         classification: input.classification,
         spec,

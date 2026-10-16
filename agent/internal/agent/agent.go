@@ -108,7 +108,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		if usageErr == nil {
 			usagePayload = &usage
 		}
-		err := client.Heartbeat(ctx, identity.Credential, controlplane.HeartbeatRequest{
+		response, err := client.Heartbeat(ctx, identity.Credential, controlplane.HeartbeatRequest{
 			AgentVersion:    Version,
 			ProtocolVersion: controlplane.ProtocolVersion,
 			OSRelease:       host.OSRelease,
@@ -126,22 +126,38 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if response.Role != "" && response.Role != identity.Role {
+			if !validNodeRole(response.Role) {
+				return fmt.Errorf("control plane returned invalid node role %q", response.Role)
+			}
+			updatedIdentity := identity
+			updatedIdentity.Role = response.Role
+			if err := saveIdentity(a.config.StateFile, updatedIdentity); err != nil {
+				return fmt.Errorf("persist node role: %w", err)
+			}
+			previousRole := identity.Role
+			identity.Role = response.Role
+			a.logger.Info("node role updated", "previous_role", previousRole, "role", identity.Role)
+		}
 		if err := selfupdate.MarkHealthy(a.config.UpdateDirectory, Version); err != nil {
 			return fmt.Errorf("mark agent healthy: %w", err)
 		}
 		return nil
 	}
 	reportInventory := func() error {
-		if identity.Role == "builder" {
-			return nil
-		}
 		resources, inventoryErr := docker.Inventory(ctx)
 		if inventoryErr != nil {
 			return inventoryErr
 		}
+		images, imageInventoryErr := docker.ImageInventory(ctx)
+		if imageInventoryErr != nil {
+			a.logger.Warn("image inventory unavailable", "error", imageInventoryErr)
+			images = nil
+		}
 		return client.Inventory(ctx, identity.Credential, controlplane.InventoryRequest{
 			ObservedAt: time.Now().UTC(),
 			Resources:  resources,
+			Images:     images,
 		})
 	}
 	processOperation := func() error {
@@ -251,6 +267,10 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func validNodeRole(role string) bool {
+	return role == "deployment" || role == "builder" || role == "hybrid"
 }
 
 func loadIdentity(path string) (controlplane.Identity, error) {

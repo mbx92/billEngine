@@ -169,6 +169,20 @@
       "when": 1792136462802,
       "tag": "0023_native_image_builder",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792155869048,
+      "tag": "0024_local_application_images",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792158251845,
+      "tag": "0025_node_image_inventory",
+      "breakpoints": true
     }
   ]
 }
