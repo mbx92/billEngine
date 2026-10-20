@@ -25,6 +25,18 @@ const tunnels = computed(() => overview.value?.tunnels ?? [])
 const healthyCount = computed(
   () => tunnels.value.filter((tunnel) => tunnel.status === 'healthy').length,
 )
+const tunnelSections = computed(() => [
+  {
+    key: 'healthy',
+    label: 'Healthy',
+    tunnels: tunnels.value.filter((tunnel) => tunnel.status === 'healthy'),
+  },
+  {
+    key: 'down',
+    label: 'Tunnel down / perlu perhatian',
+    tunnels: tunnels.value.filter((tunnel) => tunnel.status !== 'healthy'),
+  },
+])
 
 const selectedTunnelId = ref<string | null>(null)
 const detail = ref<ApiCloudflareTunnelDetail | null>(null)
@@ -266,48 +278,68 @@ function statusTone(value: CloudflareTunnelStatus) {
         />
       </UiCard>
 
-      <div v-else class="grid gap-4 lg:grid-cols-2">
-        <UiCard v-for="tunnel in tunnels" :key="tunnel.id">
-          <div class="flex items-start justify-between gap-3">
-            <div class="min-w-0">
-              <h2 class="flex items-center gap-2 truncate text-sm font-semibold text-ink">
-                <Cloud :size="15" class="shrink-0 text-brand" />
-                <span class="truncate">{{ tunnel.name }}</span>
-              </h2>
-              <p class="mt-1 truncate font-mono text-[11px] text-muted">{{ tunnel.id }}</p>
-            </div>
-            <UiBadge :tone="statusTone(tunnel.status)" dot>{{ tunnel.status }}</UiBadge>
+      <div v-else class="space-y-8">
+        <section
+          v-for="section in tunnelSections"
+          v-show="section.tunnels.length > 0"
+          :key="section.key"
+        >
+          <div class="mb-4 flex items-center gap-3">
+            <h2 class="text-xs font-semibold tracking-wide text-muted uppercase">
+              {{ section.label }}
+            </h2>
+            <span class="font-mono text-xs text-muted">
+              {{ format.count(section.tunnels.length) }}
+            </span>
+            <div class="h-px flex-1 bg-line-strong" aria-hidden="true" />
           </div>
 
-          <dl class="mt-4 grid gap-3 border-t pt-4 text-xs sm:grid-cols-2">
-            <div>
-              <dt class="text-muted">Configuration</dt>
-              <dd class="mt-1 font-mono text-ink">{{ tunnel.configSource }}</dd>
-            </div>
-            <div>
-              <dt class="text-muted">Active since</dt>
-              <dd class="mt-1 font-mono text-ink">
-                {{ format.dateTime(tunnel.connectionsActiveAt) }}
-              </dd>
-            </div>
-            <div class="sm:col-span-2">
-              <dt class="text-muted">DNS target</dt>
-              <dd class="mt-1 truncate font-mono text-ink">{{ tunnel.expectedDnsTarget }}</dd>
-            </div>
-          </dl>
+          <div class="grid gap-4 lg:grid-cols-2">
+            <UiCard v-for="tunnel in section.tunnels" :key="tunnel.id">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <h3 class="flex items-center gap-2 truncate text-sm font-semibold text-ink">
+                    <Cloud :size="15" class="shrink-0 text-brand" />
+                    <span class="truncate">{{ tunnel.name }}</span>
+                  </h3>
+                  <p class="mt-1 truncate font-mono text-[11px] text-muted">{{ tunnel.id }}</p>
+                </div>
+                <UiBadge :tone="statusTone(tunnel.status)" dot>{{ tunnel.status }}</UiBadge>
+              </div>
 
-          <div class="mt-4 flex justify-end border-t pt-4">
-            <UiButton
-              variant="secondary"
-              size="sm"
-              :disabled="loadingDetail && selectedTunnelId === tunnel.id"
-              @click="loadTunnel(tunnel)"
-            >
-              <Route :size="13" />
-              {{ loadingDetail && selectedTunnelId === tunnel.id ? 'Memuat…' : 'Kelola routes' }}
-            </UiButton>
+              <dl class="mt-4 grid gap-3 border-t pt-4 text-xs sm:grid-cols-2">
+                <div>
+                  <dt class="text-muted">Configuration</dt>
+                  <dd class="mt-1 font-mono text-ink">{{ tunnel.configSource }}</dd>
+                </div>
+                <div>
+                  <dt class="text-muted">Active since</dt>
+                  <dd class="mt-1 font-mono text-ink">
+                    {{ format.dateTime(tunnel.connectionsActiveAt) }}
+                  </dd>
+                </div>
+                <div class="sm:col-span-2">
+                  <dt class="text-muted">DNS target</dt>
+                  <dd class="mt-1 truncate font-mono text-ink">{{ tunnel.expectedDnsTarget }}</dd>
+                </div>
+              </dl>
+
+              <div class="mt-4 flex justify-end border-t pt-4">
+                <UiButton
+                  variant="secondary"
+                  size="sm"
+                  :disabled="loadingDetail && selectedTunnelId === tunnel.id"
+                  @click="loadTunnel(tunnel)"
+                >
+                  <Route :size="13" />
+                  {{
+                    loadingDetail && selectedTunnelId === tunnel.id ? 'Memuat…' : 'Kelola routes'
+                  }}
+                </UiButton>
+              </div>
+            </UiCard>
           </div>
-        </UiCard>
+        </section>
       </div>
     </template>
 
