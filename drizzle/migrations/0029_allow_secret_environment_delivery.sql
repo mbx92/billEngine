@@ -1,0 +1,2 @@
+ALTER TABLE "resource_secret_references" DROP CONSTRAINT "resource_secret_references_delivery_check";--> statement-breakpoint
+ALTER TABLE "resource_secret_references" ADD CONSTRAINT "resource_secret_references_delivery_check" CHECK ("resource_secret_references"."delivery" in ('file', 'environment'));

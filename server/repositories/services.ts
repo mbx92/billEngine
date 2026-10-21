@@ -525,6 +525,7 @@ export class ServiceRepository {
       )
 
     for (const { allocation, clusterName } of nativeRows) {
+      if (!allocation.serviceId) continue
       links.set(allocation.serviceId, {
         id: allocation.id,
         serviceId: allocation.serviceId,

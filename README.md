@@ -59,6 +59,9 @@ builder or a GitHub Actions release callback. See [docs/APPLICATION-RELEASES.md]
 The **Infrastructure → Templates** page deploys that release to an enrolled Ubuntu server. The
 **Infrastructure → Deployments** page shows the resulting operation queue and execution history,
 while **Resources** shows the desired and last-observed runtime state.
+With OC Agent `0.12.6+`, admins can also run bounded one-shot commands through **Docker sh** on a
+running managed application container. Commands use `/bin/sh -lc`; the browser never receives a
+Docker socket, host shell, or interactive TTY.
 
 ## Cloudflare Tunnel management
 

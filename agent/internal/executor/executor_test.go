@@ -92,6 +92,77 @@ func TestEnsureApplicationRequiresResolvedSecretReferences(t *testing.T) {
 	}
 }
 
+func TestDeleteApplicationSucceedsWhenContainerIsAlreadyAbsent(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{
+		"resourceId": "00000000-0000-4000-8000-000000000001",
+		"revision":   2,
+	})
+	var commands [][]string
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		return []byte("Error: No such object: oc-00000000000040008000000000000001"), errors.New("exit status 1")
+	}
+
+	result, executionErr := executeWith(
+		context.Background(),
+		controlplane.Operation{Action: "application.delete", Payload: payload},
+		nil,
+		t.TempDir(),
+		run,
+	)
+	if executionErr != nil {
+		t.Fatalf("delete absent container: %v", executionErr)
+	}
+	if result["alreadyAbsent"] != true {
+		t.Fatalf("expected idempotent delete result, got %#v", result)
+	}
+	if len(commands) != 1 || len(commands[0]) < 2 || commands[0][1] != "inspect" {
+		t.Fatalf("delete should only inspect an absent container: %#v", commands)
+	}
+}
+
+func TestDeleteApplicationRejectsContainerOwnedByAnotherResource(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{
+		"resourceId": "00000000-0000-4000-8000-000000000001",
+		"revision":   2,
+	})
+	run := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("00000000-0000-4000-8000-000000000002\n"), nil
+	}
+
+	_, executionErr := executeWith(
+		context.Background(),
+		controlplane.Operation{Action: "application.delete", Payload: payload},
+		nil,
+		t.TempDir(),
+		run,
+	)
+	if executionErr == nil || executionErr.Code != "resource_ownership_mismatch" {
+		t.Fatalf("expected ownership mismatch, got %#v", executionErr)
+	}
+}
+
+func TestDeleteApplicationReportsDockerInspectFailure(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{
+		"resourceId": "00000000-0000-4000-8000-000000000001",
+		"revision":   2,
+	})
+	run := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("permission denied while trying to connect to the Docker daemon socket"), errors.New("exit status 1")
+	}
+
+	_, executionErr := executeWith(
+		context.Background(),
+		controlplane.Operation{Action: "application.delete", Payload: payload},
+		nil,
+		t.TempDir(),
+		run,
+	)
+	if executionErr == nil || executionErr.Code != "lifecycle_inspect_failed" || !executionErr.Retryable {
+		t.Fatalf("expected retryable inspect failure, got %#v", executionErr)
+	}
+}
+
 func TestEnsureApplicationMountsSecretsAsFilesWithoutExposingValues(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
 		"resourceId": "00000000-0000-4000-8000-000000000001",

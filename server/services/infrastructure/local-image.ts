@@ -16,6 +16,7 @@ export function validateLocalImageNode(
   source: ApplicationSpec['source'],
   nodeId: string,
   capabilities?: string[],
+  imageInventory?: Array<{ id: string }>,
 ) {
   if (source.type !== 'image' || source.pullPolicy !== 'never') return
   if (source.nodeId !== nodeId) {
@@ -26,6 +27,11 @@ export function validateLocalImageNode(
   if (capabilities && !capabilities.includes('local-image-build')) {
     throw DomainError.invalidState(
       'Perbarui agent server ke versi yang mendukung local-image-build (0.12.0+).',
+    )
+  }
+  if (imageInventory && !imageInventory.some((image) => image.id === source.reference)) {
+    throw DomainError.invalidState(
+      'Image lokal tidak ditemukan pada inventory server. Refresh inventory lalu pilih image yang tersedia.',
     )
   }
 }

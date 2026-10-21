@@ -59,10 +59,10 @@ interface PostgreSQLCandidate {
 
 interface ServiceDatabaseAllocation {
   id: string
-  serviceId: string
-  serviceNumber: string
-  serviceName: string
-  customerName: string
+  serviceId: string | null
+  serviceNumber: string | null
+  serviceName: string | null
+  customerName: string | null
   databaseClusterId: string
   clusterName: string
   applicationResourceId: string
@@ -100,7 +100,7 @@ interface EligibleApplication {
 
 interface RevealedDatabaseCredential {
   id: string
-  serviceId: string
+  serviceId: string | null
   clusterName: string
   applicationName: string
   databaseName: string
@@ -256,7 +256,7 @@ function openProvisioning(cluster: NativeDatabaseCluster) {
   actionError.value = null
   Object.assign(provisionForm, {
     clusterId: cluster.id,
-    serviceId: overview.value?.eligibleServices[0]?.id ?? '',
+    serviceId: '',
     applicationResourceId: '',
     environmentKey: 'DATABASE_URL',
   })
@@ -272,7 +272,7 @@ async function provisionDatabase() {
       method: 'POST',
       headers: { 'Idempotency-Key': `service-database:${crypto.randomUUID()}` },
       body: {
-        serviceId: provisionForm.serviceId,
+        serviceId: provisionForm.serviceId || undefined,
         applicationResourceId: provisionForm.applicationResourceId,
         environmentKey: provisionForm.environmentKey,
       },
@@ -415,6 +415,22 @@ function clusterReadyForProvisioning(cluster: NativeDatabaseCluster) {
   )
 }
 
+function eligibleApplicationsForCluster(cluster: NativeDatabaseCluster) {
+  return (overview.value?.eligibleApplications ?? []).filter(
+    (application) => application.nodeId === cluster.nodeId,
+  )
+}
+
+function clusterProvisioningHint(cluster: NativeDatabaseCluster) {
+  if (!clusterReadyForProvisioning(cluster)) {
+    return 'Cluster, resource PostgreSQL, atau node belum siap untuk provisioning.'
+  }
+  if (!eligibleApplicationsForCluster(cluster).length) {
+    return `Deploy application ke node ${cluster.nodeName} terlebih dahulu.`
+  }
+  return 'Buat database dan role terisolasi untuk aplikasi.'
+}
+
 function allocationTone(allocationStatus: ServiceDatabaseAllocation['status']) {
   if (allocationStatus === 'active') return 'success' as const
   if (allocationStatus === 'provisioning') return 'warning' as const
@@ -551,17 +567,25 @@ function statusTone(clusterStatus: ClusterStatus) {
             </p>
             <UiButton
               class="mt-4 w-full"
-              :disabled="
-                !clusterReadyForProvisioning(cluster) ||
-                !overview?.eligibleServices.length ||
-                !overview?.eligibleApplications.some(
-                  (application) => application.nodeId === cluster.nodeId,
-                )
-              "
+              :disabled="!clusterReadyForProvisioning(cluster)"
+              :title="clusterProvisioningHint(cluster)"
               @click="openProvisioning(cluster)"
             >
-              <KeyRound :size="15" /> Provision service database
+              <KeyRound :size="15" /> Provision application database
             </UiButton>
+            <p
+              v-if="
+                clusterReadyForProvisioning(cluster) &&
+                eligibleApplicationsForCluster(cluster).length === 0
+              "
+              class="mt-2 text-xs leading-5 text-warning"
+            >
+              Belum ada application pada node {{ cluster.nodeName }}. Buka
+              <NuxtLink to="/resources" class="font-semibold text-brand hover:underline">
+                Application Resources
+              </NuxtLink>
+              dan deploy application pada node yang sama.
+            </p>
           </UiCard>
         </div>
       </section>
@@ -569,9 +593,10 @@ function statusTone(clusterStatus: ClusterStatus) {
       <section class="mt-8">
         <div class="mb-3 flex items-center justify-between gap-3">
           <div>
-            <h2 class="text-sm font-semibold text-ink">Service databases</h2>
+            <h2 class="text-sm font-semibold text-ink">Application databases</h2>
             <p class="mt-1 text-xs text-muted">
-              Setiap service memakai database, role, dan credential terpisah.
+              Setiap aplikasi memakai database, role, dan credential terpisah; Service hanya
+              diperlukan untuk resource billable.
             </p>
           </div>
           <UiBadge tone="neutral">{{ overview?.allocations.length ?? 0 }} allocation</UiBadge>
@@ -579,8 +604,8 @@ function statusTone(clusterStatus: ClusterStatus) {
 
         <UiCard v-if="!overview?.allocations.length" :padded="false">
           <UiEmptyState
-            title="Belum ada database service"
-            description="Aktifkan cluster dan pilih Provision service database pada cluster yang siap."
+            title="Belum ada database aplikasi"
+            description="Aktifkan cluster dan pilih Provision application database pada cluster yang siap."
           />
         </UiCard>
         <div v-else class="grid gap-4 lg:grid-cols-2">
@@ -588,10 +613,11 @@ function statusTone(clusterStatus: ClusterStatus) {
             <div class="flex items-start justify-between gap-4">
               <div class="min-w-0">
                 <p class="font-mono text-[11px] font-semibold text-brand">
-                  {{ allocation.serviceNumber }} · {{ allocation.customerName }}
+                  {{ allocation.serviceNumber ?? 'INTERNAL' }} ·
+                  {{ allocation.customerName ?? 'Non-billable' }}
                 </p>
                 <h3 class="mt-1 truncate text-sm font-semibold text-ink">
-                  {{ allocation.serviceName }}
+                  {{ allocation.serviceName ?? allocation.applicationName }}
                 </h3>
                 <p class="mt-1 text-xs text-muted">
                   {{ allocation.applicationName }} · {{ allocation.clusterName }}
@@ -611,8 +637,8 @@ function statusTone(clusterStatus: ClusterStatus) {
                 <dd class="mt-1 truncate font-mono text-ink">{{ allocation.roleName }}</dd>
               </div>
               <div>
-                <dt class="text-muted">Application secret</dt>
-                <dd class="mt-1 font-mono text-ink">{{ allocation.environmentKey }}_FILE</dd>
+                <dt class="text-muted">Application secret key</dt>
+                <dd class="mt-1 font-mono text-ink">{{ allocation.environmentKey }}</dd>
               </div>
               <div>
                 <dt class="text-muted">Node</dt>
@@ -847,8 +873,8 @@ function statusTone(clusterStatus: ClusterStatus) {
 
     <UiDialog
       v-if="showProvisioning"
-      title="Provision service database"
-      description="Agent membuat database dan role terisolasi, lalu aplikasi menerima connection string sebagai secret file dan diredeploy."
+      title="Provision application database"
+      description="Agent membuat database dan role terisolasi, lalu memasang connection string sebagai secret aplikasi. Billing Service bersifat opsional."
       size="lg"
       :close-disabled="provisioning"
       @close="showProvisioning = false"
@@ -865,13 +891,14 @@ function statusTone(clusterStatus: ClusterStatus) {
           {{ actionError }}
         </p>
         <label class="block md:col-span-2">
-          <span class="mb-2 block text-xs font-semibold text-muted">Billing service</span>
+          <span class="mb-2 block text-xs font-semibold text-muted">
+            Billing service (opsional)
+          </span>
           <select
             v-model="provisionForm.serviceId"
-            required
             class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
           >
-            <option value="" disabled>Pilih service</option>
+            <option value="">Tanpa Service · internal/non-billable</option>
             <option
               v-for="service in overview?.eligibleServices"
               :key="service.id"
@@ -898,6 +925,23 @@ function statusTone(clusterStatus: ClusterStatus) {
             </option>
           </select>
         </label>
+        <div
+          v-if="selectedProvisionCluster && eligibleProvisionApplications.length === 0"
+          class="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 md:col-span-2"
+        >
+          <p class="text-sm font-semibold text-ink">Application kompatibel belum ada</p>
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Cluster berada di node {{ selectedProvisionCluster.nodeName }}. Deploy application pada
+            node tersebut untuk customer service yang dipilih, lalu kembali ke form ini untuk
+            memasang {{ provisionForm.environmentKey || 'DATABASE_URL' }}.
+          </p>
+          <NuxtLink
+            to="/resources"
+            class="mt-2 inline-block text-xs font-semibold text-brand hover:underline"
+          >
+            Buka Application Resources
+          </NuxtLink>
+        </div>
         <UiInput
           v-model="provisionForm.environmentKey"
           label="Environment key"

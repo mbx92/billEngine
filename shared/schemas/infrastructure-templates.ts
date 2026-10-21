@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { applicationSpecSchema } from './infrastructure'
+import { managedDatabaseBindingSchema } from './native-service-databases'
 
 export const TEMPLATE_CATEGORIES = ['application', 'database', 'cache'] as const
 export const TEMPLATE_ENGINES = ['generic', 'postgresql', 'mysql', 'redis'] as const
@@ -31,6 +32,11 @@ export const infrastructureTemplateDefinitionSchema = z.object({
 export const deployInfrastructureTemplateSchema = z
   .object({
     nodeId: z.string().uuid(),
+    networkName: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/, 'Nama Docker network tidak valid.')
+      .default('oc-private'),
     serviceId: z.string().uuid().optional(),
     name: z
       .string()
@@ -48,6 +54,7 @@ export const deployInfrastructureTemplateSchema = z
     classification: z.enum(['billable', 'internal', 'ignored']).default('internal'),
     exposure: z.enum(['domain', 'port']).default('domain'),
     hostPort: z.number().int().min(1).max(65535).optional(),
+    managedDatabase: managedDatabaseBindingSchema.optional(),
     values: z.record(z.string(), z.string().max(16_384)).default({}),
   })
   .superRefine((input, context) => {
@@ -73,65 +80,84 @@ const templateEnvironmentKeySchema = z
   .max(255)
   .regex(/^[A-Z_][A-Z0-9_]*$/, 'Environment key tidak valid.')
 
+const applicationTemplateFields = {
+  name: z.string().trim().min(1).max(160),
+  slug: z
+    .string()
+    .trim()
+    .min(1)
+    .max(160)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, 'Slug template tidak valid.'),
+  description: z.string().trim().max(1000).optional(),
+  cpuMilli: z.number().int().min(50).max(128_000),
+  memoryMiB: z.number().int().min(16).max(1_048_576),
+  containerPort: z.number().int().min(1).max(65535),
+  restartPolicy: z.enum(['no', 'on-failure', 'unless-stopped']).default('unless-stopped'),
+  healthcheckPath: z
+    .string()
+    .trim()
+    .max(512)
+    .regex(/^\/[A-Za-z0-9._~/%-]*$/, 'Healthcheck path tidak valid.')
+    .optional(),
+  environmentKeys: z.array(templateEnvironmentKeySchema).max(24).default([]),
+  secretKeys: z.array(templateEnvironmentKeySchema).max(24).default([]),
+  secretDelivery: z.enum(['files', 'environment']).default('files'),
+  volume: z
+    .object({
+      name: z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9_.-]{0,127}$/),
+      mountTarget: z
+        .string()
+        .trim()
+        .max(1024)
+        .regex(/^\/[A-Za-z0-9._/-]*$/, 'Mount target tidak valid.'),
+    })
+    .optional(),
+  trackLatest: z.boolean().default(true),
+}
+
+function validateApplicationTemplateKeys(
+  input: { environmentKeys: string[]; secretKeys: string[] },
+  context: z.RefinementCtx,
+) {
+  const allKeys = [...input.environmentKeys, ...input.secretKeys]
+  if (new Set(allKeys).size !== allKeys.length) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Environment dan secret key tidak boleh duplikat.',
+      path: ['environmentKeys'],
+    })
+  }
+  if (allKeys.length > 32) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Maksimal 32 environment dan secret key.',
+      path: ['environmentKeys'],
+    })
+  }
+}
+
 export const createApplicationTemplateSchema = z
   .object({
     applicationId: z.string().uuid(),
-    name: z.string().trim().min(1).max(160),
-    slug: z
-      .string()
-      .trim()
-      .min(1)
-      .max(160)
-      .regex(/^[a-z0-9][a-z0-9-]*$/, 'Slug template tidak valid.'),
-    description: z.string().trim().max(1000).optional(),
-    cpuMilli: z.number().int().min(50).max(128_000),
-    memoryMiB: z.number().int().min(16).max(1_048_576),
-    containerPort: z.number().int().min(1).max(65535),
-    restartPolicy: z.enum(['no', 'on-failure', 'unless-stopped']).default('unless-stopped'),
-    healthcheckPath: z
-      .string()
-      .trim()
-      .max(512)
-      .regex(/^\/[A-Za-z0-9._~/%-]*$/, 'Healthcheck path tidak valid.')
-      .optional(),
-    environmentKeys: z.array(templateEnvironmentKeySchema).max(24).default([]),
-    secretKeys: z.array(templateEnvironmentKeySchema).max(24).default([]),
-    secretDelivery: z.enum(['files', 'environment']).default('files'),
-    volume: z
-      .object({
-        name: z
-          .string()
-          .trim()
-          .regex(/^[a-z0-9][a-z0-9_.-]{0,127}$/),
-        mountTarget: z
-          .string()
-          .trim()
-          .max(1024)
-          .regex(/^\/[A-Za-z0-9._/-]*$/, 'Mount target tidak valid.'),
-      })
-      .optional(),
-    trackLatest: z.boolean().default(true),
+    ...applicationTemplateFields,
   })
-  .superRefine((input, context) => {
-    const allKeys = [...input.environmentKeys, ...input.secretKeys]
-    if (new Set(allKeys).size !== allKeys.length) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Environment dan secret key tidak boleh duplikat.',
-        path: ['environmentKeys'],
-      })
-    }
-    if (allKeys.length > 32) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Maksimal 32 environment dan secret key.',
-        path: ['environmentKeys'],
-      })
-    }
-  })
+  .superRefine(validateApplicationTemplateKeys)
+
+export const updateApplicationTemplateSchema = z
+  .object(applicationTemplateFields)
+  .superRefine(validateApplicationTemplateKeys)
+
+export const syncInfrastructureTemplateSchema = z.object({
+  values: z.record(z.string(), z.string().max(16_384)).default({}),
+})
 
 export type InfrastructureTemplateDefinition = z.infer<
   typeof infrastructureTemplateDefinitionSchema
 >
 export type DeployInfrastructureTemplateInput = z.infer<typeof deployInfrastructureTemplateSchema>
 export type CreateApplicationTemplateInput = z.infer<typeof createApplicationTemplateSchema>
+export type UpdateApplicationTemplateInput = z.infer<typeof updateApplicationTemplateSchema>
+export type SyncInfrastructureTemplateInput = z.infer<typeof syncInfrastructureTemplateSchema>

@@ -109,6 +109,17 @@ export interface InfrastructureNodeImage {
   containerCount: number
 }
 
+export interface InfrastructureNodeNetwork {
+  id: string
+  name: string
+  driver: string
+  scope: string
+  internal: boolean
+  attachable: boolean
+  managed: boolean
+  containerCount: number
+}
+
 export interface InfrastructureLabels {
   [key: string]: string
 }
@@ -292,6 +303,10 @@ export const infrastructureNodes = pgTable(
     capabilities: jsonb('capabilities').$type<InfrastructureCapabilities>().notNull().default([]),
     imageInventory: jsonb('image_inventory')
       .$type<InfrastructureNodeImage[]>()
+      .notNull()
+      .default([]),
+    networkInventory: jsonb('network_inventory')
+      .$type<InfrastructureNodeNetwork[]>()
       .notNull()
       .default([]),
     lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
@@ -491,6 +506,8 @@ export const infrastructureOperations = pgTable(
     completedAt: timestamp('completed_at', { withTimezone: true }),
     errorCode: varchar('error_code', { length: 64 }),
     errorMessage: text('error_message'),
+    logExcerpt: text('log_excerpt').notNull().default(''),
+    logUpdatedAt: timestamp('log_updated_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -759,6 +776,9 @@ export const resourceSecretReferences = pgTable(
   (table) => [
     uniqueIndex('resource_secret_references_key_uidx').on(table.resourceId, table.environmentKey),
     check('resource_secret_references_version_check', sql`${table.version} > 0`),
-    check('resource_secret_references_delivery_check', sql`${table.delivery} in ('file')`),
+    check(
+      'resource_secret_references_delivery_check',
+      sql`${table.delivery} in ('file', 'environment')`,
+    ),
   ],
 )

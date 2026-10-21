@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -29,6 +30,32 @@ type InputCommandRunner func(
 	args ...string,
 ) ([]byte, error)
 
+type OperationLogSink func(level string, message string)
+
+type operationLogContext struct {
+	sink    OperationLogSink
+	secrets []string
+}
+
+type operationLogContextKey struct{}
+
+func WithOperationLogSink(
+	ctx context.Context,
+	secrets []string,
+	sink OperationLogSink,
+) context.Context {
+	filteredSecrets := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		if len(secret) >= 4 {
+			filteredSecrets = append(filteredSecrets, secret)
+		}
+	}
+	return context.WithValue(ctx, operationLogContextKey{}, operationLogContext{
+		sink:    sink,
+		secrets: filteredSecrets,
+	})
+}
+
 type Error struct {
 	Code      string
 	Message   string
@@ -52,7 +79,8 @@ type applicationSpec struct {
 		PullPolicy string `json:"pullPolicy"`
 		NodeID     string `json:"nodeId"`
 	} `json:"source"`
-	Limits struct {
+	NetworkName string `json:"networkName"`
+	Limits      struct {
 		CPUMilli    int    `json:"cpuMilli"`
 		MemoryBytes string `json:"memoryBytes"`
 	} `json:"limits"`
@@ -101,6 +129,7 @@ type serviceDatabasePayload struct {
 	RoleName              string `json:"roleName"`
 	ConnectionLimit       int    `json:"connectionLimit"`
 	NetworkAlias          string `json:"networkAlias"`
+	NetworkName           string `json:"networkName"`
 }
 
 type databaseBackupPayload struct {
@@ -140,6 +169,11 @@ type imageDeletePayload struct {
 	ImageID string `json:"imageId"`
 }
 
+type containerExecPayload struct {
+	ResourceID string `json:"resourceId"`
+	Command    string `json:"command"`
+}
+
 type routePayload struct {
 	RouteID            string `json:"routeId"`
 	ResourceID         string `json:"resourceId"`
@@ -147,6 +181,7 @@ type routePayload struct {
 	TargetPort         int    `json:"targetPort"`
 	BillingGateEnabled bool   `json:"billingGateEnabled"`
 	BillingGateURL     string `json:"billingGateUrl"`
+	NetworkName        string `json:"networkName"`
 }
 
 const (
@@ -162,6 +197,7 @@ var (
 	gitRevisionPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$`)
 	imageBuildVersionPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	imageDigestPattern        = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	dockerNetworkNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 )
 
 const managedNetworkName = "oc-private"
@@ -261,6 +297,8 @@ func executeWithInput(
 		return buildApplicationImage(ctx, operation, registry, secretDirectory, run, runInput)
 	case "image.delete":
 		return deleteImage(ctx, operation, run)
+	case "container.exec":
+		return executeContainerCommand(ctx, operation, run)
 	case "application.start", "application.stop", "application.restart", "application.delete":
 		return lifecycle(ctx, operation, secretDirectory, run)
 	case "database.cluster.activate":
@@ -276,6 +314,60 @@ func executeWithInput(
 	default:
 		return nil, &Error{Code: "unsupported", Message: "agent action is not supported"}
 	}
+}
+
+func executeContainerCommand(
+	ctx context.Context,
+	operation controlplane.Operation,
+	run CommandRunner,
+) (map[string]any, *Error) {
+	var payload containerExecPayload
+	if err := json.Unmarshal(operation.Payload, &payload); err != nil {
+		return nil, &Error{Code: "invalid_payload", Message: "container exec payload is invalid"}
+	}
+	payload.Command = strings.TrimSpace(payload.Command)
+	if !uuidPattern.MatchString(payload.ResourceID) || payload.Command == "" || len(payload.Command) > 2000 || strings.ContainsRune(payload.Command, '\x00') {
+		return nil, invalidSpec("container exec command is invalid")
+	}
+
+	name := containerName(payload.ResourceID)
+	ownerOutput, err := run(ctx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.resource-id"}}`, name)
+	if err != nil {
+		return nil, &Error{Code: "container_not_found", Message: "managed application container was not found"}
+	}
+	if strings.TrimSpace(string(ownerOutput)) != payload.ResourceID {
+		return nil, &Error{Code: "container_ownership_mismatch", Message: "container ownership does not match the resource"}
+	}
+	stateOutput, err := run(ctx, "docker", "inspect", "--format", "{{.State.Running}}", name)
+	if err != nil || strings.TrimSpace(string(stateOutput)) != "true" {
+		return nil, &Error{Code: "container_not_running", Message: "application container is not running"}
+	}
+
+	commandContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	output, commandErr := run(commandContext, "docker", "exec", name, "sh", "-lc", payload.Command)
+	if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
+		return nil, &Error{Code: "container_exec_timeout", Message: "Docker sh command exceeded the 30 second timeout"}
+	}
+
+	exitCode := 0
+	if commandErr != nil {
+		var exitError *exec.ExitError
+		if !errors.As(commandErr, &exitError) {
+			return nil, &Error{Code: "container_exec_failed", Message: "Docker could not execute sh in the application container"}
+		}
+		exitCode = exitError.ExitCode()
+	}
+	const maxOutputBytes = 64 * 1024
+	truncated := len(output) > maxOutputBytes
+	if truncated {
+		output = output[:maxOutputBytes]
+	}
+	return map[string]any{
+		"output":    string(output),
+		"exitCode":  exitCode,
+		"truncated": truncated,
+	}, nil
 }
 
 func deleteImage(
@@ -850,6 +942,14 @@ func configureRoute(
 	if !filepath.IsAbs(secretDirectory) {
 		return nil, invalidSpec("agent data directory must be absolute")
 	}
+	networkName := deploymentNetworkName(payload.NetworkName)
+	if networkErr := ensureDeploymentNetwork(ctx, networkName, run); networkErr != nil {
+		return nil, networkErr
+	}
+	connectOutput, connectErr := run(ctx, "docker", "network", "connect", networkName, gatewayContainerName)
+	if connectErr != nil && !strings.Contains(strings.ToLower(string(connectOutput)), "already exists") {
+		return nil, commandError("gateway_network_failed", connectErr, true)
+	}
 
 	routeName := "route-" + strings.ReplaceAll(payload.RouteID, "-", "")
 	middlewares := []string{}
@@ -1086,7 +1186,8 @@ func ensureServiceDatabase(
 		return nil, invalidSpec("invalid PostgreSQL database or role identifier")
 	}
 	if payload.ConnectionLimit < 1 || payload.ConnectionLimit > 10_000 ||
-		!slugPattern.MatchString(payload.NetworkAlias) {
+		!slugPattern.MatchString(payload.NetworkAlias) ||
+		!dockerNetworkNamePattern.MatchString(deploymentNetworkName(payload.NetworkName)) {
 		return nil, invalidSpec("invalid database connection policy")
 	}
 	password := secrets["DATABASE_PASSWORD"]
@@ -1097,30 +1198,54 @@ func ensureServiceDatabase(
 	}
 
 	name := containerName(payload.ResourceID)
-	owner, err := run(ctx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.resource-id"}}`, name)
+	inspectCtx, cancelInspect := context.WithTimeout(ctx, 30*time.Second)
+	owner, err := run(inspectCtx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.resource-id"}}`, name)
+	cancelInspect()
+	if errors.Is(inspectCtx.Err(), context.DeadlineExceeded) {
+		return nil, &Error{
+			Code: "database_inspect_timeout", Message: "PostgreSQL container inspection timed out", Retryable: true,
+		}
+	}
 	if err != nil || strings.TrimSpace(string(owner)) != payload.ResourceID {
 		return nil, &Error{Code: "resource_not_found", Message: "owned PostgreSQL container was not found"}
 	}
-	if networkErr := ensureManagedNetwork(ctx, run); networkErr != nil {
+	networkName := deploymentNetworkName(payload.NetworkName)
+	networkCtx, cancelNetwork := context.WithTimeout(ctx, 30*time.Second)
+	networkErr := ensureDeploymentNetwork(networkCtx, networkName, run)
+	cancelNetwork()
+	if errors.Is(networkCtx.Err(), context.DeadlineExceeded) {
+		return nil, &Error{
+			Code: "database_network_timeout", Message: "managed Docker network preparation timed out", Retryable: true,
+		}
+	}
+	if networkErr != nil {
 		return nil, networkErr
 	}
+	connectCtx, cancelConnect := context.WithTimeout(ctx, 30*time.Second)
 	connectOutput, connectErr := run(
-		ctx,
+		connectCtx,
 		"docker",
 		"network",
 		"connect",
 		"--alias",
 		payload.NetworkAlias,
-		managedNetworkName,
+		networkName,
 		name,
 	)
+	cancelConnect()
+	if errors.Is(connectCtx.Err(), context.DeadlineExceeded) {
+		return nil, &Error{
+			Code: "database_network_timeout", Message: "PostgreSQL network connection timed out", Retryable: true,
+		}
+	}
 	if connectErr != nil && !strings.Contains(strings.ToLower(string(connectOutput)), "already exists") {
 		return nil, commandError("database_network_failed", connectErr, true)
 	}
 
 	sql := serviceDatabaseSQL(payload, password)
+	provisionCtx, cancelProvision := context.WithTimeout(ctx, 2*time.Minute)
 	if _, err := runInput(
-		ctx,
+		provisionCtx,
 		[]byte(sql),
 		"docker",
 		"exec",
@@ -1135,8 +1260,15 @@ func ensureServiceDatabase(
 		"ON_ERROR_STOP=1",
 		"--no-psqlrc",
 	); err != nil {
+		cancelProvision()
+		if errors.Is(provisionCtx.Err(), context.DeadlineExceeded) {
+			return nil, &Error{
+				Code: "database_provision_timeout", Message: "PostgreSQL provisioning timed out", Retryable: true,
+			}
+		}
 		return nil, commandError("database_provision_failed", err, true)
 	}
+	cancelProvision()
 	return map[string]any{
 		"allocationId": payload.AllocationID,
 		"databaseName": payload.DatabaseName,
@@ -1251,6 +1383,10 @@ func ensureApplication(
 	if payload.Spec.Source.PullPolicy != "" && payload.Spec.Source.PullPolicy != "always" && payload.Spec.Source.PullPolicy != "never" {
 		return nil, invalidSpec("unsupported image pull policy")
 	}
+	payload.Spec.NetworkName = deploymentNetworkName(payload.Spec.NetworkName)
+	if !dockerNetworkNamePattern.MatchString(payload.Spec.NetworkName) {
+		return nil, invalidSpec("invalid Docker network name")
+	}
 	local := payload.Spec.Source.PullPolicy == "never"
 	if local && (!imageDigestPattern.MatchString(payload.Spec.Source.Reference) || !uuidPattern.MatchString(payload.Spec.Source.NodeID)) {
 		return nil, invalidSpec("local image requires an immutable image ID and origin node")
@@ -1288,7 +1424,7 @@ func ensureApplication(
 	if err != nil {
 		return nil, invalidSpec(err.Error())
 	}
-	if networkErr := ensureManagedNetwork(ctx, run); networkErr != nil {
+	if networkErr := ensureDeploymentNetwork(ctx, payload.Spec.NetworkName, run); networkErr != nil {
 		return nil, networkErr
 	}
 
@@ -1343,7 +1479,9 @@ func ensureApplication(
 	if _, err := run(ctx, "docker", "start", containerName); err != nil {
 		return nil, commandError("container_start_failed", err, true)
 	}
-	result := map[string]any{"externalId": containerID, "containerName": containerName}
+	result := map[string]any{
+		"externalId": containerID, "containerName": containerName, "networkName": payload.Spec.NetworkName,
+	}
 	if local {
 		result["imageDigest"] = payload.Spec.Source.Reference
 	}
@@ -1424,8 +1562,18 @@ func lifecycle(
 	}
 	name := containerName(payload.ResourceID)
 	owner, err := run(ctx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.resource-id"}}`, name)
-	if err != nil || strings.TrimSpace(string(owner)) != payload.ResourceID {
-		return nil, &Error{Code: "resource_not_found", Message: "owned container was not found"}
+	if err != nil {
+		if operation.Action == "application.delete" && dockerObjectNotFound(owner, err) {
+			_ = os.RemoveAll(filepath.Join(secretDirectory, payload.ResourceID))
+			return map[string]any{"externalId": name, "alreadyAbsent": true}, nil
+		}
+		return nil, commandError("lifecycle_inspect_failed", err, true)
+	}
+	if strings.TrimSpace(string(owner)) != payload.ResourceID {
+		return nil, &Error{
+			Code:    "resource_ownership_mismatch",
+			Message: "container ownership label does not match the requested resource",
+		}
 	}
 
 	var args []string
@@ -1448,6 +1596,15 @@ func lifecycle(
 	return map[string]any{"externalId": name}, nil
 }
 
+func dockerObjectNotFound(output []byte, err error) bool {
+	message := strings.ToLower(strings.TrimSpace(string(output)))
+	if err != nil {
+		message += " " + strings.ToLower(err.Error())
+	}
+	return strings.Contains(message, "no such object") ||
+		strings.Contains(message, "no such container")
+}
+
 func createArgs(payload applicationPayload, secretFiles map[string]string, secretEnvironmentFile string) ([]string, error) {
 	if payload.Spec.Limits.CPUMilli < 50 {
 		return nil, errors.New("CPU limit is below the minimum")
@@ -1459,12 +1616,13 @@ func createArgs(payload applicationPayload, secretFiles map[string]string, secre
 	name := containerName(payload.ResourceID)
 	args := []string{
 		"create", "--name", name,
-		"--network", managedNetworkName,
+		"--network", payload.Spec.NetworkName,
 		"--label", "oc.managed=true",
 		"--label", "oc.resource-id=" + payload.ResourceID,
 		"--label", "oc.revision=" + strconv.Itoa(payload.Revision),
 		"--label", "oc.application-name=" + payload.Name,
 		"--label", "oc.kind=" + payload.Kind,
+		"--label", "oc.network-name=" + payload.Spec.NetworkName,
 		"--restart", payload.Spec.RestartPolicy,
 		"--cpus", strconv.FormatFloat(float64(payload.Spec.Limits.CPUMilli)/1000, 'f', 3, 64),
 		"--memory", payload.Spec.Limits.MemoryBytes,
@@ -1634,10 +1792,25 @@ func commandError(code string, err error, retryable bool) *Error {
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	startedAt := time.Now()
+	summary := commandSummary(name, args)
+	emitOperationLog(ctx, "info", "Mulai: "+summary)
+	command := exec.CommandContext(ctx, name, args...)
+	outputBuffer := &cappedBuffer{limit: 8 * 1024 * 1024}
+	command.Stdout = outputBuffer
+	command.Stderr = outputBuffer
+	err := command.Run()
+	output := outputBuffer.Bytes()
 	if err != nil {
-		return output, fmt.Errorf("%w: %s", err, tailText(string(output), 2000))
+		detail := tailText(redactOperationLog(ctx, string(output)), 3000)
+		message := fmt.Sprintf("Gagal setelah %s: %s", time.Since(startedAt).Round(time.Millisecond), summary)
+		if detail != "" {
+			message += " | " + strings.Join(strings.Fields(detail), " ")
+		}
+		emitOperationLog(ctx, "error", message)
+		return output, fmt.Errorf("%w: %s", err, tailText(redactOperationLog(ctx, string(output)), 2000))
 	}
+	emitOperationLog(ctx, "info", fmt.Sprintf("Selesai dalam %s: %s", time.Since(startedAt).Round(time.Millisecond), summary))
 	return output, nil
 }
 
@@ -1647,13 +1820,116 @@ func runCommandWithInput(
 	name string,
 	args ...string,
 ) ([]byte, error) {
+	startedAt := time.Now()
+	summary := commandSummary(name, args)
+	emitOperationLog(ctx, "info", "Mulai: "+summary)
 	command := exec.CommandContext(ctx, name, args...)
 	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	outputBuffer := &cappedBuffer{limit: 8 * 1024 * 1024}
+	command.Stdout = outputBuffer
+	command.Stderr = outputBuffer
+	err := command.Run()
+	output := outputBuffer.Bytes()
 	if err != nil {
-		return output, fmt.Errorf("%w: %s", err, tailText(string(output), 2000))
+		detail := tailText(redactOperationLog(ctx, string(output)), 3000)
+		message := fmt.Sprintf("Gagal setelah %s: %s", time.Since(startedAt).Round(time.Millisecond), summary)
+		if detail != "" {
+			message += " | " + strings.Join(strings.Fields(detail), " ")
+		}
+		emitOperationLog(ctx, "error", message)
+		return output, fmt.Errorf("%w: %s", err, tailText(redactOperationLog(ctx, string(output)), 2000))
 	}
+	emitOperationLog(ctx, "info", fmt.Sprintf("Selesai dalam %s: %s", time.Since(startedAt).Round(time.Millisecond), summary))
 	return output, nil
+}
+
+func emitOperationLog(ctx context.Context, level string, message string) {
+	logContext, ok := ctx.Value(operationLogContextKey{}).(operationLogContext)
+	if !ok || logContext.sink == nil {
+		return
+	}
+	logContext.sink(level, redactText(message, logContext.secrets))
+}
+
+func redactOperationLog(ctx context.Context, message string) string {
+	logContext, ok := ctx.Value(operationLogContextKey{}).(operationLogContext)
+	if !ok {
+		return message
+	}
+	return redactText(message, logContext.secrets)
+}
+
+func redactText(message string, secrets []string) string {
+	for _, secret := range secrets {
+		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+	}
+	return message
+}
+
+func commandSummary(name string, args []string) string {
+	if len(args) == 0 {
+		return name
+	}
+	if name != "docker" {
+		return name + " " + args[0]
+	}
+	summary := "docker " + args[0]
+	switch args[0] {
+	case "network":
+		if len(args) > 1 {
+			summary += " " + args[1]
+		}
+		if len(args) > 2 {
+			summary += " " + args[len(args)-1]
+		}
+	case "image", "container", "volume", "buildx":
+		if len(args) > 1 {
+			summary += " " + args[1]
+		}
+	case "inspect", "pull", "start", "rm", "logs", "kill":
+		summary += " " + args[len(args)-1]
+	case "exec":
+		values := make([]string, 0, 2)
+		for _, argument := range args[1:] {
+			if strings.HasPrefix(argument, "-") {
+				continue
+			}
+			values = append(values, argument)
+			if len(values) == 2 {
+				break
+			}
+		}
+		if len(values) > 0 {
+			summary += " " + strings.Join(values, " ")
+		} else {
+			summary += " container command"
+		}
+	case "create":
+		for index, argument := range args {
+			if argument == "--name" && index+1 < len(args) {
+				summary += " --name " + args[index+1]
+				break
+			}
+		}
+	}
+	return summary
+}
+
+type cappedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (buffer *cappedBuffer) Write(value []byte) (int, error) {
+	written := len(value)
+	remaining := buffer.limit - buffer.Len()
+	if remaining > 0 {
+		if len(value) > remaining {
+			value = value[:remaining]
+		}
+		_, _ = buffer.Buffer.Write(value)
+	}
+	return written, nil
 }
 
 func ensureManagedNetwork(ctx context.Context, run CommandRunner) *Error {
@@ -1672,6 +1948,43 @@ func ensureManagedNetwork(ctx context.Context, run CommandRunner) *Error {
 		managedNetworkName,
 	); err != nil {
 		return commandError("network_create_failed", err, true)
+	}
+	return nil
+}
+
+func deploymentNetworkName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return managedNetworkName
+	}
+	return value
+}
+
+func ensureDeploymentNetwork(ctx context.Context, networkName string, run CommandRunner) *Error {
+	if !dockerNetworkNamePattern.MatchString(networkName) {
+		return invalidSpec("invalid Docker network name")
+	}
+	if networkName == managedNetworkName {
+		return ensureManagedNetwork(ctx, run)
+	}
+	if networkName == "bridge" || networkName == "host" || networkName == "none" {
+		return invalidSpec("Docker built-in networks cannot be used for application deployment")
+	}
+	output, err := run(
+		ctx,
+		"docker",
+		"network",
+		"inspect",
+		"--format",
+		"{{.Driver}}\t{{.Scope}}",
+		networkName,
+	)
+	if err != nil {
+		return &Error{Code: "network_not_found", Message: "selected Docker network was not found"}
+	}
+	parts := strings.Split(strings.TrimSpace(string(output)), "\t")
+	if len(parts) != 2 || parts[0] != "bridge" || parts[1] != "local" {
+		return invalidSpec("selected Docker network must use the local bridge driver")
 	}
 	return nil
 }

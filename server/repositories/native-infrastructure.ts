@@ -1,15 +1,19 @@
 import { randomUUID } from 'node:crypto'
-import { and, asc, desc, eq, inArray, isNull, lt, lte } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, ne, sql } from 'drizzle-orm'
 import type {
   CreateApplicationResourceInput,
+  OperationLogAppendInput,
   OperationStatusUpdateInput,
   UpdateApplicationResourceInput,
 } from '../../shared/schemas/infrastructure'
 import { useDatabase, type Database } from '../database/client'
+import { DomainError } from '../utils/errors'
+import { normalizeOperationError } from '../utils/operation-error'
 import {
   validateLocalImageNode,
   validateSecretDelivery,
 } from '../services/infrastructure/local-image'
+import { validateDeploymentNetwork } from '../services/infrastructure/docker-network'
 import {
   applicationBuilds,
   auditLogs,
@@ -25,7 +29,10 @@ import {
   resourceRoutes,
   resourceSecretReferences,
   resourceVolumes,
+  serviceResources,
+  services,
 } from '../database/schema'
+import { createDeploymentDatabase } from './deployment-database'
 
 export interface CreateApplicationRecord {
   resourceId: string
@@ -44,6 +51,14 @@ export interface CreateLifecycleOperationRecord {
     | 'application.restart'
     | 'application.redeploy'
     | 'application.delete'
+  idempotencyKey: string
+  actorUserId: string
+  expiresAt: Date
+}
+
+export interface CreateContainerExecOperationRecord {
+  resourceId: string
+  command: string
   idempotencyKey: string
   actorUserId: string
   expiresAt: Date
@@ -79,7 +94,12 @@ export class NativeInfrastructureRepository {
       if (existing) return { operation: existing, replayed: true }
 
       const [node] = await transaction
-        .select({ id: infrastructureNodes.id, capabilities: infrastructureNodes.capabilities })
+        .select({
+          id: infrastructureNodes.id,
+          capabilities: infrastructureNodes.capabilities,
+          imageInventory: infrastructureNodes.imageInventory,
+          networkInventory: infrastructureNodes.networkInventory,
+        })
         .from(infrastructureNodes)
         .where(
           and(
@@ -93,20 +113,46 @@ export class NativeInfrastructureRepository {
         .limit(1)
         .for('update')
       if (!node) return null
-      validateLocalImageNode(input.input.spec.source, node.id, node.capabilities)
+      validateLocalImageNode(
+        input.input.spec.source,
+        node.id,
+        node.capabilities,
+        node.imageInventory,
+      )
       validateSecretDelivery(input.input.spec, node.capabilities)
+      validateDeploymentNetwork(
+        input.input.spec.networkName,
+        node.capabilities,
+        node.networkInventory,
+      )
+
+      const billingServiceId =
+        input.input.classification === 'billable' ? input.input.serviceId : undefined
+      const [service] = billingServiceId
+        ? await transaction
+            .select({ id: services.id, customerId: services.customerId })
+            .from(services)
+            .where(and(eq(services.id, billingServiceId), ne(services.status, 'cancelled')))
+            .limit(1)
+        : []
+      if (billingServiceId && !service) {
+        throw DomainError.validation('Service tidak ditemukan atau sudah dibatalkan.')
+      }
+      if (input.input.customerId && service && input.input.customerId !== service.customerId) {
+        throw DomainError.validation('Customer resource berbeda dengan customer Service.')
+      }
 
       const [resource] = await transaction
         .insert(infrastructureResources)
         .values({
           id: input.resourceId,
           nodeId: input.input.nodeId,
-          customerId: input.input.customerId,
+          customerId: service?.customerId ?? input.input.customerId,
           externalId: input.externalId,
           kind: 'application',
           name: input.input.name,
           classification: input.input.classification,
-          desiredState: 'running',
+          desiredState: input.input.managedDatabase ? 'pending' : 'running',
           desiredRevision: 1,
           imageReference:
             input.input.spec.source.type === 'image' ? input.input.spec.source.reference : null,
@@ -115,10 +161,26 @@ export class NativeInfrastructureRepository {
             'oc.managed': 'true',
             'oc.resource-id': input.resourceId,
             'oc.revision': '1',
+            ...(input.input.managedDatabase ? { 'oc.deployment-gate': 'database' } : {}),
           },
         })
         .returning()
       if (!resource) throw new Error('Failed to create infrastructure resource.')
+
+      if (service) {
+        await transaction.insert(serviceResources).values({
+          serviceId: service.id,
+          resourceId: resource.id,
+          createdBy: input.actorUserId,
+        })
+      }
+      await transaction
+        .update(resourceRoutes)
+        .set({
+          billingGateEnabled: input.input.classification === 'billable',
+          updatedAt: new Date(),
+        })
+        .where(eq(resourceRoutes.resourceId, resource.id))
 
       for (const volume of input.input.spec.volumes) {
         await transaction.insert(resourceVolumes).values({
@@ -132,24 +194,40 @@ export class NativeInfrastructureRepository {
         })
       }
 
-      const [operation] = await transaction
-        .insert(infrastructureOperations)
-        .values({
-          nodeId: input.input.nodeId,
-          resourceId: resource.id,
-          actorUserId: input.actorUserId,
-          idempotencyKey: input.idempotencyKey,
-          action: 'application.ensure',
-          expectedResourceRevision: 1,
-          expiresAt: input.expiresAt,
-          payload: {
-            resourceId: resource.id,
-            name: resource.name,
-            revision: 1,
-            spec: input.input.spec,
-          },
-        })
-        .returning()
+      const operation = input.input.managedDatabase
+        ? (
+            await createDeploymentDatabase(transaction, {
+              clusterId: input.input.managedDatabase.clusterId,
+              applicationResourceId: resource.id,
+              applicationNodeId: input.input.nodeId,
+              serviceId: service?.id,
+              environmentKey: input.input.managedDatabase.environmentKey,
+              networkName: input.input.spec.networkName,
+              actorUserId: input.actorUserId,
+              idempotencyKey: input.idempotencyKey,
+              expiresAt: input.expiresAt,
+            })
+          ).operation
+        : (
+            await transaction
+              .insert(infrastructureOperations)
+              .values({
+                nodeId: input.input.nodeId,
+                resourceId: resource.id,
+                actorUserId: input.actorUserId,
+                idempotencyKey: input.idempotencyKey,
+                action: 'application.ensure',
+                expectedResourceRevision: 1,
+                expiresAt: input.expiresAt,
+                payload: {
+                  resourceId: resource.id,
+                  name: resource.name,
+                  revision: 1,
+                  spec: input.input.spec,
+                },
+              })
+              .returning()
+          )[0]
       if (!operation) throw new Error('Failed to create infrastructure operation.')
 
       await transaction.insert(auditLogs).values({
@@ -161,6 +239,8 @@ export class NativeInfrastructureRepository {
           nodeId: input.input.nodeId,
           operationId: operation.id,
           correlationId: operation.correlationId,
+          serviceId: service?.id ?? null,
+          managedDatabaseClusterId: input.input.managedDatabase?.clusterId ?? null,
         },
       })
       return { operation, resource, replayed: false }
@@ -174,8 +254,12 @@ export class NativeInfrastructureRepository {
         nodeId: infrastructureResources.nodeId,
         nodeName: infrastructureNodes.name,
         customerId: infrastructureResources.customerId,
+        serviceId: serviceResources.serviceId,
         templateId: infrastructureResources.templateId,
         templateName: infrastructureTemplates.name,
+        templateVersion: infrastructureResources.templateVersion,
+        templateCurrentVersion: infrastructureTemplates.version,
+        templateDefinition: infrastructureTemplates.definition,
         applicationId: infrastructureResources.applicationId,
         releaseId: infrastructureResources.releaseId,
         releasePolicy: infrastructureResources.releasePolicy,
@@ -204,6 +288,7 @@ export class NativeInfrastructureRepository {
         eq(infrastructureTemplates.id, infrastructureResources.templateId),
       )
       .leftJoin(resourceRoutes, eq(resourceRoutes.resourceId, infrastructureResources.id))
+      .leftJoin(serviceResources, eq(serviceResources.resourceId, infrastructureResources.id))
       .where(isNull(infrastructureResources.deletedAt))
       .orderBy(asc(infrastructureResources.name))
 
@@ -236,6 +321,8 @@ export class NativeInfrastructureRepository {
         completedAt: infrastructureOperations.completedAt,
         errorCode: infrastructureOperations.errorCode,
         errorMessage: infrastructureOperations.errorMessage,
+        logExcerpt: infrastructureOperations.logExcerpt,
+        logUpdatedAt: infrastructureOperations.logUpdatedAt,
         createdAt: infrastructureOperations.createdAt,
         updatedAt: infrastructureOperations.updatedAt,
       })
@@ -250,13 +337,175 @@ export class NativeInfrastructureRepository {
 
     return rows.map((row) => ({
       ...row,
+      normalizedError: normalizeOperationError(row),
       nextAttemptAt: row.nextAttemptAt.toISOString(),
       expiresAt: row.expiresAt.toISOString(),
       startedAt: row.startedAt?.toISOString() ?? null,
       completedAt: row.completedAt?.toISOString() ?? null,
+      logUpdatedAt: row.logUpdatedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     }))
+  }
+
+  async appendOperationLogs(
+    nodeId: string,
+    operationId: string,
+    input: OperationLogAppendInput,
+  ) {
+    const now = new Date()
+    const excerpt = (
+      input.entries
+        .map((entry) => {
+          const level = entry.level.toUpperCase().padEnd(7)
+          return `[${entry.occurredAt}] ${level} ${entry.message.replace(/[\r\n]+/g, ' ')}`
+        })
+        .join('\n') + '\n'
+    ).slice(-64_000)
+    const [operation] = await this.database
+      .update(infrastructureOperations)
+      .set({
+        logExcerpt: sql<string>`right(coalesce(${infrastructureOperations.logExcerpt}, ''), 65536 - length(${excerpt})) || ${excerpt}`,
+        logUpdatedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(infrastructureOperations.id, operationId),
+          eq(infrastructureOperations.nodeId, nodeId),
+        ),
+      )
+      .returning({
+        id: infrastructureOperations.id,
+        logUpdatedAt: infrastructureOperations.logUpdatedAt,
+      })
+    return operation ?? null
+  }
+
+  async forceStopOperation(operationId: string, actorUserId: string) {
+    const now = new Date()
+    return this.database.transaction(async (transaction) => {
+      const [operation] = await transaction
+        .select()
+        .from(infrastructureOperations)
+        .where(eq(infrastructureOperations.id, operationId))
+        .limit(1)
+        .for('update')
+      if (!operation) return { reason: 'not_found' as const }
+      if (!['queued', 'dispatched', 'running'].includes(operation.status)) {
+        return { reason: 'not_active' as const, operation }
+      }
+
+      const [cancelled] = await transaction
+        .update(infrastructureOperations)
+        .set({
+          status: 'cancelled',
+          completedAt: now,
+          errorCode: 'force_stopped',
+          errorMessage: 'Operation dihentikan secara paksa oleh administrator.',
+          updatedAt: now,
+        })
+        .where(eq(infrastructureOperations.id, operation.id))
+        .returning()
+      if (!cancelled) throw new Error('Failed to force stop infrastructure operation.')
+
+      if (operation.action === 'application.build') {
+        await transaction
+          .update(applicationBuilds)
+          .set({
+            status: 'cancelled',
+            errorCode: 'force_stopped',
+            errorMessage: 'Build dihentikan secara paksa oleh administrator.',
+            completedAt: now,
+            updatedAt: now,
+          })
+          .where(eq(applicationBuilds.operationId, operation.id))
+      }
+
+      if (operation.action.startsWith('application.') && operation.resourceId) {
+        const [resource] = await transaction
+          .select({ observedState: infrastructureResources.observedState })
+          .from(infrastructureResources)
+          .where(eq(infrastructureResources.id, operation.resourceId))
+          .limit(1)
+        if (resource) {
+          const desiredState = ['running', 'stopped', 'degraded'].includes(resource.observedState)
+            ? resource.observedState
+            : 'failed'
+          await transaction
+            .update(infrastructureResources)
+            .set({ desiredState, updatedAt: now })
+            .where(eq(infrastructureResources.id, operation.resourceId))
+        }
+      }
+
+      if (operation.action === 'database.cluster.activate') {
+        await transaction
+          .update(infrastructureDatabaseClusters)
+          .set({
+            status: 'offline',
+            isActive: false,
+            lastError: 'Aktivasi dihentikan secara paksa oleh administrator.',
+            updatedAt: now,
+          })
+          .where(eq(infrastructureDatabaseClusters.activationOperationId, operation.id))
+      }
+
+      if (operation.action === 'database.service.ensure') {
+        const [allocation] = await transaction
+          .update(infrastructureServiceDatabases)
+          .set({
+            status: 'failed',
+            lastError: 'Provisioning dihentikan secara paksa oleh administrator.',
+            updatedAt: now,
+          })
+          .where(eq(infrastructureServiceDatabases.provisioningOperationId, operation.id))
+          .returning({
+            id: infrastructureServiceDatabases.id,
+            applicationResourceId: infrastructureServiceDatabases.applicationResourceId,
+          })
+        if (allocation) {
+          await transaction
+            .update(infrastructureResources)
+            .set({ desiredState: 'failed', updatedAt: now })
+            .where(eq(infrastructureResources.id, allocation.applicationResourceId))
+        }
+      }
+
+      if (['route.configure', 'route.delete'].includes(operation.action)) {
+        const routeId =
+          typeof operation.payload.routeId === 'string' ? operation.payload.routeId : null
+        if (routeId) {
+          await transaction
+            .update(resourceRoutes)
+            .set({
+              desiredStatus: 'failed',
+              observedStatus: 'failed',
+              lastError: 'Konfigurasi route dihentikan secara paksa oleh administrator.',
+              lastObservedAt: now,
+              updatedAt: now,
+            })
+            .where(eq(resourceRoutes.id, routeId))
+        }
+      }
+
+      await transaction.insert(auditLogs).values({
+        actorUserId,
+        action: 'infrastructure.operation.force-stopped',
+        entityType: 'infrastructure_operation',
+        entityId: operation.id,
+        beforeData: { status: operation.status },
+        afterData: { status: 'cancelled' },
+        metadata: {
+          nodeId: operation.nodeId,
+          resourceId: operation.resourceId,
+          operationAction: operation.action,
+          correlationId: operation.correlationId,
+        },
+      })
+
+      return { operation: cancelled, previousStatus: operation.status }
+    })
   }
 
   async updateApplication(input: UpdateApplicationRecord) {
@@ -282,18 +531,55 @@ export class NativeInfrastructureRepository {
         .for('update')
       if (!resource) return null
 
+      const currentNetworkName =
+        typeof resource.desiredSpec.networkName === 'string'
+          ? resource.desiredSpec.networkName
+          : 'oc-private'
+      if (input.input.spec.networkName !== currentNetworkName) {
+        throw DomainError.validation(
+          'Docker network resource yang sudah dibuat tidak dapat dipindah. Buat deployment baru untuk mengganti network.',
+        )
+      }
+
       const [node] = await transaction
-        .select({ capabilities: infrastructureNodes.capabilities })
+        .select({
+          capabilities: infrastructureNodes.capabilities,
+          imageInventory: infrastructureNodes.imageInventory,
+          networkInventory: infrastructureNodes.networkInventory,
+        })
         .from(infrastructureNodes)
         .where(eq(infrastructureNodes.id, resource.nodeId))
         .limit(1)
-      validateLocalImageNode(input.input.spec.source, resource.nodeId, node?.capabilities ?? [])
+      validateLocalImageNode(
+        input.input.spec.source,
+        resource.nodeId,
+        node?.capabilities ?? [],
+        node?.imageInventory,
+      )
       validateSecretDelivery(input.input.spec, node?.capabilities ?? [])
+      validateDeploymentNetwork(
+        input.input.spec.networkName,
+        node?.capabilities ?? [],
+        node?.networkInventory ?? [],
+      )
+      const billingServiceId =
+        input.input.classification === 'billable' ? input.input.serviceId : undefined
+      const [service] = billingServiceId
+        ? await transaction
+            .select({ id: services.id, customerId: services.customerId })
+            .from(services)
+            .where(and(eq(services.id, billingServiceId), ne(services.status, 'cancelled')))
+            .limit(1)
+        : []
+      if (billingServiceId && !service) {
+        throw DomainError.validation('Service tidak ditemukan atau sudah dibatalkan.')
+      }
       const revision = resource.desiredRevision + 1
       const [updatedResource] = await transaction
         .update(infrastructureResources)
         .set({
           name: input.input.name,
+          customerId: service?.customerId ?? resource.customerId,
           classification: input.input.classification,
           desiredState: 'running',
           desiredRevision: revision,
@@ -305,6 +591,17 @@ export class NativeInfrastructureRepository {
         .where(eq(infrastructureResources.id, resource.id))
         .returning()
       if (!updatedResource) throw new Error('Failed to update infrastructure resource.')
+
+      await transaction
+        .delete(serviceResources)
+        .where(eq(serviceResources.resourceId, resource.id))
+      if (service) {
+        await transaction.insert(serviceResources).values({
+          serviceId: service.id,
+          resourceId: resource.id,
+          createdBy: input.actorUserId,
+        })
+      }
 
       for (const volume of input.input.spec.volumes) {
         const externalId = `oc-${resource.id}-${volume.name}`
@@ -356,7 +653,12 @@ export class NativeInfrastructureRepository {
         action: 'infrastructure.application.updated',
         entityType: 'infrastructure_resource',
         entityId: resource.id,
-        metadata: { operationId: operation.id, correlationId: operation.correlationId, revision },
+        metadata: {
+          operationId: operation.id,
+          correlationId: operation.correlationId,
+          revision,
+          serviceId: service?.id ?? null,
+        },
       })
       return { operation, resource: updatedResource, replayed: false }
     })
@@ -390,7 +692,10 @@ export class NativeInfrastructureRepository {
           : input.action === 'application.delete'
             ? 'deleting'
             : 'running'
-      const revision = resource.desiredRevision + 1
+      const revision =
+        input.action === 'application.redeploy' || input.action === 'application.delete'
+          ? resource.desiredRevision + 1
+          : resource.desiredRevision
       await transaction
         .update(infrastructureResources)
         .set({ desiredState, desiredRevision: revision, updatedAt: new Date() })
@@ -431,6 +736,113 @@ export class NativeInfrastructureRepository {
     })
   }
 
+  async createContainerExecOperation(input: CreateContainerExecOperationRecord) {
+    return this.database.transaction(async (transaction) => {
+      const [existing] = await transaction
+        .select()
+        .from(infrastructureOperations)
+        .where(eq(infrastructureOperations.idempotencyKey, input.idempotencyKey))
+        .limit(1)
+      if (existing) return { operation: existing, replayed: true }
+
+      const [target] = await transaction
+        .select({
+          resourceId: infrastructureResources.id,
+          resourceName: infrastructureResources.name,
+          nodeId: infrastructureResources.nodeId,
+          observedState: infrastructureResources.observedState,
+          desiredRevision: infrastructureResources.desiredRevision,
+          observedRevision: infrastructureResources.observedRevision,
+          nodeStatus: infrastructureNodes.status,
+          nodeActive: infrastructureNodes.isActive,
+          nodeDraining: infrastructureNodes.isDraining,
+          nodeLastHeartbeatAt: infrastructureNodes.lastHeartbeatAt,
+          capabilities: infrastructureNodes.capabilities,
+        })
+        .from(infrastructureResources)
+        .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
+        .where(
+          and(
+            eq(infrastructureResources.id, input.resourceId),
+            eq(infrastructureResources.kind, 'application'),
+            isNull(infrastructureResources.deletedAt),
+          ),
+        )
+        .limit(1)
+      if (!target) return { reason: 'not_found' as const }
+      if (
+        target.observedState !== 'running' ||
+        target.desiredRevision !== target.observedRevision
+      ) {
+        return { reason: 'not_running' as const }
+      }
+      if (
+        !target.nodeActive ||
+        target.nodeDraining ||
+        !['online', 'degraded'].includes(target.nodeStatus) ||
+        !target.nodeLastHeartbeatAt ||
+        target.nodeLastHeartbeatAt.getTime() < Date.now() - 90_000
+      ) {
+        return { reason: 'node_unavailable' as const }
+      }
+      if (!target.capabilities.includes('container-exec')) {
+        return { reason: 'unsupported' as const }
+      }
+
+      const [operation] = await transaction
+        .insert(infrastructureOperations)
+        .values({
+          nodeId: target.nodeId,
+          resourceId: target.resourceId,
+          actorUserId: input.actorUserId,
+          idempotencyKey: input.idempotencyKey,
+          action: 'container.exec',
+          maxAttempts: 1,
+          expiresAt: input.expiresAt,
+          payload: { resourceId: target.resourceId, command: input.command },
+        })
+        .returning()
+      if (!operation) throw new Error('Failed to create container exec operation.')
+
+      await transaction.insert(auditLogs).values({
+        actorUserId: input.actorUserId,
+        action: 'infrastructure.container.exec.requested',
+        entityType: 'infrastructure_resource',
+        entityId: target.resourceId,
+        metadata: { operationId: operation.id, nodeId: target.nodeId },
+      })
+      return { operation, replayed: false }
+    })
+  }
+
+  async findContainerExecOperation(resourceId: string, operationId: string) {
+    const [operation] = await this.database
+      .select({
+        id: infrastructureOperations.id,
+        status: infrastructureOperations.status,
+        result: infrastructureOperations.result,
+        errorCode: infrastructureOperations.errorCode,
+        errorMessage: infrastructureOperations.errorMessage,
+        createdAt: infrastructureOperations.createdAt,
+        completedAt: infrastructureOperations.completedAt,
+      })
+      .from(infrastructureOperations)
+      .where(
+        and(
+          eq(infrastructureOperations.id, operationId),
+          eq(infrastructureOperations.resourceId, resourceId),
+          eq(infrastructureOperations.action, 'container.exec'),
+        ),
+      )
+      .limit(1)
+    if (!operation) return null
+    return {
+      ...operation,
+      createdAt: operation.createdAt.toISOString(),
+      completedAt: operation.completedAt?.toISOString() ?? null,
+    }
+  }
+
   async claimNextOperation(nodeId: string, workerId: string) {
     const now = new Date()
     return this.database.transaction(async (transaction) => {
@@ -445,6 +857,16 @@ export class NativeInfrastructureRepository {
           ),
         )
         .returning({ id: infrastructureOperations.id, action: infrastructureOperations.action })
+
+      const expiredExecOperationIds = expiredOperations
+        .filter((operation) => operation.action === 'container.exec')
+        .map((operation) => operation.id)
+      if (expiredExecOperationIds.length > 0) {
+        await transaction
+          .update(infrastructureOperations)
+          .set({ payload: {} })
+          .where(inArray(infrastructureOperations.id, expiredExecOperationIds))
+      }
 
       const expiredBuildOperationIds = expiredOperations
         .filter((operation) => operation.action === 'application.build')
@@ -523,6 +945,34 @@ export class NativeInfrastructureRepository {
     return operation ?? null
   }
 
+  async listExpiredExecutingOperationIds(nodeId: string, now = new Date()) {
+    return this.database
+      .select({ id: infrastructureOperations.id })
+      .from(infrastructureOperations)
+      .where(
+        and(
+          eq(infrastructureOperations.nodeId, nodeId),
+          inArray(infrastructureOperations.status, ['dispatched', 'running']),
+          lte(infrastructureOperations.expiresAt, now),
+        ),
+      )
+  }
+
+  async listCancelledExecutingOperationIds(nodeId: string) {
+    return this.database
+      .select({ id: infrastructureOperations.id })
+      .from(infrastructureOperations)
+      .where(
+        and(
+          eq(infrastructureOperations.nodeId, nodeId),
+          eq(infrastructureOperations.status, 'cancelled'),
+          isNotNull(infrastructureOperations.lockedAt),
+        ),
+      )
+      .orderBy(desc(infrastructureOperations.updatedAt))
+      .limit(100)
+  }
+
   async recordOperationStatus(
     nodeId: string,
     operationId: string,
@@ -545,26 +995,54 @@ export class NativeInfrastructureRepository {
         .for('update')
       if (!operation) return null
 
-      const shouldRetry =
+      let normalizedMissingPendingDelete = false
+      if (
+        operation.action === 'application.delete' &&
+        operation.resourceId &&
         input.status === 'failed' &&
+        input.errorCode === 'resource_not_found'
+      ) {
+        const [resource] = await transaction
+          .select({ externalId: infrastructureResources.externalId })
+          .from(infrastructureResources)
+          .where(eq(infrastructureResources.id, operation.resourceId))
+          .limit(1)
+        normalizedMissingPendingDelete = resource?.externalId.startsWith('pending:') === true
+      }
+
+      const reportedStatus = normalizedMissingPendingDelete ? 'succeeded' : input.status
+      const operationResult = normalizedMissingPendingDelete
+        ? {
+            ...(input.result ?? {}),
+            externalId: `oc-${operation.resourceId?.replaceAll('-', '')}`,
+            alreadyAbsent: true,
+            normalizedFromError: 'resource_not_found',
+          }
+        : input.result
+      const shouldRetry =
+        reportedStatus === 'failed' &&
         input.retryable &&
         operation.attemptCount < operation.maxAttempts
-      const status = shouldRetry ? 'queued' : input.status
+      const status = shouldRetry ? 'queued' : reportedStatus
       const terminal = status === 'succeeded' || status === 'failed'
 
       const [updated] = await transaction
         .update(infrastructureOperations)
         .set({
           status,
-          result: input.result,
+          result: operationResult,
+          payload:
+            terminal && operation.action === 'container.exec'
+              ? { resourceId: operation.resourceId }
+              : operation.payload,
           nextAttemptAt: shouldRetry && nextAttemptAt ? nextAttemptAt : operation.nextAttemptAt,
           lockedAt: shouldRetry ? null : operation.lockedAt,
           lockedBy: shouldRetry ? null : operation.lockedBy,
           startedAt:
             input.status === 'running' ? (operation.startedAt ?? now) : operation.startedAt,
           completedAt: terminal ? now : null,
-          errorCode: input.errorCode ?? null,
-          errorMessage: input.errorMessage ?? null,
+          errorCode: normalizedMissingPendingDelete ? null : (input.errorCode ?? null),
+          errorMessage: normalizedMissingPendingDelete ? null : (input.errorMessage ?? null),
           updatedAt: now,
         })
         .where(eq(infrastructureOperations.id, operation.id))
@@ -669,6 +1147,24 @@ export class NativeInfrastructureRepository {
         })
       }
 
+      if (operation.action === 'container.exec' && terminal) {
+        await transaction.insert(auditLogs).values({
+          actorUserId: operation.actorUserId,
+          action:
+            status === 'succeeded'
+              ? 'infrastructure.container.exec.succeeded'
+              : 'infrastructure.container.exec.failed',
+          entityType: 'infrastructure_resource',
+          entityId: operation.resourceId,
+          metadata: {
+            operationId: operation.id,
+            exitCode: typeof input.result?.exitCode === 'number' ? input.result.exitCode : null,
+            outputTruncated: input.result?.truncated === true,
+            errorCode: input.errorCode ?? null,
+          },
+        })
+      }
+
       if (
         status === 'succeeded' &&
         operation.resourceId &&
@@ -682,9 +1178,13 @@ export class NativeInfrastructureRepository {
             observedState: state,
             observedRevision: revision,
             externalId:
-              typeof input.result?.externalId === 'string' ? input.result.externalId : undefined,
+              typeof operationResult?.externalId === 'string'
+                ? operationResult.externalId
+                : undefined,
             imageDigest:
-              typeof input.result?.imageDigest === 'string' ? input.result.imageDigest : undefined,
+              typeof operationResult?.imageDigest === 'string'
+                ? operationResult.imageDigest
+                : undefined,
             lastObservedAt: now,
             deletedAt: state === 'deleted' ? now : null,
             updatedAt: now,
@@ -696,11 +1196,19 @@ export class NativeInfrastructureRepository {
           resourceId: operation.resourceId,
           observedRevision: revision,
           state,
-          snapshot: input.result ?? {},
+          snapshot: operationResult ?? {},
           observedAt: now,
         })
 
         if (['application.ensure', 'application.redeploy'].includes(operation.action)) {
+          const operationSpec =
+            operation.payload.spec && typeof operation.payload.spec === 'object'
+              ? (operation.payload.spec as Record<string, unknown>)
+              : null
+          const networkName =
+            typeof operationSpec?.networkName === 'string'
+              ? operationSpec.networkName
+              : 'oc-private'
           const routes = await transaction
             .select()
             .from(resourceRoutes)
@@ -724,6 +1232,7 @@ export class NativeInfrastructureRepository {
                   targetPort: route.targetPort,
                   billingGateEnabled: route.billingGateEnabled,
                   billingGateUrl: route.billingGateEnabled ? billingGateInternalUrl : undefined,
+                  networkName,
                 },
               })
               .onConflictDoNothing({ target: infrastructureOperations.idempotencyKey })
@@ -846,6 +1355,9 @@ export class NativeInfrastructureRepository {
             if (!application)
               throw new Error('Application resource for database allocation is missing.')
 
+            const applicationLabels = application.labels as Record<string, string>
+            const databaseGated = applicationLabels['oc.deployment-gate'] === 'database'
+
             const [existingSecret] = await transaction
               .select()
               .from(resourceSecretReferences)
@@ -870,13 +1382,17 @@ export class NativeInfrastructureRepository {
                 })
                 .where(eq(resourceSecretReferences.id, existingSecret.id))
             } else {
+              const applicationSpec = application.desiredSpec as {
+                secretDelivery?: 'files' | 'environment'
+              }
               await transaction.insert(resourceSecretReferences).values({
                 id: secretId,
                 resourceId: application.id,
                 environmentKey: allocation.environmentKey,
                 secretReference,
                 encryptedValue: allocation.connectionUriEncrypted,
-                delivery: 'file',
+                delivery:
+                  applicationSpec.secretDelivery === 'environment' ? 'environment' : 'file',
                 version: secretVersion,
               })
             }
@@ -892,13 +1408,17 @@ export class NativeInfrastructureRepository {
                 [allocation.environmentKey]: secretReference,
               },
             }
-            const revision = application.desiredRevision + 1
+            const revision = databaseGated
+              ? application.desiredRevision
+              : application.desiredRevision + 1
+            const { ['oc.deployment-gate']: _deploymentGate, ...labels } = applicationLabels
             await transaction
               .update(infrastructureResources)
               .set({
                 desiredSpec,
                 desiredState: 'running',
                 desiredRevision: revision,
+                labels,
                 updatedAt: now,
               })
               .where(eq(infrastructureResources.id, application.id))
@@ -909,8 +1429,11 @@ export class NativeInfrastructureRepository {
                 nodeId: application.nodeId,
                 resourceId: application.id,
                 actorUserId: operation.actorUserId,
-                idempotencyKey: `service-database:${allocation.id}:application-redeploy:${revision}`,
-                action: 'application.redeploy',
+                idempotencyKey: databaseGated
+                  ? `application.ensure:${application.id}:${revision}`
+                  : `service-database:${allocation.id}:application-redeploy:${revision}`,
+                correlationId: operation.correlationId,
+                action: databaseGated ? 'application.ensure' : 'application.redeploy',
                 expectedResourceRevision: revision,
                 expiresAt: new Date(now.getTime() + 15 * 60_000),
                 payload: {
@@ -924,6 +1447,24 @@ export class NativeInfrastructureRepository {
               .returning({ id: infrastructureOperations.id })
             if (!redeployOperation) throw new Error('Failed to schedule application redeploy.')
             redeployOperationId = redeployOperation.id
+          } else {
+            const [application] = await transaction
+              .select({
+                id: infrastructureResources.id,
+                labels: infrastructureResources.labels,
+              })
+              .from(infrastructureResources)
+              .where(eq(infrastructureResources.id, allocation.applicationResourceId))
+              .limit(1)
+            if (
+              application &&
+              (application.labels as Record<string, string>)['oc.deployment-gate'] === 'database'
+            ) {
+              await transaction
+                .update(infrastructureResources)
+                .set({ desiredState: 'failed', updatedAt: now })
+                .where(eq(infrastructureResources.id, application.id))
+            }
           }
 
           await transaction

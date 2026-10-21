@@ -21,9 +21,9 @@ interface BackupSource {
   id: string
   databaseName: string
   status: string
-  serviceNumber: string
-  serviceName: string
-  customerName: string
+  serviceNumber: string | null
+  serviceName: string | null
+  customerName: string | null
   clusterName: string
   nodeName: string
 }
@@ -40,8 +40,8 @@ interface BackupPolicy {
   nextRunAt: string
   lastRunAt: string | null
   databaseName: string
-  serviceNumber: string
-  serviceName: string
+  serviceNumber: string | null
+  serviceName: string | null
   targetName: string
 }
 
@@ -58,8 +58,8 @@ interface BackupRun {
   restoredAt: string | null
   createdAt: string
   databaseName: string
-  serviceNumber: string
-  serviceName: string
+  serviceNumber: string | null
+  serviceName: string | null
   clusterName: string
   nodeName: string
   targetName: string | null
@@ -265,7 +265,7 @@ function runTone(runStatus: BackupRun['status']) {
         <div class="grid gap-4 lg:grid-cols-2">
           <UiCard v-for="source in overview?.sources" :key="source.id">
             <div class="flex items-start justify-between gap-3">
-              <div class="flex min-w-0 gap-3"><span class="rounded bg-brand/10 p-2 text-brand"><Database :size="17" /></span><div><h3 class="font-mono text-sm font-semibold text-ink">{{ source.databaseName }}</h3><p class="mt-1 text-xs text-muted">{{ source.serviceNumber }} · {{ source.serviceName }} · {{ source.customerName }}</p><p class="mt-1 text-xs text-muted">{{ source.clusterName }} · {{ source.nodeName }}</p></div></div>
+              <div class="flex min-w-0 gap-3"><span class="rounded bg-brand/10 p-2 text-brand"><Database :size="17" /></span><div><h3 class="font-mono text-sm font-semibold text-ink">{{ source.databaseName }}</h3><p class="mt-1 text-xs text-muted">{{ source.serviceNumber ?? 'INTERNAL' }} · {{ source.serviceName ?? 'Non-billable' }} · {{ source.customerName ?? 'Tanpa customer' }}</p><p class="mt-1 text-xs text-muted">{{ source.clusterName }} · {{ source.nodeName }}</p></div></div>
               <UiBadge :tone="source.status === 'active' ? 'success' : 'warning'" dot>{{ source.status }}</UiBadge>
             </div>
             <div class="mt-4 flex gap-2 border-t pt-4">
@@ -291,7 +291,7 @@ function runTone(runStatus: BackupRun['status']) {
         <div class="mb-3 flex items-center justify-between"><div><h2 class="text-sm font-semibold text-ink">Backup runs</h2><p class="mt-1 text-xs text-muted">Artifact, checksum, ukuran, dan hasil restore terbaru.</p></div><UiBadge tone="neutral">{{ overview?.runs.length ?? 0 }} run</UiBadge></div>
         <UiCard :padded="false">
           <div v-if="!overview?.runs.length" class="p-6"><UiEmptyState title="Belum ada backup run" description="Jalankan Backup now atau buat scheduled policy." /></div>
-          <div v-else class="overflow-x-auto"><table class="w-full text-left text-sm"><thead class="border-b bg-surface text-xs text-muted"><tr><th class="px-4 py-3">Database</th><th class="px-4 py-3">Created</th><th class="px-4 py-3">Target</th><th class="px-4 py-3">Size</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Action</th></tr></thead><tbody class="divide-y"><tr v-for="run in overview?.runs" :key="run.id"><td class="px-4 py-3"><p class="font-mono text-xs text-ink">{{ run.databaseName }}</p><p class="mt-1 text-xs text-muted">{{ run.serviceNumber }} · {{ run.nodeName }}</p><p v-if="run.lastError" class="mt-1 max-w-md text-xs text-danger">{{ run.lastError }}</p></td><td class="px-4 py-3 text-xs text-muted">{{ format.dateTime(run.createdAt) }}</td><td class="px-4 py-3 text-xs text-ink">{{ run.targetName || 'Node local' }}</td><td class="px-4 py-3 font-mono text-xs text-ink">{{ humanBytes(run.sizeBytes) }}</td><td class="px-4 py-3"><UiBadge :tone="runTone(run.status)" dot>{{ run.status }}</UiBadge></td><td class="px-4 py-3 text-right"><UiButton v-if="run.status === 'available'" variant="ghost" size="sm" @click="pendingRestore = run"><RotateCcw :size="14" /> Restore</UiButton></td></tr></tbody></table></div>
+          <div v-else class="overflow-x-auto"><table class="w-full text-left text-sm"><thead class="border-b bg-surface text-xs text-muted"><tr><th class="px-4 py-3">Database</th><th class="px-4 py-3">Created</th><th class="px-4 py-3">Target</th><th class="px-4 py-3">Size</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Action</th></tr></thead><tbody class="divide-y"><tr v-for="run in overview?.runs" :key="run.id"><td class="px-4 py-3"><p class="font-mono text-xs text-ink">{{ run.databaseName }}</p><p class="mt-1 text-xs text-muted">{{ run.serviceNumber ?? 'INTERNAL' }} · {{ run.nodeName }}</p><p v-if="run.lastError" class="mt-1 max-w-md text-xs text-danger">{{ run.lastError }}</p></td><td class="px-4 py-3 text-xs text-muted">{{ format.dateTime(run.createdAt) }}</td><td class="px-4 py-3 text-xs text-ink">{{ run.targetName || 'Node local' }}</td><td class="px-4 py-3 font-mono text-xs text-ink">{{ humanBytes(run.sizeBytes) }}</td><td class="px-4 py-3"><UiBadge :tone="runTone(run.status)" dot>{{ run.status }}</UiBadge></td><td class="px-4 py-3 text-right"><UiButton v-if="run.status === 'available'" variant="ghost" size="sm" @click="pendingRestore = run"><RotateCcw :size="14" /> Restore</UiButton></td></tr></tbody></table></div>
         </UiCard>
       </section>
 
@@ -305,7 +305,7 @@ function runTone(runStatus: BackupRun['status']) {
 
     <UiDialog v-if="showTarget" title="Add S3-compatible target" description="Credential dienkripsi oleh control plane dan hanya diberikan kepada agent saat operation aktif." size="lg" :close-disabled="saving" @close="showTarget = false"><form id="backup-target-form" class="grid gap-4 md:grid-cols-2" @submit.prevent="createTarget"><UiInput v-model="targetForm.name" label="Name" required /><UiInput v-model="targetForm.endpoint" label="Endpoint URL" type="url" required /><UiInput v-model="targetForm.region" label="Region" required /><UiInput v-model="targetForm.bucket" label="Bucket" required /><UiInput v-model="targetForm.prefix" label="Prefix" required /><label class="flex items-center gap-2 self-end pb-2 text-sm text-ink"><input v-model="targetForm.pathStyle" type="checkbox" /> Path-style endpoint (MinIO/R2)</label><UiInput v-model="targetForm.accessKey" label="Access key" autocomplete="off" required /><UiInput v-model="targetForm.secretKey" label="Secret key" type="password" autocomplete="new-password" required /></form><template #footer><UiButton variant="secondary" :disabled="saving" @click="showTarget = false">Batal</UiButton><UiButton type="submit" form="backup-target-form" :disabled="saving">{{ saving ? 'Menyimpan…' : 'Save target' }}</UiButton></template></UiDialog>
 
-    <UiDialog v-if="showPolicy" title="Create backup policy" description="Backup pertama dijadwalkan segera; run berikutnya mengikuti interval." size="lg" :close-disabled="saving" @close="showPolicy = false"><form id="backup-policy-form" class="grid gap-4 md:grid-cols-2" @submit.prevent="createPolicy"><UiInput v-model="policyForm.name" label="Policy name" required /><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Database source</span><select v-model="policyForm.serviceDatabaseId" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm"><option v-for="source in overview?.sources" :key="source.id" :value="source.id">{{ source.databaseName }} · {{ source.serviceNumber }}</option></select></label><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Storage target</span><select v-model="policyForm.storageTargetId" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm"><option v-for="target in overview?.targets" :key="target.id" :value="target.id">{{ target.name }} · {{ target.bucket }}</option></select></label><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Interval (minutes)</span><input v-model.number="policyForm.intervalMinutes" type="number" min="5" max="525600" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm" /></label><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Retention count</span><input v-model.number="policyForm.retentionCount" type="number" min="1" max="1000" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm" /></label><UiInput v-model="policyForm.alertEmail" label="Failure alert email (optional)" type="email" /></form><template #footer><UiButton variant="secondary" :disabled="saving" @click="showPolicy = false">Batal</UiButton><UiButton type="submit" form="backup-policy-form" :disabled="saving">{{ saving ? 'Menyimpan…' : 'Activate policy' }}</UiButton></template></UiDialog>
+    <UiDialog v-if="showPolicy" title="Create backup policy" description="Backup pertama dijadwalkan segera; run berikutnya mengikuti interval." size="lg" :close-disabled="saving" @close="showPolicy = false"><form id="backup-policy-form" class="grid gap-4 md:grid-cols-2" @submit.prevent="createPolicy"><UiInput v-model="policyForm.name" label="Policy name" required /><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Database source</span><select v-model="policyForm.serviceDatabaseId" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm"><option v-for="source in overview?.sources" :key="source.id" :value="source.id">{{ source.databaseName }} · {{ source.serviceNumber ?? 'INTERNAL' }}</option></select></label><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Storage target</span><select v-model="policyForm.storageTargetId" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm"><option v-for="target in overview?.targets" :key="target.id" :value="target.id">{{ target.name }} · {{ target.bucket }}</option></select></label><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Interval (minutes)</span><input v-model.number="policyForm.intervalMinutes" type="number" min="5" max="525600" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm" /></label><label class="block"><span class="mb-2 block text-xs font-semibold text-muted">Retention count</span><input v-model.number="policyForm.retentionCount" type="number" min="1" max="1000" required class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm" /></label><UiInput v-model="policyForm.alertEmail" label="Failure alert email (optional)" type="email" /></form><template #footer><UiButton variant="secondary" :disabled="saving" @click="showPolicy = false">Batal</UiButton><UiButton type="submit" form="backup-policy-form" :disabled="saving">{{ saving ? 'Menyimpan…' : 'Activate policy' }}</UiButton></template></UiDialog>
 
     <UiConfirmDialog v-if="pendingRestore" :title="`Restore ${pendingRestore.databaseName}?`" description="Database workload akan dibersihkan dan dipulihkan secara transaksional. Hentikan penulisan aplikasi sebelum melanjutkan." confirm-label="Restore database" destructive :pending="saving" @confirm="restoreBackup" @cancel="pendingRestore = null" />
   </div>

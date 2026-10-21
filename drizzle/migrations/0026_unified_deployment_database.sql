@@ -1,0 +1,1 @@
+ALTER TABLE "infrastructure_service_databases" ALTER COLUMN "service_id" DROP NOT NULL;

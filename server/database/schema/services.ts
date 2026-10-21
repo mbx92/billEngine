@@ -155,7 +155,6 @@ export const infrastructureServiceDatabases = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     serviceId: uuid('service_id')
-      .notNull()
       .references(() => services.id, { onDelete: 'restrict' }),
     databaseClusterId: uuid('database_cluster_id')
       .notNull()

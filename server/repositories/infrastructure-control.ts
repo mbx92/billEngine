@@ -98,6 +98,7 @@ export class InfrastructureControlRepository {
           labels: infrastructureNodes.labels,
           capabilities: infrastructureNodes.capabilities,
           imageInventory: infrastructureNodes.imageInventory,
+          networkInventory: infrastructureNodes.networkInventory,
           lastHeartbeatAt: infrastructureNodes.lastHeartbeatAt,
           lastInventoryAt: infrastructureNodes.lastInventoryAt,
           lastError: infrastructureNodes.lastError,
@@ -140,7 +141,7 @@ export class InfrastructureControlRepository {
         (!row.lastHeartbeatAt || row.lastHeartbeatAt.getTime() < staleBefore)
           ? 'offline'
           : row.status
-      const { imageInventory, ...node } = row
+      const { imageInventory, networkInventory, ...node } = row
       return {
         ...node,
         status,
@@ -153,8 +154,10 @@ export class InfrastructureControlRepository {
         oldestStuckOperationAt: stuckByNode.get(row.id)?.oldestAt?.toISOString() ?? null,
         resourceCount: Number(row.resourceCount),
         images: imageInventory,
+        networks: networkInventory,
         imageCount: imageInventory.length,
         usedImageCount: imageInventory.filter((image) => image.used).length,
+        networkCount: networkInventory.length,
         lastHeartbeatAt: row.lastHeartbeatAt?.toISOString() ?? null,
         lastInventoryAt: row.lastInventoryAt?.toISOString() ?? null,
         gatewayLastObservedAt: row.gatewayLastObservedAt?.toISOString() ?? null,
@@ -441,6 +444,7 @@ export class InfrastructureControlRepository {
           lastInventoryAt: observedAt,
           updatedAt: new Date(),
           ...(input.images ? { imageInventory: input.images } : {}),
+          ...(input.networks ? { networkInventory: input.networks } : {}),
         })
         .where(and(eq(infrastructureNodes.id, nodeId), eq(infrastructureNodes.isActive, true)))
         .returning({ id: infrastructureNodes.id })

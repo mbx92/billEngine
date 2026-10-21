@@ -18,6 +18,7 @@ import {
   infrastructureNodes,
   infrastructureOperations,
   infrastructureResources,
+  resourceRoutes,
 } from '../../database/schema'
 import {
   decryptInfrastructureCredential,
@@ -57,17 +58,29 @@ export class InfrastructureReleaseService {
             name: infrastructureResources.name,
             nodeId: infrastructureResources.nodeId,
             nodeName: infrastructureNodes.name,
+            nodeCapabilities: infrastructureNodes.capabilities,
+            nodeStatus: infrastructureNodes.status,
+            nodeActive: infrastructureNodes.isActive,
+            nodeDraining: infrastructureNodes.isDraining,
+            nodeLastHeartbeatAt: infrastructureNodes.lastHeartbeatAt,
             applicationId: infrastructureResources.applicationId,
             releaseId: infrastructureResources.releaseId,
             releasePolicy: infrastructureResources.releasePolicy,
             imageReference: infrastructureResources.imageReference,
             observedState: infrastructureResources.observedState,
+            desiredRevision: infrastructureResources.desiredRevision,
+            observedRevision: infrastructureResources.observedRevision,
+            desiredSpec: infrastructureResources.desiredSpec,
+            routeHostname: resourceRoutes.hostname,
+            routeTlsEnabled: resourceRoutes.tlsEnabled,
+            routeStatus: resourceRoutes.observedStatus,
           })
           .from(infrastructureResources)
           .innerJoin(
             infrastructureNodes,
             eq(infrastructureNodes.id, infrastructureResources.nodeId),
           )
+          .leftJoin(resourceRoutes, eq(resourceRoutes.resourceId, infrastructureResources.id))
           .where(
             and(
               eq(infrastructureResources.kind, 'application'),
@@ -137,7 +150,29 @@ export class InfrastructureReleaseService {
       registries: registries.map(serializeDates),
       applications: applications.map(serializeDates),
       releases: releases.map(serializeDates),
-      resources,
+      resources: resources.map((resource) => ({
+        id: resource.id,
+        name: resource.name,
+        nodeId: resource.nodeId,
+        nodeName: resource.nodeName,
+        applicationId: resource.applicationId,
+        releaseId: resource.releaseId,
+        releasePolicy: resource.releasePolicy,
+        imageReference: resource.imageReference,
+        observedState: resource.observedState,
+        desiredRevision: resource.desiredRevision,
+        observedRevision: resource.observedRevision,
+        accessUrl: resourceAccessUrl(resource),
+        shellAvailable:
+          resource.nodeActive &&
+          !resource.nodeDraining &&
+          ['online', 'degraded'].includes(resource.nodeStatus) &&
+          Boolean(
+            resource.nodeLastHeartbeatAt &&
+            resource.nodeLastHeartbeatAt.getTime() >= Date.now() - 90_000,
+          ) &&
+          resource.nodeCapabilities.includes('container-exec'),
+      })),
       builds: builds.map((build) => ({
         ...build,
         startedAt: build.startedAt?.toISOString() ?? null,
@@ -608,6 +643,43 @@ function serializeDates<T extends { createdAt: Date; updatedAt?: Date }>(record:
     createdAt: record.createdAt.toISOString(),
     ...(record.updatedAt ? { updatedAt: record.updatedAt.toISOString() } : {}),
   }
+}
+
+function resourceAccessUrl(resource: {
+  desiredSpec: Record<string, unknown>
+  routeHostname: string | null
+  routeTlsEnabled: boolean | null
+  routeStatus: string | null
+}): string | null {
+  const environment = resource.desiredSpec.environment
+  const ports = resource.desiredSpec.ports
+  const hasPublishedPort =
+    Array.isArray(ports) &&
+    ports.some(
+      (port) =>
+        port !== null &&
+        typeof port === 'object' &&
+        typeof (port as Record<string, unknown>).hostPort === 'number',
+    )
+  if (
+    hasPublishedPort &&
+    environment &&
+    typeof environment === 'object' &&
+    !Array.isArray(environment)
+  ) {
+    const appUrl = (environment as Record<string, unknown>).APP_URL
+    if (typeof appUrl === 'string') {
+      try {
+        const url = new URL(appUrl)
+        if (url.protocol === 'http:' || url.protocol === 'https:') return url.origin
+      } catch {
+        // Fall through to the managed gateway route.
+      }
+    }
+  }
+
+  if (!resource.routeHostname || resource.routeStatus !== 'active') return null
+  return `${resource.routeTlsEnabled === false ? 'http' : 'https'}://${resource.routeHostname}`
 }
 
 function isUniqueViolation(error: unknown) {

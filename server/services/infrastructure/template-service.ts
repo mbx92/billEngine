@@ -1,10 +1,16 @@
 import { randomBytes, randomUUID } from 'node:crypto'
+import { applicationSpecSchema } from '../../../shared/schemas/infrastructure'
 import {
   type CreateApplicationTemplateInput,
   infrastructureTemplateDefinitionSchema,
   type DeployInfrastructureTemplateInput,
+  type SyncInfrastructureTemplateInput,
+  type UpdateApplicationTemplateInput,
 } from '../../../shared/schemas/infrastructure-templates'
-import { InfrastructureTemplateRepository } from '../../repositories/infrastructure-templates'
+import {
+  InfrastructureTemplateRepository,
+  type ManagedSecretRecord,
+} from '../../repositories/infrastructure-templates'
 import {
   decryptInfrastructureCredential,
   encryptInfrastructureCredential,
@@ -13,7 +19,12 @@ import { DomainError } from '../../utils/errors'
 import { validateApplicationPolicy } from './policy'
 import { InfrastructureReleaseService } from './release-service'
 import { ApplicationBuildService } from './application-build-service'
-import { releaseImageSource, validateLocalImageNode } from './local-image'
+import {
+  releaseImageSource,
+  validateLocalImageNode,
+  validateSecretDelivery,
+} from './local-image'
+import { validateDeploymentNetwork } from './docker-network'
 
 export class InfrastructureTemplateService {
   constructor(private readonly repository = new InfrastructureTemplateRepository()) {}
@@ -46,7 +57,233 @@ export class InfrastructureTemplateService {
   }
 
   async createApplicationTemplate(input: CreateApplicationTemplateInput, actorUserId: string) {
-    const release = await new InfrastructureReleaseService().latestRelease(input.applicationId)
+    const { release, definition } = await this.resolveApplicationTemplate(
+      input.applicationId,
+      input,
+    )
+
+    try {
+      const template = await this.repository.createApplicationTemplate({
+        slug: input.slug,
+        name: input.name,
+        description: input.description ?? null,
+        applicationId: input.applicationId,
+        releasePolicy: input.trackLatest ? 'track_latest' : 'manual',
+        definition,
+        actorUserId,
+      })
+      return {
+        ...template,
+        definition,
+        resolvedRelease: release,
+        createdAt: template.createdAt.toISOString(),
+        updatedAt: template.updatedAt.toISOString(),
+      }
+    } catch (error) {
+      if (isUniqueViolation(error)) throw DomainError.conflict('Slug template sudah digunakan.')
+      throw error
+    }
+  }
+
+  async updateApplicationTemplate(
+    templateId: string,
+    input: UpdateApplicationTemplateInput,
+    actorUserId: string,
+  ) {
+    const existing = await this.repository.findActive(templateId)
+    if (!existing) throw DomainError.notFound('Template tidak ditemukan atau tidak aktif.')
+    if (existing.isBuiltin || !existing.applicationId) {
+      throw DomainError.invalidState('Template built-in tidak dapat diedit dari halaman ini.')
+    }
+
+    const { release, definition } = await this.resolveApplicationTemplate(
+      existing.applicationId,
+      input,
+    )
+    try {
+      const template = await this.repository.updateApplicationTemplate({
+        templateId,
+        slug: input.slug,
+        name: input.name,
+        description: input.description ?? null,
+        releasePolicy: input.trackLatest ? 'track_latest' : 'manual',
+        definition,
+        actorUserId,
+      })
+      if (!template) throw DomainError.notFound('Template tidak ditemukan atau tidak dapat diedit.')
+      return {
+        ...template,
+        definition,
+        resolvedRelease: release,
+        createdAt: template.createdAt.toISOString(),
+        updatedAt: template.updatedAt.toISOString(),
+      }
+    } catch (error) {
+      if (isUniqueViolation(error)) throw DomainError.conflict('Slug template sudah digunakan.')
+      throw error
+    }
+  }
+
+  async syncApplicationTemplate(
+    resourceId: string,
+    input: SyncInfrastructureTemplateInput,
+    actorUserId: string,
+    idempotencyKey: string,
+  ) {
+    const target = await this.repository.findApplicationTemplateSyncTarget(resourceId)
+    if (!target) {
+      throw DomainError.notFound('Resource application tidak ditemukan atau tidak memiliki template.')
+    }
+    if (target.resource.desiredState === 'deleting') {
+      throw DomainError.invalidState('Resource yang sedang dihapus tidak dapat disinkronkan.')
+    }
+
+    const definition = infrastructureTemplateDefinitionSchema.parse(target.template.definition)
+    if (definition.resourceKind !== 'application') {
+      throw DomainError.invalidState('Hanya template application yang dapat disinkronkan.')
+    }
+    const currentSpec = applicationSpecSchema.parse(target.resource.desiredSpec)
+    const release = target.template.applicationId
+      ? await new InfrastructureReleaseService().latestRelease(target.template.applicationId)
+      : null
+    if (target.template.applicationId && !release) {
+      throw DomainError.invalidState('Application template belum memiliki release.')
+    }
+    const source = release ? releaseImageSource(release) : definition.spec.source
+    if (source.type !== 'image') {
+      throw DomainError.invalidState('Template build source belum didukung agent.')
+    }
+
+    const existingSecrets = new Map(
+      target.secrets.map((secret) => [secret.environmentKey, secret.secretReference]),
+    )
+    const environment: Record<string, string> = { ...currentSpec.environment }
+    const secretReferences: Record<string, string> = Object.fromEntries(existingSecrets)
+    const secrets: ManagedSecretRecord[] = []
+    for (const parameter of definition.parameters) {
+      const supplied = input.values[parameter.key]
+      if (parameter.type === 'secret') {
+        delete environment[parameter.environmentKey]
+        if (supplied) {
+          const secretId = randomUUID()
+          const reference = `managed://${secretId}@1`
+          secretReferences[parameter.environmentKey] = reference
+          secrets.push({
+            id: secretId,
+            environmentKey: parameter.environmentKey,
+            reference,
+            encryptedValue: encryptInfrastructureCredential(supplied),
+          })
+          continue
+        }
+        const existingReference = existingSecrets.get(parameter.environmentKey)
+        if (existingReference) {
+          secretReferences[parameter.environmentKey] = existingReference
+          continue
+        }
+        const generated = parameter.generated ? generateSecret() : ''
+        if (generated) {
+          const secretId = randomUUID()
+          const reference = `managed://${secretId}@1`
+          secretReferences[parameter.environmentKey] = reference
+          secrets.push({
+            id: secretId,
+            environmentKey: parameter.environmentKey,
+            reference,
+            encryptedValue: encryptInfrastructureCredential(generated),
+          })
+          continue
+        }
+        if (parameter.required) {
+          throw DomainError.validation(
+            `${parameter.label} wajib diisi karena belum tersedia pada resource.`,
+          )
+        }
+        continue
+      }
+
+      const value =
+        supplied !== undefined
+          ? supplied
+          : (currentSpec.environment[parameter.environmentKey] ??
+            parameter.defaultValue ??
+            (parameter.generated ? generateSecret() : ''))
+      if (parameter.required && !value) {
+        throw DomainError.validation(`${parameter.label} wajib diisi.`)
+      }
+      delete secretReferences[parameter.environmentKey]
+      if (value) environment[parameter.environmentKey] = value
+      else delete environment[parameter.environmentKey]
+    }
+
+    const ports = definition.spec.ports.map((port, index) => ({
+      ...port,
+      ...(currentSpec.ports[index]?.hostPort
+        ? { hostPort: currentSpec.ports[index].hostPort }
+        : {}),
+    }))
+    const spec = applicationSpecSchema.parse({
+      ...definition.spec,
+      source,
+      networkName: currentSpec.networkName,
+      ports,
+      environment,
+      secretReferences,
+    })
+    validateLocalImageNode(
+      spec.source,
+      target.resource.nodeId,
+      target.nodeCapabilities,
+      target.nodeImageInventory,
+    )
+    validateSecretDelivery(spec, target.nodeCapabilities)
+    validateDeploymentNetwork(
+      spec.networkName,
+      target.nodeCapabilities,
+      target.nodeNetworkInventory,
+    )
+    const policy = validateApplicationPolicy(spec)
+    if (!policy.allowed) {
+      throw DomainError.validation('Template melanggar policy node.', policy.violations)
+    }
+
+    let result
+    try {
+      result = await this.repository.syncApplicationTemplate({
+        resourceId: target.resource.id,
+        expectedRevision: target.resource.desiredRevision,
+        templateId: target.template.id,
+        templateVersion: target.template.version,
+        templateSlug: target.template.slug,
+        applicationId: target.template.applicationId,
+        releaseId: release?.id ?? null,
+        releasePolicy: target.template.releasePolicy,
+        spec,
+        secrets,
+        actorUserId,
+        idempotencyKey,
+        expiresAt: new Date(Date.now() + 15 * 60_000),
+      })
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error
+      const operation = await this.repository.findOperationByIdempotencyKey(idempotencyKey)
+      if (!operation) throw error
+      return { operation, replayed: true }
+    }
+    if (!result) throw DomainError.notFound('Resource application tidak ditemukan.')
+    if ('stale' in result) {
+      throw DomainError.conflict(
+        'Resource berubah saat sinkronisasi. Muat ulang halaman lalu coba kembali.',
+      )
+    }
+    return result
+  }
+
+  private async resolveApplicationTemplate(
+    applicationId: string,
+    input: UpdateApplicationTemplateInput,
+  ) {
+    const release = await new InfrastructureReleaseService().latestRelease(applicationId)
     if (!release) {
       throw DomainError.invalidState('Application belum memiliki release yang dapat dideploy.')
     }
@@ -103,28 +340,7 @@ export class InfrastructureTemplateService {
       },
       parameters,
     })
-
-    try {
-      const template = await this.repository.createApplicationTemplate({
-        slug: input.slug,
-        name: input.name,
-        description: input.description,
-        applicationId: input.applicationId,
-        releasePolicy: input.trackLatest ? 'track_latest' : 'manual',
-        definition,
-        actorUserId,
-      })
-      return {
-        ...template,
-        definition,
-        resolvedRelease: release,
-        createdAt: template.createdAt.toISOString(),
-        updatedAt: template.updatedAt.toISOString(),
-      }
-    } catch (error) {
-      if (isUniqueViolation(error)) throw DomainError.conflict('Slug template sudah digunakan.')
-      throw error
-    }
+    return { release, definition }
   }
 
   async deploy(
@@ -147,6 +363,9 @@ export class InfrastructureTemplateService {
     }
     if (release) validateLocalImageNode(releaseImageSource(release), input.nodeId)
     const isApplication = definition.resourceKind === 'application'
+    if (input.managedDatabase && !isApplication) {
+      throw DomainError.validation('Managed database hanya dapat dipasang ke template aplikasi.')
+    }
     const useGateway = isApplication && input.exposure !== 'port'
     if (!useGateway && !input.hostPort) {
       throw DomainError.validation('Host port wajib diisi untuk akses langsung ke server.')
@@ -182,6 +401,7 @@ export class InfrastructureTemplateService {
     const secretReferences: Record<string, string> = {}
     const secrets = []
     for (const parameter of definition.parameters) {
+      if (parameter.environmentKey === input.managedDatabase?.environmentKey) continue
       const provided = input.values[parameter.key]
       const value =
         provided || parameter.defaultValue || (parameter.generated ? generateSecret() : '')
@@ -211,6 +431,7 @@ export class InfrastructureTemplateService {
     const spec = {
       ...definition.spec,
       source: release ? releaseImageSource(release) : definition.spec.source,
+      networkName: input.networkName,
       ports,
       environment,
       secretReferences,
@@ -234,7 +455,8 @@ export class InfrastructureTemplateService {
         engine: definition.engine,
         resourceKind: definition.resourceKind,
         nodeId: input.nodeId,
-        serviceId: input.serviceId,
+        serviceId: input.classification === 'billable' ? input.serviceId : undefined,
+        managedDatabase: input.managedDatabase,
         hostname,
         targetPort,
         billingGateEnabled: useGateway && input.classification === 'billable',

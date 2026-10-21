@@ -183,6 +183,34 @@
       "when": 1792158251845,
       "tag": "0025_node_image_inventory",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792547679661,
+      "tag": "0026_unified_deployment_database",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792552632717,
+      "tag": "0027_node_network_inventory",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792554414263,
+      "tag": "0028_operation_execution_logs",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792560601856,
+      "tag": "0029_allow_secret_environment_delivery",
+      "breakpoints": true
     }
   ]
 }

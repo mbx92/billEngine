@@ -50,6 +50,11 @@ Agent `0.12.5+` dapat menghapus image `Unused` melalui dialog image pada halaman
 plane dan agent sama-sama menolak image yang masih direferensikan container, dan penghapusan tidak
 menggunakan opsi force.
 
+Agent `0.12.6+` melaporkan capability `container-exec`. Admin dapat membuka **Docker sh** untuk
+application container yang sedang running dan sinkron. Setiap command dijalankan sebagai operasi
+sekali jalan melalui `docker exec <container> sh -lc`, dengan timeout 30 detik dan output maksimal
+64 KiB. Fitur ini tidak memberikan Docker socket, TTY interaktif, atau shell host kepada browser.
+
 Untuk scheduled backup, agent mengunggah dump langsung ke endpoint S3-compatible
 dengan AWS Signature V4. Access key dan secret key dienkripsi di control plane,
 hanya dikirim ketika operation aktif, dan tidak disimpan dalam payload operation

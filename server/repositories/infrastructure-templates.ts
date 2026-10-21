@@ -1,11 +1,13 @@
-import { and, asc, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
 import type { ApplicationSpec } from '../../shared/schemas/infrastructure'
 import type { InfrastructureTemplateDefinition } from '../../shared/schemas/infrastructure-templates'
+import type { ManagedDatabaseBindingInput } from '../../shared/schemas/native-service-databases'
 import { useDatabase, type Database } from '../database/client'
 import {
   validateLocalImageNode,
   validateSecretDelivery,
 } from '../services/infrastructure/local-image'
+import { validateDeploymentNetwork } from '../services/infrastructure/docker-network'
 import {
   auditLogs,
   infrastructureNodes,
@@ -20,6 +22,7 @@ import {
   serviceResources,
   services,
 } from '../database/schema'
+import { createDeploymentDatabase } from './deployment-database'
 
 export interface ManagedSecretRecord {
   id: string
@@ -41,6 +44,7 @@ export interface CreateTemplateDeploymentRecord {
   resourceKind: InfrastructureTemplateDefinition['resourceKind']
   nodeId: string
   serviceId?: string
+  managedDatabase?: ManagedDatabaseBindingInput
   hostname?: string
   targetPort?: number
   billingGateEnabled: boolean
@@ -56,11 +60,37 @@ export interface CreateTemplateDeploymentRecord {
 export interface CreateApplicationTemplateRecord {
   slug: string
   name: string
-  description?: string
+  description: string | null
   applicationId: string
   releasePolicy: 'manual' | 'track_latest'
   definition: InfrastructureTemplateDefinition
   actorUserId: string
+}
+
+export interface UpdateApplicationTemplateRecord {
+  templateId: string
+  slug: string
+  name: string
+  description: string | null
+  releasePolicy: 'manual' | 'track_latest'
+  definition: InfrastructureTemplateDefinition
+  actorUserId: string
+}
+
+export interface SyncApplicationTemplateRecord {
+  resourceId: string
+  expectedRevision: number
+  templateId: string
+  templateVersion: number
+  templateSlug: string
+  applicationId: string | null
+  releaseId: string | null
+  releasePolicy: 'manual' | 'track_latest'
+  spec: ApplicationSpec
+  secrets: ManagedSecretRecord[]
+  actorUserId: string
+  idempotencyKey: string
+  expiresAt: Date
 }
 
 export class InfrastructureTemplateRepository {
@@ -83,6 +113,44 @@ export class InfrastructureTemplateRepository {
       )
       .limit(1)
     return template ?? null
+  }
+
+  async findApplicationTemplateSyncTarget(resourceId: string) {
+    const [target] = await this.database
+      .select({
+        resource: infrastructureResources,
+        template: infrastructureTemplates,
+        nodeCapabilities: infrastructureNodes.capabilities,
+        nodeImageInventory: infrastructureNodes.imageInventory,
+        nodeNetworkInventory: infrastructureNodes.networkInventory,
+      })
+      .from(infrastructureResources)
+      .innerJoin(
+        infrastructureTemplates,
+        and(
+          eq(infrastructureTemplates.id, infrastructureResources.templateId),
+          eq(infrastructureTemplates.isActive, true),
+        ),
+      )
+      .innerJoin(infrastructureNodes, eq(infrastructureNodes.id, infrastructureResources.nodeId))
+      .where(
+        and(
+          eq(infrastructureResources.id, resourceId),
+          eq(infrastructureResources.kind, 'application'),
+          isNull(infrastructureResources.deletedAt),
+        ),
+      )
+      .limit(1)
+    if (!target) return null
+
+    const secrets = await this.database
+      .select({
+        environmentKey: resourceSecretReferences.environmentKey,
+        secretReference: resourceSecretReferences.secretReference,
+      })
+      .from(resourceSecretReferences)
+      .where(eq(resourceSecretReferences.resourceId, resourceId))
+    return { ...target, secrets }
   }
 
   async findOperationByIdempotencyKey(idempotencyKey: string) {
@@ -126,6 +194,217 @@ export class InfrastructureTemplateRepository {
     })
   }
 
+  async updateApplicationTemplate(input: UpdateApplicationTemplateRecord) {
+    return this.database.transaction(async (transaction) => {
+      const [template] = await transaction
+        .update(infrastructureTemplates)
+        .set({
+          slug: input.slug,
+          name: input.name,
+          description: input.description,
+          releasePolicy: input.releasePolicy,
+          definition: input.definition,
+          version: sql`${infrastructureTemplates.version} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(infrastructureTemplates.id, input.templateId),
+            eq(infrastructureTemplates.isActive, true),
+            eq(infrastructureTemplates.isBuiltin, false),
+          ),
+        )
+        .returning()
+      if (!template) return null
+
+      await transaction.insert(auditLogs).values({
+        actorUserId: input.actorUserId,
+        action: 'infrastructure.template.updated',
+        entityType: 'infrastructure_template',
+        entityId: template.id,
+        metadata: {
+          applicationId: template.applicationId,
+          releasePolicy: input.releasePolicy,
+          version: template.version,
+        },
+      })
+      return template
+    })
+  }
+
+  async syncApplicationTemplate(input: SyncApplicationTemplateRecord) {
+    return this.database.transaction(async (transaction) => {
+      const [existing] = await transaction
+        .select()
+        .from(infrastructureOperations)
+        .where(eq(infrastructureOperations.idempotencyKey, input.idempotencyKey))
+        .limit(1)
+      if (existing) return { operation: existing, replayed: true }
+
+      const [resource] = await transaction
+        .select()
+        .from(infrastructureResources)
+        .where(
+          and(
+            eq(infrastructureResources.id, input.resourceId),
+            eq(infrastructureResources.kind, 'application'),
+            isNull(infrastructureResources.deletedAt),
+          ),
+        )
+        .limit(1)
+        .for('update')
+      if (!resource) return null
+      if (
+        resource.templateId !== input.templateId ||
+        resource.desiredRevision !== input.expectedRevision
+      ) {
+        return { stale: true as const }
+      }
+
+      const [node] = await transaction
+        .select({
+          capabilities: infrastructureNodes.capabilities,
+          imageInventory: infrastructureNodes.imageInventory,
+          networkInventory: infrastructureNodes.networkInventory,
+        })
+        .from(infrastructureNodes)
+        .where(eq(infrastructureNodes.id, resource.nodeId))
+        .limit(1)
+      validateLocalImageNode(
+        input.spec.source,
+        resource.nodeId,
+        node?.capabilities ?? [],
+        node?.imageInventory,
+      )
+      validateSecretDelivery(input.spec, node?.capabilities ?? [])
+      validateDeploymentNetwork(
+        input.spec.networkName,
+        node?.capabilities ?? [],
+        node?.networkInventory ?? [],
+      )
+
+      for (const secret of input.secrets) {
+        await transaction
+          .insert(resourceSecretReferences)
+          .values({
+            id: secret.id,
+            resourceId: resource.id,
+            environmentKey: secret.environmentKey,
+            secretReference: secret.reference,
+            encryptedValue: secret.encryptedValue,
+            delivery: input.spec.secretDelivery === 'environment' ? 'environment' : 'file',
+            version: 1,
+          })
+          .onConflictDoUpdate({
+            target: [
+              resourceSecretReferences.resourceId,
+              resourceSecretReferences.environmentKey,
+            ],
+            set: {
+              secretReference: secret.reference,
+              encryptedValue: secret.encryptedValue,
+              delivery: input.spec.secretDelivery === 'environment' ? 'environment' : 'file',
+              version: sql`${resourceSecretReferences.version} + 1`,
+              updatedAt: new Date(),
+            },
+          })
+      }
+
+      for (const volume of input.spec.volumes) {
+        const externalId = `oc-${resource.id}-${volume.name}`
+        await transaction
+          .insert(resourceVolumes)
+          .values({
+            nodeId: resource.nodeId,
+            resourceId: resource.id,
+            externalId,
+            name: volume.name,
+            mountTarget: volume.mountTarget,
+            kind: volume.kind,
+            deleteProtection: volume.kind === 'persistent',
+          })
+          .onConflictDoUpdate({
+            target: [resourceVolumes.nodeId, resourceVolumes.externalId],
+            set: {
+              name: volume.name,
+              mountTarget: volume.mountTarget,
+              kind: volume.kind,
+              deleteProtection: volume.kind === 'persistent',
+              updatedAt: new Date(),
+            },
+          })
+      }
+
+      const revision = resource.desiredRevision + 1
+      const [updatedResource] = await transaction
+        .update(infrastructureResources)
+        .set({
+          templateVersion: input.templateVersion,
+          applicationId: input.applicationId,
+          releaseId: input.releaseId,
+          releasePolicy: input.releasePolicy,
+          desiredState: 'running',
+          desiredRevision: revision,
+          imageReference: input.spec.source.type === 'image' ? input.spec.source.reference : null,
+          desiredSpec: input.spec,
+          labels: {
+            ...resource.labels,
+            'oc.template': input.templateSlug,
+            'oc.revision': String(revision),
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(infrastructureResources.id, resource.id))
+        .returning()
+      if (!updatedResource) throw new Error('Failed to synchronize template resource.')
+
+      const targetPort = input.spec.ports.find((port) => port.protocol === 'tcp')?.containerPort
+      if (targetPort) {
+        await transaction
+          .update(resourceRoutes)
+          .set({ targetPort, updatedAt: new Date() })
+          .where(eq(resourceRoutes.resourceId, resource.id))
+      }
+
+      const [operation] = await transaction
+        .insert(infrastructureOperations)
+        .values({
+          nodeId: resource.nodeId,
+          resourceId: resource.id,
+          actorUserId: input.actorUserId,
+          idempotencyKey: input.idempotencyKey,
+          action: 'application.redeploy',
+          expectedResourceRevision: revision,
+          expiresAt: input.expiresAt,
+          payload: {
+            resourceId: resource.id,
+            name: resource.name,
+            kind: resource.kind,
+            revision,
+            spec: input.spec,
+          },
+        })
+        .returning()
+      if (!operation) throw new Error('Failed to create template sync operation.')
+
+      await transaction.insert(auditLogs).values({
+        actorUserId: input.actorUserId,
+        action: 'infrastructure.template.synced',
+        entityType: 'infrastructure_resource',
+        entityId: resource.id,
+        beforeData: { templateVersion: resource.templateVersion },
+        afterData: { templateVersion: input.templateVersion },
+        metadata: {
+          operationId: operation.id,
+          correlationId: operation.correlationId,
+          templateId: input.templateId,
+          revision,
+        },
+      })
+      return { operation, resource: updatedResource, replayed: false }
+    })
+  }
+
   async createDeployment(input: CreateTemplateDeploymentRecord) {
     return this.database.transaction(async (transaction) => {
       const [existing] = await transaction
@@ -141,6 +420,7 @@ export class InfrastructureTemplateRepository {
           agentVersion: infrastructureNodes.agentVersion,
           gatewayStatus: infrastructureNodes.gatewayStatus,
           capabilities: infrastructureNodes.capabilities,
+          networkInventory: infrastructureNodes.networkInventory,
         })
         .from(infrastructureNodes)
         .where(
@@ -157,6 +437,7 @@ export class InfrastructureTemplateRepository {
       if (!node) return null
       validateLocalImageNode(input.spec.source, node.id, node.capabilities)
       validateSecretDelivery(input.spec, node.capabilities)
+      validateDeploymentNetwork(input.spec.networkName, node.capabilities, node.networkInventory)
       if (!supportsTemplateSecrets(node.agentVersion)) {
         return { incompatibleAgent: true as const, minimumAgentVersion: '0.3.0' }
       }
@@ -194,7 +475,7 @@ export class InfrastructureTemplateRepository {
           kind: input.resourceKind,
           name: input.name,
           classification: input.classification,
-          desiredState: 'running',
+          desiredState: input.managedDatabase ? 'pending' : 'running',
           desiredRevision: 1,
           imageReference: input.spec.source.type === 'image' ? input.spec.source.reference : null,
           desiredSpec: input.spec,
@@ -204,6 +485,7 @@ export class InfrastructureTemplateRepository {
             'oc.revision': '1',
             'oc.template': input.templateSlug,
             'oc.engine': input.engine,
+            ...(input.managedDatabase ? { 'oc.deployment-gate': 'database' } : {}),
           },
         })
         .returning()
@@ -237,7 +519,10 @@ export class InfrastructureTemplateRepository {
             environmentKey: secret.environmentKey,
             secretReference: secret.reference,
             encryptedValue: secret.encryptedValue,
-            delivery: 'file' as const,
+            delivery:
+              input.spec.secretDelivery === 'environment'
+                ? ('environment' as const)
+                : ('file' as const),
             version: 1,
           })),
         )
@@ -255,25 +540,41 @@ export class InfrastructureTemplateRepository {
         })
       }
 
-      const [operation] = await transaction
-        .insert(infrastructureOperations)
-        .values({
-          nodeId: input.nodeId,
-          resourceId: resource.id,
-          actorUserId: input.actorUserId,
-          idempotencyKey: input.idempotencyKey,
-          action: 'application.ensure',
-          expectedResourceRevision: 1,
-          expiresAt: input.expiresAt,
-          payload: {
-            resourceId: resource.id,
-            name: resource.name,
-            kind: input.resourceKind,
-            revision: 1,
-            spec: input.spec,
-          },
-        })
-        .returning()
+      const operation = input.managedDatabase
+        ? (
+            await createDeploymentDatabase(transaction, {
+              clusterId: input.managedDatabase.clusterId,
+              applicationResourceId: resource.id,
+              applicationNodeId: input.nodeId,
+              serviceId: service?.id,
+              environmentKey: input.managedDatabase.environmentKey,
+              networkName: input.spec.networkName,
+              actorUserId: input.actorUserId,
+              idempotencyKey: input.idempotencyKey,
+              expiresAt: input.expiresAt,
+            })
+          ).operation
+        : (
+            await transaction
+              .insert(infrastructureOperations)
+              .values({
+                nodeId: input.nodeId,
+                resourceId: resource.id,
+                actorUserId: input.actorUserId,
+                idempotencyKey: input.idempotencyKey,
+                action: 'application.ensure',
+                expectedResourceRevision: 1,
+                expiresAt: input.expiresAt,
+                payload: {
+                  resourceId: resource.id,
+                  name: resource.name,
+                  kind: input.resourceKind,
+                  revision: 1,
+                  spec: input.spec,
+                },
+              })
+              .returning()
+          )[0]
       if (!operation) throw new Error('Failed to create template operation.')
 
       await transaction.insert(auditLogs).values({
@@ -289,6 +590,7 @@ export class InfrastructureTemplateRepository {
           serviceId: service?.id ?? null,
           hostname: input.hostname ?? null,
           secretKeys: input.secrets.map((secret) => secret.environmentKey),
+          managedDatabaseClusterId: input.managedDatabase?.clusterId ?? null,
         },
       })
       return { operation, resource, replayed: false }

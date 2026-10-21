@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { managedDatabaseBindingSchema } from './native-service-databases'
 
 export const NODE_ENVIRONMENTS = ['development', 'staging', 'production'] as const
 export const NODE_ROLES = ['deployment', 'builder', 'hybrid'] as const
@@ -14,6 +15,7 @@ export const INFRASTRUCTURE_ACTIONS = [
   'application.redeploy',
   'application.delete',
   'application.set-limits',
+  'container.exec',
   'application.build',
   'image.delete',
   'database.cluster.activate',
@@ -133,6 +135,11 @@ const namedVolumeSchema = z.object({
   kind: z.enum(['ephemeral', 'persistent']).default('persistent'),
 })
 
+export const dockerNetworkNameSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/, 'Nama Docker network tidak valid.')
+
 const imageSourceSchema = z
   .object({
     type: z.literal('image'),
@@ -170,6 +177,7 @@ const buildSourceSchema = z.object({
 
 export const applicationSpecSchema = z.object({
   source: z.discriminatedUnion('type', [imageSourceSchema, buildSourceSchema]),
+  networkName: dockerNetworkNameSchema.default('oc-private'),
   limits: resourceLimitsSchema,
   ports: z.array(applicationPortSchema).max(16).default([]),
   environment: z.record(environmentKeySchema, z.string().max(16_384)).default({}),
@@ -180,29 +188,63 @@ export const applicationSpecSchema = z.object({
   healthcheck: healthcheckSchema.optional(),
 })
 
-export const createApplicationResourceSchema = z.object({
-  nodeId: z.string().uuid(),
-  customerId: z.string().uuid().nullable().optional(),
-  name: z
-    .string()
-    .trim()
-    .min(1)
-    .max(160)
-    .regex(/^[a-z0-9][a-z0-9-]*$/, 'Nama aplikasi harus berupa slug lowercase.'),
-  classification: z.enum(['billable', 'internal', 'ignored']).default('billable'),
-  spec: applicationSpecSchema,
-})
+export const createApplicationResourceSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    customerId: z.string().uuid().nullable().optional(),
+    serviceId: z.string().uuid().optional(),
+    managedDatabase: managedDatabaseBindingSchema.optional(),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(160)
+      .regex(/^[a-z0-9][a-z0-9-]*$/, 'Nama aplikasi harus berupa slug lowercase.'),
+    classification: z.enum(['billable', 'internal', 'ignored']).default('internal'),
+    spec: applicationSpecSchema,
+  })
+  .superRefine((input, context) => {
+    if (input.classification === 'billable' && !input.serviceId) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Service wajib dipilih untuk resource billable.',
+        path: ['serviceId'],
+      })
+    }
+    const managedKey = input.managedDatabase?.environmentKey
+    if (
+      managedKey &&
+      (managedKey in input.spec.environment || managedKey in input.spec.secretReferences)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: `${managedKey} akan disediakan managed database dan tidak boleh diisi manual.`,
+        path: ['spec'],
+      })
+    }
+  })
 
-export const updateApplicationResourceSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(1)
-    .max(160)
-    .regex(/^[a-z0-9][a-z0-9-]*$/, 'Nama aplikasi harus berupa slug lowercase.'),
-  classification: z.enum(['billable', 'internal', 'ignored']),
-  spec: applicationSpecSchema,
-})
+export const updateApplicationResourceSchema = z
+  .object({
+    serviceId: z.string().uuid().optional(),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(160)
+      .regex(/^[a-z0-9][a-z0-9-]*$/, 'Nama aplikasi harus berupa slug lowercase.'),
+    classification: z.enum(['billable', 'internal', 'ignored']),
+    spec: applicationSpecSchema,
+  })
+  .superRefine((input, context) => {
+    if (input.classification === 'billable' && !input.serviceId) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Service wajib dipilih untuk resource billable.',
+        path: ['serviceId'],
+      })
+    }
+  })
 
 export const operationIdSchema = z.string().uuid()
 
@@ -215,6 +257,19 @@ export const operationStatusUpdateSchema = z.object({
   observedRevision: z.number().int().nonnegative().optional(),
 })
 
+export const operationLogAppendSchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        occurredAt: z.string().datetime({ offset: true }),
+        level: z.enum(['info', 'warning', 'error']),
+        message: z.string().trim().min(1).max(4000),
+      }),
+    )
+    .min(1)
+    .max(50),
+})
+
 export const applicationLifecycleSchema = z.object({
   action: z.enum([
     'application.start',
@@ -223,6 +278,15 @@ export const applicationLifecycleSchema = z.object({
     'application.redeploy',
     'application.delete',
   ]),
+})
+
+export const containerExecSchema = z.object({
+  command: z
+    .string()
+    .trim()
+    .min(1, 'Command wajib diisi.')
+    .max(2000, 'Command maksimal 2000 karakter.')
+    .refine((command) => !command.includes('\0'), 'Command mengandung karakter yang tidak valid.'),
 })
 
 export const inventoryResourceSchema = z.object({
@@ -257,11 +321,27 @@ export const inventoryImageSchema = z.object({
   containerCount: z.number().int().nonnegative(),
 })
 
+export const inventoryNetworkSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  name: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
+  driver: z.string().trim().min(1).max(64),
+  scope: z.string().trim().min(1).max(64),
+  internal: z.boolean(),
+  attachable: z.boolean(),
+  managed: z.boolean(),
+  containerCount: z.number().int().nonnegative(),
+})
+
 export const agentInventorySchema = z.object({
   observedAt: z.string().datetime({ offset: true }),
   resources: z.array(inventoryResourceSchema).max(1000),
   // Optional so agents before image inventory support can continue reporting resources.
   images: z.array(inventoryImageSchema).max(1000).optional(),
+  // Optional so older agents remain compatible until network inventory is available.
+  networks: z.array(inventoryNetworkSchema).max(1000).optional(),
 })
 
 export type CreateNodeEnrollmentInput = z.infer<typeof createNodeEnrollmentSchema>
@@ -272,5 +352,7 @@ export type AgentHeartbeatInput = z.infer<typeof agentHeartbeatSchema>
 export type ApplicationSpec = z.infer<typeof applicationSpecSchema>
 export type CreateApplicationResourceInput = z.infer<typeof createApplicationResourceSchema>
 export type UpdateApplicationResourceInput = z.infer<typeof updateApplicationResourceSchema>
+export type ContainerExecInput = z.infer<typeof containerExecSchema>
 export type OperationStatusUpdateInput = z.infer<typeof operationStatusUpdateSchema>
+export type OperationLogAppendInput = z.infer<typeof operationLogAppendSchema>
 export type AgentInventoryInput = z.infer<typeof agentInventorySchema>

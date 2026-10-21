@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
 import type { CreateNativeDatabaseClusterInput } from '../../shared/schemas/native-database-clusters'
 import type { ProvisionNativeServiceDatabaseInput } from '../../shared/schemas/native-service-databases'
 import { useDatabase, type Database } from '../database/client'
@@ -188,7 +188,7 @@ export class NativeDatabaseClusterRepository {
         this.database
           .select({
             id: infrastructureServiceDatabases.id,
-            serviceId: services.id,
+            serviceId: infrastructureServiceDatabases.serviceId,
             serviceNumber: services.serviceNumber,
             serviceName: services.name,
             customerName: customers.name,
@@ -209,8 +209,8 @@ export class NativeDatabaseClusterRepository {
             updatedAt: infrastructureServiceDatabases.updatedAt,
           })
           .from(infrastructureServiceDatabases)
-          .innerJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
-          .innerJoin(customers, eq(customers.id, services.customerId))
+          .leftJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
+          .leftJoin(customers, eq(customers.id, services.customerId))
           .innerJoin(
             infrastructureDatabaseClusters,
             eq(infrastructureDatabaseClusters.id, infrastructureServiceDatabases.databaseClusterId),
@@ -475,17 +475,21 @@ export class NativeDatabaseClusterRepository {
         return { incompatibleAgent: true as const }
       }
 
-      const [service] = await transaction
-        .select({
-          id: services.id,
-          customerId: services.customerId,
-          status: services.status,
-        })
-        .from(services)
-        .where(eq(services.id, input.input.serviceId))
-        .limit(1)
-        .for('update')
-      if (!service || service.status === 'cancelled') return { invalidService: true as const }
+      const [service] = input.input.serviceId
+        ? await transaction
+            .select({
+              id: services.id,
+              customerId: services.customerId,
+              status: services.status,
+            })
+            .from(services)
+            .where(eq(services.id, input.input.serviceId))
+            .limit(1)
+            .for('update')
+        : []
+      if (input.input.serviceId && (!service || service.status === 'cancelled')) {
+        return { invalidService: true as const }
+      }
 
       const [application] = await transaction
         .select()
@@ -503,7 +507,7 @@ export class NativeDatabaseClusterRepository {
       if (application.nodeId !== cluster.primaryResource.nodeId) {
         return { differentNode: true as const }
       }
-      if (application.customerId && application.customerId !== service.customerId) {
+      if (application.customerId && service && application.customerId !== service.customerId) {
         return { customerMismatch: true as const }
       }
 
@@ -513,7 +517,15 @@ export class NativeDatabaseClusterRepository {
         .where(
           and(
             isNull(infrastructureServiceDatabases.deletedAt),
-            inArray(infrastructureServiceDatabases.serviceId, [service.id]),
+            or(
+              eq(
+                infrastructureServiceDatabases.applicationResourceId,
+                input.input.applicationResourceId,
+              ),
+              ...(service
+                ? [eq(infrastructureServiceDatabases.serviceId, service.id)]
+                : []),
+            ),
           ),
         )
         .limit(1)
@@ -548,7 +560,7 @@ export class NativeDatabaseClusterRepository {
         .insert(infrastructureServiceDatabases)
         .values({
           id: input.allocationId,
-          serviceId: service.id,
+          serviceId: service?.id,
           databaseClusterId: cluster.cluster.id,
           applicationResourceId: application.id,
           provisioningOperationId: operation.id,
@@ -569,7 +581,7 @@ export class NativeDatabaseClusterRepository {
         entityId: allocation.id,
         metadata: {
           clusterId: cluster.cluster.id,
-          serviceId: service.id,
+          serviceId: service?.id ?? null,
           applicationResourceId: application.id,
           operationId: operation.id,
           databaseName: allocation.databaseName,

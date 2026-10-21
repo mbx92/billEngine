@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  ContainerExecInput,
   CreateApplicationResourceInput,
+  OperationLogAppendInput,
   OperationStatusUpdateInput,
   UpdateApplicationResourceInput,
 } from '../../../shared/schemas/infrastructure'
@@ -85,6 +87,51 @@ export class NativeInfrastructureService {
     return result
   }
 
+  async createContainerExecOperation(
+    resourceId: string,
+    input: ContainerExecInput,
+    actorUserId: string,
+    idempotencyKey: string,
+  ) {
+    let result
+    try {
+      result = await this.repository.createContainerExecOperation({
+        resourceId,
+        command: input.command,
+        actorUserId,
+        idempotencyKey,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error
+      const operation = await this.repository.findOperationByIdempotencyKey(idempotencyKey)
+      if (!operation) throw error
+      return { operation, replayed: true }
+    }
+
+    if ('reason' in result) {
+      if (result.reason === 'not_found') throw DomainError.notFound('Application tidak ditemukan.')
+      if (result.reason === 'not_running') {
+        throw DomainError.invalidState(
+          'Docker sh hanya tersedia untuk container yang sedang running dan sinkron.',
+        )
+      }
+      if (result.reason === 'node_unavailable') {
+        throw DomainError.invalidState('Node sedang offline, drain, atau tidak aktif.')
+      }
+      throw DomainError.invalidState(
+        'Docker sh membutuhkan OC Agent yang mendukung container-exec.',
+      )
+    }
+    return result
+  }
+
+  async containerExecOperation(resourceId: string, operationId: string) {
+    const operation = await this.repository.findContainerExecOperation(resourceId, operationId)
+    if (!operation) throw DomainError.notFound('Docker sh operation tidak ditemukan.')
+    return operation
+  }
+
   async updateApplication(
     resourceId: string,
     input: UpdateApplicationResourceInput,
@@ -118,8 +165,45 @@ export class NativeInfrastructureService {
     return result
   }
 
-  claimNextOperation(nodeId: string, workerId: string) {
+  async claimNextOperation(nodeId: string, workerId: string) {
+    await this.failExpiredExecutingOperations(nodeId)
     return this.repository.claimNextOperation(nodeId, workerId)
+  }
+
+  async failExpiredExecutingOperations(nodeId: string) {
+    const expired = await this.repository.listExpiredExecutingOperationIds(nodeId)
+    for (const candidate of expired) {
+      const operation = await this.repository.findOperationForNode(nodeId, candidate.id)
+      if (
+        !operation ||
+        !['dispatched', 'running'].includes(operation.status) ||
+        operation.expiresAt.getTime() > Date.now()
+      ) {
+        continue
+      }
+      await this.repository.recordOperationStatus(nodeId, operation.id, {
+        status: 'failed',
+        retryable: false,
+        errorCode: 'operation_timeout',
+        errorMessage: 'Operation melewati batas waktu eksekusi dan dihentikan oleh watchdog.',
+      })
+    }
+  }
+
+  async listCancelledExecutingOperationIds(nodeId: string) {
+    const operations = await this.repository.listCancelledExecutingOperationIds(nodeId)
+    return operations.map((operation) => operation.id)
+  }
+
+  async forceStopOperation(operationId: string, actorUserId: string) {
+    const result = await this.repository.forceStopOperation(operationId, actorUserId)
+    if ('reason' in result) {
+      if (result.reason === 'not_found') throw DomainError.notFound('Operation tidak ditemukan.')
+      throw DomainError.invalidState(
+        `Operation berstatus ${result.operation.status} dan tidak dapat dihentikan.`,
+      )
+    }
+    return result
   }
 
   async recordOperationStatus(
@@ -159,6 +243,19 @@ export class NativeInfrastructureService {
       await new ApplicationBuildService().synchronizeOperation(operation.id, input, updated.status)
     }
     return updated
+  }
+
+  async appendOperationLogs(
+    nodeId: string,
+    operationId: string,
+    input: OperationLogAppendInput,
+  ) {
+    const operation = await this.repository.appendOperationLogs(nodeId, operationId, input)
+    if (!operation) throw DomainError.notFound('Operation tidak ditemukan.')
+    return {
+      id: operation.id,
+      logUpdatedAt: operation.logUpdatedAt?.toISOString() ?? null,
+    }
   }
 }
 

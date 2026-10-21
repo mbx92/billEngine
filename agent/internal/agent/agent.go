@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/mbx92/billEngine/agent/internal/config"
@@ -65,6 +66,35 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if identity.Role == "" {
 		identity.Role = "deployment"
+	}
+	var activeOperationMu sync.Mutex
+	var activeOperationID string
+	var cancelActiveOperation context.CancelFunc
+	setActiveOperation := func(operationID string, cancel context.CancelFunc) {
+		activeOperationMu.Lock()
+		defer activeOperationMu.Unlock()
+		activeOperationID = operationID
+		cancelActiveOperation = cancel
+	}
+	clearActiveOperation := func(operationID string) {
+		activeOperationMu.Lock()
+		defer activeOperationMu.Unlock()
+		if activeOperationID != operationID {
+			return
+		}
+		activeOperationID = ""
+		cancelActiveOperation = nil
+	}
+	cancelOperationIfActive := func(operationIDs []string) {
+		activeOperationMu.Lock()
+		defer activeOperationMu.Unlock()
+		for _, operationID := range operationIDs {
+			if operationID == activeOperationID && cancelActiveOperation != nil {
+				a.logger.Warn("force stopping operation", "operation_id", operationID)
+				cancelActiveOperation()
+				return
+			}
+		}
 	}
 
 	a.logger.Info("agent started", "node_id", identity.NodeID, "node_name", identity.NodeName, "version", Version)
@@ -126,6 +156,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		cancelOperationIfActive(response.CancelOperationIDs)
 		if response.Role != "" && response.Role != identity.Role {
 			if !validNodeRole(response.Role) {
 				return fmt.Errorf("control plane returned invalid node role %q", response.Role)
@@ -154,10 +185,16 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.logger.Warn("image inventory unavailable", "error", imageInventoryErr)
 			images = nil
 		}
+		networks, networkInventoryErr := docker.NetworkInventory(ctx)
+		if networkInventoryErr != nil {
+			a.logger.Warn("network inventory unavailable", "error", networkInventoryErr)
+			networks = nil
+		}
 		return client.Inventory(ctx, identity.Credential, controlplane.InventoryRequest{
 			ObservedAt: time.Now().UTC(),
 			Resources:  resources,
 			Images:     images,
+			Networks:   networks,
 		})
 	}
 	processOperation := func() error {
@@ -165,14 +202,40 @@ func (a *Agent) Run(ctx context.Context) error {
 		if operationErr != nil || operation == nil {
 			return operationErr
 		}
+		operationCtx, cancelOperation := context.WithCancel(ctx)
+		if !operation.ExpiresAt.IsZero() {
+			cancelOperation()
+			operationCtx, cancelOperation = context.WithDeadline(ctx, operation.ExpiresAt)
+		}
+		defer cancelOperation()
+		setActiveOperation(operation.ID, cancelOperation)
+		defer clearActiveOperation(operation.ID)
+
+		a.logger.Info(
+			"operation started",
+			"operation_id", operation.ID,
+			"action", operation.Action,
+			"attempt", operation.AttemptCount,
+			"expires_at", operation.ExpiresAt,
+		)
 		if err := client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
 			Status: "running",
 		}); err != nil {
 			return err
 		}
+		logReporter := newOperationLogReporter(ctx, client, identity.Credential, operation.ID, a.logger)
+		defer logReporter.Close()
+		logReporter.Emit("info", fmt.Sprintf(
+			"Operation %s dimulai (attempt %d/%d, deadline %s)",
+			operation.Action,
+			operation.AttemptCount,
+			operation.MaxAttempts,
+			operation.ExpiresAt.UTC().Format(time.RFC3339),
+		))
 		if operation.Action == "agent.upgrade" || operation.Action == "agent.rollback" {
+			logReporter.Emit("info", "Menyiapkan binary dan proses self-update agent")
 			prepared, updateFailure := selfupdate.Prepare(
-				ctx,
+				operationCtx,
 				client,
 				identity.Credential,
 				*operation,
@@ -181,44 +244,109 @@ func (a *Agent) Run(ctx context.Context) error {
 				Version,
 			)
 			if updateFailure != nil {
+				logReporter.Emit("error", "Self-update gagal: "+updateFailure.Message)
+				logReporter.Flush()
 				return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
 					Status: "failed", Retryable: updateFailure.Retryable,
 					ErrorCode: updateFailure.Code, ErrorMessage: updateFailure.Message,
 				})
 			}
 			if err := prepared.Trigger(); err != nil {
+				logReporter.Emit("error", "Agent updater gagal dijalankan")
+				logReporter.Flush()
 				return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
 					Status: "failed", Retryable: true,
 					ErrorCode: "update_trigger_failed", ErrorMessage: "agent updater could not be triggered",
 				})
 			}
 			a.logger.Info("agent update staged", "operation_id", operation.ID, "target_version", prepared.TargetVersion)
+			logReporter.Emit("info", "Agent update berhasil dipersiapkan dan trigger dijalankan")
+			logReporter.Flush()
 			return nil
 		}
-		resolvedSecrets, secretErr := client.OperationSecrets(ctx, identity.Credential, operation.ID)
+		logReporter.Emit("info", "Mengambil secret dan credential yang diperlukan operation")
+		resolvedSecrets, secretErr := client.OperationSecrets(operationCtx, identity.Credential, operation.ID)
 		if secretErr != nil {
+			if errors.Is(operationCtx.Err(), context.Canceled) && ctx.Err() == nil {
+				a.logger.Warn("operation force stopped", "operation_id", operation.ID, "action", operation.Action)
+				logReporter.Emit("warning", "Operation dihentikan secara paksa saat mengambil secret")
+				logReporter.Flush()
+				return nil
+			}
+			if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
+				a.logger.Warn("operation timed out", "operation_id", operation.ID, "action", operation.Action)
+				logReporter.Emit("error", "Deadline tercapai saat mengambil secret operation")
+				logReporter.Flush()
+				return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+					Status: "failed", ErrorCode: "operation_timeout",
+					ErrorMessage: "operation exceeded its execution deadline",
+				})
+			}
+			logReporter.Emit("error", "Secret operation gagal diambil dari control plane")
+			logReporter.Flush()
 			return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
 				Status: "failed", Retryable: true,
 				ErrorCode: "secret_delivery_failed", ErrorMessage: "operation secrets could not be retrieved",
 			})
 		}
+		logReporter.Emit("info", "Secret operation berhasil diterima")
+		secretValues := make([]string, 0, len(resolvedSecrets.Secrets)+1)
+		for _, value := range resolvedSecrets.Secrets {
+			secretValues = append(secretValues, value)
+		}
+		if resolvedSecrets.Registry != nil {
+			secretValues = append(secretValues, resolvedSecrets.Registry.Token)
+		}
+		executionCtx := executor.WithOperationLogSink(operationCtx, secretValues, logReporter.Emit)
 		result, executionErr := executor.ExecuteWithOperationSecrets(
-			ctx,
+			executionCtx,
 			*operation,
 			resolvedSecrets.Secrets,
 			resolvedSecrets.Registry,
 			a.config.SecretDirectory,
 		)
 		revision := operation.ExpectedResourceRevision
+		if errors.Is(operationCtx.Err(), context.Canceled) && ctx.Err() == nil {
+			a.logger.Warn("operation force stopped", "operation_id", operation.ID, "action", operation.Action)
+			logReporter.Emit("warning", "Operation dihentikan secara paksa oleh control plane")
+			logReporter.Flush()
+			return nil
+		}
+		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
+			a.logger.Warn("operation timed out", "operation_id", operation.ID, "action", operation.Action)
+			logReporter.Emit("error", "Operation mencapai deadline dan proses aktif dihentikan")
+			logReporter.Flush()
+			return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+				Status: "failed", ErrorCode: "operation_timeout",
+				ErrorMessage: "operation exceeded its execution deadline",
+			})
+		}
 		if executionErr != nil {
+			a.logger.Warn(
+				"operation failed",
+				"operation_id", operation.ID,
+				"action", operation.Action,
+				"error_code", executionErr.Code,
+			)
+			logReporter.Emit("error", "Operation gagal dengan kode "+executionErr.Code)
+			logReporter.Flush()
 			return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
 				Status: "failed", Retryable: executionErr.Retryable,
 				ErrorCode: executionErr.Code, ErrorMessage: executionErr.Message,
 			})
 		}
-		return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+		a.logger.Info("operation succeeded", "operation_id", operation.ID, "action", operation.Action)
+		statusErr := client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
 			Status: "succeeded", Result: result, ObservedRevision: revision,
 		})
+		if statusErr != nil {
+			logReporter.Emit("error", "Hasil operation berhasil, tetapi status succeeded ditolak control plane: "+statusErr.Error())
+			logReporter.Flush()
+			return fmt.Errorf("report succeeded operation status: %w", statusErr)
+		}
+		logReporter.Emit("info", "Operation selesai dan status succeeded diterima control plane")
+		logReporter.Flush()
+		return nil
 	}
 
 	if err := heartbeat(); err != nil {

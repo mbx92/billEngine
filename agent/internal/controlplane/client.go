@@ -57,7 +57,8 @@ type HeartbeatRequest struct {
 }
 
 type HeartbeatResponse struct {
-	Role string `json:"role"`
+	Role               string   `json:"role"`
+	CancelOperationIDs []string `json:"cancelOperationIds,omitempty"`
 }
 
 type AgentUpdate struct {
@@ -68,6 +69,7 @@ type InventoryRequest struct {
 	ObservedAt time.Time         `json:"observedAt"`
 	Resources  []docker.Resource `json:"resources"`
 	Images     []docker.Image    `json:"images,omitempty"`
+	Networks   []docker.Network  `json:"networks,omitempty"`
 }
 
 type Operation struct {
@@ -81,6 +83,7 @@ type Operation struct {
 	Payload                  json.RawMessage `json:"payload"`
 	AttemptCount             int             `json:"attemptCount"`
 	MaxAttempts              int             `json:"maxAttempts"`
+	ExpiresAt                time.Time       `json:"expiresAt"`
 }
 
 type OperationStatusRequest struct {
@@ -90,6 +93,16 @@ type OperationStatusRequest struct {
 	ErrorCode        string         `json:"errorCode,omitempty"`
 	ErrorMessage     string         `json:"errorMessage,omitempty"`
 	ObservedRevision *int           `json:"observedRevision,omitempty"`
+}
+
+type OperationLogEntry struct {
+	OccurredAt time.Time `json:"occurredAt"`
+	Level      string    `json:"level"`
+	Message    string    `json:"message"`
+}
+
+type OperationLogRequest struct {
+	Entries []OperationLogEntry `json:"entries"`
 }
 
 type OperationSecrets struct {
@@ -152,6 +165,22 @@ func (c *Client) UpdateOperation(
 		ctx,
 		http.MethodPost,
 		"/api/infrastructure/agent/operations/"+operationID+"/status",
+		credential,
+		request,
+		nil,
+	)
+}
+
+func (c *Client) AppendOperationLogs(
+	ctx context.Context,
+	credential string,
+	operationID string,
+	request OperationLogRequest,
+) error {
+	return c.do(
+		ctx,
+		http.MethodPost,
+		"/api/infrastructure/agent/operations/"+operationID+"/logs",
 		credential,
 		request,
 		nil,

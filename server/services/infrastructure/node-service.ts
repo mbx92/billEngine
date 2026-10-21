@@ -17,6 +17,7 @@ import {
   supportsRemoteAgentUpdate,
 } from './agent-artifact-service'
 import { isUbuntuRelease } from './policy'
+import { NativeInfrastructureService } from './native-service'
 
 export const AGENT_PROTOCOL_VERSION = '1'
 const DEFAULT_GATEWAY_IMAGE = 'traefik:v3.7.14'
@@ -39,6 +40,7 @@ type ControlRepository = Pick<
 export class InfrastructureNodeService {
   constructor(
     private readonly repository: ControlRepository = new InfrastructureControlRepository(),
+    private readonly operationService = new NativeInfrastructureService(),
   ) {}
 
   async listNodes() {
@@ -143,7 +145,10 @@ export class InfrastructureNodeService {
 
     const result = await this.repository.recordHeartbeat(nodeId, input, configuredGatewayImage())
     if (!result) throw DomainError.notFound('Node tidak aktif atau tidak ditemukan.')
-    return result
+    await this.operationService.failExpiredExecutingOperations(nodeId)
+    const cancelOperationIds =
+      await this.operationService.listCancelledExecutingOperationIds(nodeId)
+    return { ...result, cancelOperationIds }
   }
 
   async inventory(nodeId: string, input: AgentInventoryInput) {

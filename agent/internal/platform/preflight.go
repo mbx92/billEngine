@@ -29,7 +29,7 @@ type Capacity struct {
 }
 
 func DetectCapabilities(ctx context.Context) []string {
-	capabilities := []string{"container-runtime", "secret-environment", "image-inventory", "image-delete"}
+	capabilities := []string{"container-runtime", "container-exec", "secret-environment", "image-inventory", "network-inventory", "operation-logs", "image-delete"}
 	if _, err := commandVersion(ctx, runCommand, "git", "--version"); err != nil {
 		return capabilities
 	}

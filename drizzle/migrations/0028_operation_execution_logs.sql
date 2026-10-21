@@ -1,0 +1,2 @@
+ALTER TABLE "infrastructure_operations" ADD COLUMN "log_excerpt" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "infrastructure_operations" ADD COLUMN "log_updated_at" timestamp with time zone;

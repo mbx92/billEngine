@@ -1,5 +1,15 @@
 <script setup lang="ts">
-import { FileCode2, GitBranch, Hammer, Package, Plus, Rocket, ShieldCheck } from '@lucide/vue'
+import {
+  ExternalLink,
+  FileCode2,
+  GitBranch,
+  Hammer,
+  Package,
+  Plus,
+  Rocket,
+  ShieldCheck,
+  SquareTerminal,
+} from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
 
 definePageMeta({ middleware: 'auth' })
@@ -49,6 +59,10 @@ interface Resource {
   releasePolicy: 'manual' | 'track_latest'
   imageReference: string | null
   observedState: string
+  desiredRevision: number
+  observedRevision: number
+  accessUrl: string | null
+  shellAvailable: boolean
 }
 
 interface ApplicationBuild {
@@ -100,6 +114,7 @@ const saving = ref(false)
 const buildingApplicationId = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const actionError = ref<string | null>(null)
+const shellResource = ref<Resource | null>(null)
 
 const registryForm = reactive({
   registryId: '',
@@ -217,6 +232,16 @@ function releasesFor(applicationId: string) {
 
 function buildsFor(applicationId: string) {
   return builds.value.filter((build) => build.applicationId === applicationId).slice(0, 3)
+}
+
+function runningResourcesForRelease(releaseId: string) {
+  return resources.value.filter(
+    (resource) =>
+      resource.releaseId === releaseId &&
+      resource.observedState === 'running' &&
+      resource.desiredRevision === resource.observedRevision &&
+      (Boolean(resource.accessUrl) || resource.shellAvailable),
+  )
 }
 
 function activeBuild(applicationId: string) {
@@ -704,6 +729,38 @@ onBeforeUnmount(() => {
               <p class="mt-0.5 truncate font-mono text-[10px] text-muted">
                 {{ release.commitSha.slice(0, 12) }} · {{ shortDigest(release.imageDigest) }}
               </p>
+              <div
+                v-if="runningResourcesForRelease(release.id).length"
+                class="mt-2 flex flex-wrap gap-x-3 gap-y-1"
+              >
+                <span
+                  v-for="resource in runningResourcesForRelease(release.id)"
+                  :key="resource.id"
+                  class="inline-flex items-center gap-2"
+                >
+                  <a
+                    v-if="resource.accessUrl"
+                    :href="resource.accessUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center gap-1 text-[11px] font-semibold text-brand hover:underline"
+                    :title="`Buka ${resource.name} di tab baru`"
+                  >
+                    <ExternalLink :size="11" aria-hidden="true" />
+                    Buka {{ resource.name }}
+                  </a>
+                  <button
+                    v-if="resource.shellAvailable"
+                    type="button"
+                    class="focus-ring inline-flex items-center gap-1 rounded text-[11px] font-semibold text-muted hover:text-ink"
+                    :title="`Buka Docker sh untuk ${resource.name}`"
+                    @click="shellResource = resource"
+                  >
+                    <SquareTerminal :size="11" aria-hidden="true" />
+                    Docker sh
+                  </button>
+                </span>
+              </div>
             </div>
             <UiButton size="sm" variant="ghost" @click="openRollout(release)"
               ><Rocket :size="13" /> Rollout</UiButton
@@ -718,6 +775,12 @@ onBeforeUnmount(() => {
         </p>
       </UiCard>
     </div>
+
+    <DockerShellDialog
+      v-if="shellResource"
+      :resource="shellResource"
+      @close="shellResource = null"
+    />
 
     <UiCard class="mt-4">
       <div class="flex items-start gap-3">

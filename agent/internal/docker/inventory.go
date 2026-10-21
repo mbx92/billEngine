@@ -40,6 +40,17 @@ type Image struct {
 	ContainerCount int      `json:"containerCount"`
 }
 
+type Network struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Driver         string `json:"driver"`
+	Scope          string `json:"scope"`
+	Internal       bool   `json:"internal"`
+	Attachable     bool   `json:"attachable"`
+	Managed        bool   `json:"managed"`
+	ContainerCount int    `json:"containerCount"`
+}
+
 type imageInspect struct {
 	ID          string   `json:"Id"`
 	RepoTags    []string `json:"RepoTags"`
@@ -48,16 +59,28 @@ type imageInspect struct {
 	Created     string   `json:"Created"`
 }
 
+type networkInspect struct {
+	ID         string                    `json:"Id"`
+	Name       string                    `json:"Name"`
+	Driver     string                    `json:"Driver"`
+	Scope      string                    `json:"Scope"`
+	Internal   bool                      `json:"Internal"`
+	Attachable bool                      `json:"Attachable"`
+	Labels     map[string]string         `json:"Labels"`
+	Containers map[string]map[string]any `json:"Containers"`
+}
+
 const maxInventoryImages = 1000
 
 type containerRow struct {
-	ID     string `json:"ID"`
-	Image  string `json:"Image"`
-	Names  string `json:"Names"`
-	State  string `json:"State"`
-	Status string `json:"Status"`
-	Labels string `json:"Labels"`
-	Ports  string `json:"Ports"`
+	ID       string `json:"ID"`
+	Image    string `json:"Image"`
+	Names    string `json:"Names"`
+	State    string `json:"State"`
+	Status   string `json:"Status"`
+	Labels   string `json:"Labels"`
+	Ports    string `json:"Ports"`
+	Networks string `json:"Networks"`
 }
 
 func Inventory(ctx context.Context) ([]Resource, error) {
@@ -66,6 +89,52 @@ func Inventory(ctx context.Context) ([]Resource, error) {
 
 func ImageInventory(ctx context.Context) ([]Image, error) {
 	return ImageInventoryWith(ctx, runCommand)
+}
+
+func NetworkInventory(ctx context.Context) ([]Network, error) {
+	return NetworkInventoryWith(ctx, runCommand)
+}
+
+func NetworkInventoryWith(ctx context.Context, run CommandRunner) ([]Network, error) {
+	output, err := run(ctx, "docker", "network", "ls", "--no-trunc", "--quiet")
+	if err != nil {
+		return nil, fmt.Errorf("list docker networks: %w", err)
+	}
+	networkIDs := uniqueNonEmptyLines(output, 1000)
+	if len(networkIDs) == 0 {
+		return []Network{}, nil
+	}
+
+	args := append([]string{"network", "inspect", "--format", "{{json .}}"}, networkIDs...)
+	inspectOutput, err := run(ctx, "docker", args...)
+	if err != nil {
+		return nil, fmt.Errorf("inspect docker networks: %w", err)
+	}
+
+	networks := make([]Network, 0, len(networkIDs))
+	for _, line := range strings.Split(strings.TrimSpace(string(inspectOutput)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var inspected networkInspect
+		if err := json.Unmarshal([]byte(line), &inspected); err != nil {
+			return nil, fmt.Errorf("decode docker network inventory: %w", err)
+		}
+		networks = append(networks, Network{
+			ID:             inspected.ID,
+			Name:           inspected.Name,
+			Driver:         inspected.Driver,
+			Scope:          inspected.Scope,
+			Internal:       inspected.Internal,
+			Attachable:     inspected.Attachable,
+			Managed:        inspected.Labels["oc.managed"] == "true" || inspected.Name == "oc-private",
+			ContainerCount: len(inspected.Containers),
+		})
+	}
+	sort.Slice(networks, func(left, right int) bool {
+		return networks[left].Name < networks[right].Name
+	})
+	return networks, nil
 }
 
 func ImageInventoryWith(ctx context.Context, run CommandRunner) ([]Image, error) {
@@ -273,10 +342,23 @@ func InventoryWith(ctx context.Context, run CommandRunner) ([]Resource, error) {
 				"containerId": row.ID,
 				"status":      row.Status,
 				"ports":       row.Ports,
+				"networks":    splitCommaValues(row.Networks),
 			},
 		})
 	}
 	return resources, nil
+}
+
+func splitCommaValues(value string) []string {
+	values := make([]string, 0)
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			values = append(values, item)
+		}
+	}
+	sort.Strings(values)
+	return values
 }
 
 func normalizeState(value string) string {

@@ -19,10 +19,10 @@ image store, without logging in to or pushing to a registry. Registry storage re
 
 ## Local image: repository to deployment without a registry
 
-1. Apply the database migrations and install OC Agent **0.12.5+** on the target server.
+1. Apply the database migrations and install OC Agent **0.12.6+** on the target server.
    Set its mode to **Hybrid** and install Git and Docker Buildx. Its next heartbeat reports
    `local-image-build`; older agents cannot execute local builds or deployments.
-   Build the agent artifacts and set `NUXT_AGENT_RELEASE_VERSION=0.12.5` before using remote upgrade.
+   Build the agent artifacts and set `NUXT_AGENT_RELEASE_VERSION=0.12.11` before using remote upgrade.
 2. Open **Applications → Application**, enter the public HTTPS GitHub repository, select
    **Local image**, and choose the hybrid server. Registry credentials are not required.
 3. Click **Build image**. The agent clones the configured branch and runs

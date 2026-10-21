@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Copy,
   Download,
+  Network,
   Package,
   Plus,
   RotateCcw,
@@ -24,6 +25,17 @@ interface NodeImage {
   sizeBytes: string
   createdAt: string
   used: boolean
+  containerCount: number
+}
+
+interface NodeNetwork {
+  id: string
+  name: string
+  driver: string
+  scope: string
+  internal: boolean
+  attachable: boolean
+  managed: boolean
   containerCount: number
 }
 
@@ -73,6 +85,8 @@ interface InfrastructureNode {
   imageCount: number
   usedImageCount: number
   images: NodeImage[]
+  networkCount: number
+  networks: NodeNetwork[]
 }
 
 interface EnrollmentResult {
@@ -455,8 +469,8 @@ function closeEnrollment() {
         </p>
         <h1 class="text-2xl font-semibold tracking-tight text-ink">Nodes</h1>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">
-          Kelola server Ubuntu yang menjalankan OC Agent. Control plane tidak membuka akses shell
-          dan tidak memberikan Docker socket kepada dashboard.
+          Kelola server Ubuntu yang menjalankan OC Agent. Docker sh hanya tersedia untuk container
+          managed yang running; dashboard tidak menerima Docker socket atau shell host.
         </p>
       </div>
       <div class="flex gap-2">
@@ -650,6 +664,24 @@ function closeEnrollment() {
               <UiBadge v-if="node.usedImageCount" tone="success">
                 {{ node.usedImageCount }} used
               </UiBadge>
+            </dd>
+          </div>
+          <div class="col-span-2">
+            <dt class="flex items-center gap-2 text-muted">
+              <Network :size="13" /> Docker networks
+            </dt>
+            <dd v-if="node.networks.length" class="mt-2 flex flex-wrap gap-2">
+              <UiBadge
+                v-for="network in node.networks"
+                :key="network.id"
+                :tone="network.managed ? 'info' : 'neutral'"
+                :title="`${network.driver}/${network.scope} · ${network.containerCount} container${network.internal ? ' · internal' : ''}`"
+              >
+                {{ network.name }} · {{ network.containerCount }}
+              </UiBadge>
+            </dd>
+            <dd v-else class="mt-1 text-xs text-muted">
+              Menunggu network inventory dari agent v0.12.9+.
             </dd>
           </div>
           <div>

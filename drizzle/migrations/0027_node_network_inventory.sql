@@ -1,0 +1,1 @@
+ALTER TABLE "infrastructure_nodes" ADD COLUMN "network_inventory" jsonb DEFAULT '[]'::jsonb NOT NULL;

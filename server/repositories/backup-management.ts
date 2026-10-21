@@ -58,7 +58,7 @@ export class BackupManagementRepository {
           infrastructureServiceDatabases,
           eq(infrastructureServiceDatabases.id, infrastructureBackupPolicies.serviceDatabaseId),
         )
-        .innerJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
+        .leftJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
         .innerJoin(
           infrastructureBackupTargets,
           eq(infrastructureBackupTargets.id, infrastructureBackupPolicies.storageTargetId),
@@ -92,7 +92,7 @@ export class BackupManagementRepository {
           infrastructureServiceDatabases,
           eq(infrastructureServiceDatabases.id, infrastructureDatabaseBackups.serviceDatabaseId),
         )
-        .innerJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
+        .leftJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
         .innerJoin(
           infrastructureDatabaseClusters,
           eq(infrastructureDatabaseClusters.id, infrastructureServiceDatabases.databaseClusterId),
@@ -121,8 +121,8 @@ export class BackupManagementRepository {
           nodeName: infrastructureNodes.name,
         })
         .from(infrastructureServiceDatabases)
-        .innerJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
-        .innerJoin(customers, eq(customers.id, services.customerId))
+        .leftJoin(services, eq(services.id, infrastructureServiceDatabases.serviceId))
+        .leftJoin(customers, eq(customers.id, services.customerId))
         .innerJoin(
           infrastructureDatabaseClusters,
           eq(infrastructureDatabaseClusters.id, infrastructureServiceDatabases.databaseClusterId),
