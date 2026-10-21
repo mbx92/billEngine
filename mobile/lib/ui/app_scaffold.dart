@@ -295,7 +295,7 @@ class _LoginPageState extends State<LoginPage> {
                         autocorrect: false,
                         decoration: const InputDecoration(
                           labelText: 'Base URL',
-                          helperText: 'Emulator: http://10.0.2.2:3000',
+                          helperText: 'Emulator: 10.0.2.2:3000 · HP via adb: 127.0.0.1:3000',
                           prefixIcon: Icon(Icons.dns_outlined, size: 18),
                         ),
                       ),

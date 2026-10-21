@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
 import 'package:billengine_mobile/core/api_client.dart';
@@ -11,6 +12,11 @@ import 'package:billengine_mobile/ui/app_scaffold.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // `Fmt` formats dates and money with the `id_ID` locale; without this the
+  // first `DateFormat('...', 'id_ID')` throws LocaleDataException at build
+  // time and the app renders the red error screen.
+  await initializeDateFormatting('id_ID');
 
   final sessionStore = SessionStore();
   final api = ApiService(ApiClient(sessionStore: sessionStore));

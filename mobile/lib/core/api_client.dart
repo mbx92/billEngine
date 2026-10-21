@@ -18,7 +18,14 @@ class ApiClient {
     : _baseUrl = normalizeBaseUrl(baseUrl),
       _sessionStore = sessionStore ?? SessionStore();
 
-  static const String defaultBaseUrl = 'http://10.0.2.2:3000';
+  /// Compile-time default. `10.0.2.2` only resolves inside the Android
+  /// emulator; a physical device on the same USB link uses `127.0.0.1` via
+  /// `adb reverse tcp:3000 tcp:3000`. Override at build time with
+  /// `--dart-define=BILLENGINE_BASE_URL=http://127.0.0.1:3000`.
+  static const String defaultBaseUrl = String.fromEnvironment(
+    'BILLENGINE_BASE_URL',
+    defaultValue: 'http://10.0.2.2:3000',
+  );
 
   final SessionStore _sessionStore;
   final http.Client _http = http.Client();

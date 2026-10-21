@@ -25,57 +25,66 @@ class AppCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final content = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (title != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title!,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: colors.ink,
-                        ),
-                      ),
-                      if (subtitle != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            subtitle!,
-                            style: TextStyle(fontSize: 11.5, color: colors.muted),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final content = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (title != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title!,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: colors.ink,
+                            ),
                           ),
-                        ),
-                    ],
-                  ),
+                          if (subtitle != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                subtitle!,
+                                style: TextStyle(fontSize: 11.5, color: colors.muted),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    ?trailing,
+                  ],
                 ),
-                ?trailing,
-              ],
-            ),
-          ),
-        if (title != null) Divider(height: 1, color: colors.line),
-        Flexible(child: Padding(padding: padding, child: child)),
-      ],
-    );
+              ),
+            if (title != null) Divider(height: 1, color: colors.line),
+            // Inside an unbounded parent (a scrollable, or a `Column` that is
+            // not height-constrained) a `Flexible` child triggers "RenderFlex
+            // children have non-zero flex but incoming height constraints are
+            // unbounded". Only flex when the incoming height is finite.
+            if (constraints.hasBoundedHeight)
+              Flexible(child: Padding(padding: padding, child: child))
+            else
+              Padding(padding: padding, child: child),
+          ],
+        );
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colors.line),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: onTap == null
-          ? content
-          : InkWell(onTap: onTap, child: content),
+        return Container(
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: colors.line),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: onTap == null ? content : InkWell(onTap: onTap, child: content),
+        );
+      },
     );
   }
 }
