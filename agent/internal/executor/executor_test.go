@@ -28,6 +28,9 @@ func TestEnsureApplicationUsesStructuredDockerArguments(t *testing.T) {
 	})
 	var commands [][]string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		commands = append(commands, append([]string{name}, args...))
 		if len(args) > 0 && args[0] == "inspect" {
 			return []byte("Error: No such object"), errors.New("not found")
@@ -99,6 +102,9 @@ func TestDeleteApplicationSucceedsWhenContainerIsAlreadyAbsent(t *testing.T) {
 	})
 	var commands [][]string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		commands = append(commands, append([]string{name}, args...))
 		return []byte("Error: No such object: oc-00000000000040008000000000000001"), errors.New("exit status 1")
 	}
@@ -177,6 +183,9 @@ func TestEnsureApplicationMountsSecretsAsFilesWithoutExposingValues(t *testing.T
 	})
 	var commands [][]string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		commands = append(commands, append([]string{name}, args...))
 		if len(args) > 0 && args[0] == "inspect" {
 			return []byte("Error: No such object"), errors.New("not found")
@@ -236,6 +245,9 @@ func TestRedeployPullsImageBeforeReplacingOwnedContainer(t *testing.T) {
 	})
 	var commands [][]string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		command := append([]string{name}, args...)
 		commands = append(commands, command)
 		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{.Id}}" {
@@ -282,6 +294,9 @@ func TestActivateDatabaseClusterRunsStructuredPostgresPreflight(t *testing.T) {
 	})
 	var commands [][]string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		commands = append(commands, append([]string{name}, args...))
 		if len(args) > 0 && args[0] == "inspect" {
 			return []byte("00000000-0000-4000-8000-000000000001\n"), nil
@@ -320,6 +335,9 @@ func TestEnsureServiceDatabaseUsesStdinWithoutSecretArguments(t *testing.T) {
 	var commands [][]string
 	var sqlInput string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		commands = append(commands, append([]string{name}, args...))
 		if len(args) > 0 && args[0] == "inspect" {
 			return []byte("00000000-0000-4000-8000-000000000001\n"), nil

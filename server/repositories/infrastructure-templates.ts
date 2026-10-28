@@ -8,6 +8,7 @@ import {
   validateSecretDelivery,
 } from '../services/infrastructure/local-image'
 import { validateDeploymentNetwork } from '../services/infrastructure/docker-network'
+import { DomainError } from '../utils/errors'
 import {
   auditLogs,
   infrastructureNodes,
@@ -254,6 +255,25 @@ export class InfrastructureTemplateRepository {
         .limit(1)
         .for('update')
       if (!resource) return null
+      const owners = await transaction
+        .select({ status: services.status, blocked: services.billingBlocked })
+        .from(serviceResources)
+        .innerJoin(services, eq(services.id, serviceResources.serviceId))
+        .where(eq(serviceResources.resourceId, resource.id))
+      if (
+        resource.desiredState === 'stopped' ||
+        owners.some((owner) => owner.status !== 'active' || owner.blocked)
+      ) {
+        throw DomainError.invalidState('Aktifkan service sebelum menyinkronkan template.')
+      }
+      if (
+        resource.classification === 'billable' &&
+        (owners.length !== 1 || input.spec.ports.some((port) => port.hostPort))
+      ) {
+        throw DomainError.validation(
+          'Deployment billable membutuhkan service dan tidak boleh membuka host port.',
+        )
+      }
       if (
         resource.templateId !== input.templateId ||
         resource.desiredRevision !== input.expectedRevision
@@ -296,10 +316,7 @@ export class InfrastructureTemplateRepository {
             version: 1,
           })
           .onConflictDoUpdate({
-            target: [
-              resourceSecretReferences.resourceId,
-              resourceSecretReferences.environmentKey,
-            ],
+            target: [resourceSecretReferences.resourceId, resourceSecretReferences.environmentKey],
             set: {
               secretReference: secret.reference,
               encryptedValue: secret.encryptedValue,
@@ -446,6 +463,12 @@ export class InfrastructureTemplateRepository {
       }
       if (input.hostname && !supportsGatewayRoutes(node.agentVersion)) {
         return { incompatibleAgent: true as const, minimumAgentVersion: '0.7.2' }
+      }
+      if (
+        input.classification === 'billable' &&
+        !node.capabilities.includes('billing-lifecycle-v1')
+      ) {
+        throw DomainError.invalidState('Perbarui OC Agent sebelum membuat deployment billable.')
       }
       if (input.hostname && node.gatewayStatus !== 'healthy') {
         return { gatewayUnavailable: true as const }

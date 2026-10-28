@@ -75,7 +75,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <div
-      class="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
       @mousedown.self="close"
     >
       <section
@@ -85,11 +85,8 @@ onBeforeUnmount(() => {
         :aria-labelledby="titleId"
         :aria-describedby="description ? descriptionId : undefined"
         tabindex="-1"
-        class="flex max-h-[calc(100dvh-1rem)] w-full flex-col rounded-t-xl border border-line-strong bg-surface shadow-2xl shadow-black/40 outline-none sm:max-h-[calc(100dvh-2rem)] sm:rounded-xl"
-        :class="[
-          sizeClass,
-          fixedHeight ? 'h-[calc(100dvh-1rem)] sm:h-[46rem]' : undefined,
-        ]"
+        class="flex max-h-[calc(100dvh-1rem)] w-full flex-col rounded-t-lg border bg-surface shadow-lg outline-none sm:max-h-[calc(100dvh-2rem)] sm:rounded-lg"
+        :class="[sizeClass, fixedHeight ? 'h-[calc(100dvh-1rem)] sm:h-[46rem]' : undefined]"
       >
         <header class="flex shrink-0 items-start justify-between gap-4 border-b px-5 py-4">
           <div>

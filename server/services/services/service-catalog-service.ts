@@ -35,7 +35,7 @@ export class ServiceCatalogService {
     private readonly repository = new ServiceRepository(database),
     private readonly audit = new AuditLogRepository(database),
     private readonly plans = new PlanRepository(database),
-    private readonly infrastructureLifecycle = new InfrastructureLifecycleService(database),
+    private readonly infrastructureLifecycle = new InfrastructureLifecycleService(),
   ) {}
 
   list(page: number, perPage: number) {
@@ -170,78 +170,46 @@ export class ServiceCatalogService {
   }
 
   async transition(id: string, input: TransitionServiceInput, actor: ActorContext) {
-    const lockConnection = await this.database.$client.connect()
-    let lockAcquired = false
-
-    try {
-      const lock = await lockConnection.query<{ acquired: boolean }>(
-        'select pg_try_advisory_lock(hashtext($1)) as acquired',
-        [`service-lifecycle:${id}`],
-      )
-      lockAcquired = lock.rows[0]?.acquired ?? false
-      if (!lockAcquired) throw DomainError.conflict('Perubahan status service sedang berjalan.')
-
-      const existing = await this.repository.findById(this.database, id)
-      if (!existing) throw DomainError.notFound('Service tidak ditemukan.')
-      validateTransition(existing.status, input.status)
-
-      const infrastructureTarget = input.status === 'cancelled' ? 'suspended' : input.status
-      const infrastructureOperation = await this.infrastructureLifecycle.apply(
+    return this.database.transaction(async (transaction) => {
+      const [current] = await transaction
+        .select()
+        .from(services)
+        .where(eq(services.id, id))
+        .for('update')
+      if (!current) throw DomainError.notFound('Service tidak ditemukan.')
+      if (current.status !== input.status) validateTransition(current.status, input.status)
+      const updated = await this.repository.transition(transaction, id, input.status, input.reason)
+      const operation = await this.infrastructureLifecycle.apply(
+        transaction,
         id,
-        infrastructureTarget,
+        input.status === 'active' && !current.billingBlocked ? 'active' : 'suspended',
         actor.userId,
       )
-
-      try {
-        return await this.database.transaction(async (transaction) => {
-          const current = await this.repository.findById(transaction, id)
-          if (!current) throw DomainError.notFound('Service tidak ditemukan.')
-          validateTransition(current.status, input.status)
-
-          const updated = await this.repository.transition(
-            transaction,
-            id,
-            input.status,
-            input.reason,
-          )
-          if (input.status === 'cancelled') {
-            await transaction
-              .update(infrastructureServiceDatabases)
-              .set({ status: 'pending_deletion', updatedAt: new Date() })
-              .where(eq(infrastructureServiceDatabases.serviceId, id))
-          }
-          await this.audit.record(transaction, {
-            actorUserId: actor.userId,
-            action: `service.${input.status}`,
-            entityType: 'service',
-            entityId: id,
-            beforeData: { status: current.status },
-            afterData: { status: updated.status, reason: input.reason },
-            metadata: {
-              controlledResourceCount: infrastructureOperation?.affectedCount ?? 0,
-            },
-            ipAddress: actor.ipAddress,
-            userAgent: actor.userAgent,
-          })
-
-          return updated
-        })
-      } catch (error) {
-        if (infrastructureOperation && !(await infrastructureOperation.rollback())) {
-          throw DomainError.external(
-            'Status billing gagal disimpan dan rollback operation tidak lengkap. Periksa deployment secara manual.',
-          )
-        }
-        throw error
+      if (input.status === 'cancelled') {
+        await transaction
+          .update(infrastructureServiceDatabases)
+          .set({ status: 'pending_deletion', updatedAt: new Date() })
+          .where(eq(infrastructureServiceDatabases.serviceId, id))
       }
-    } finally {
-      if (lockAcquired) {
-        await lockConnection
-          .query('select pg_advisory_unlock(hashtext($1))', [`service-lifecycle:${id}`])
-          .catch(() => undefined)
+      await this.audit.record(transaction, {
+        actorUserId: actor.userId,
+        action: `service.${input.status}.requested`,
+        entityType: 'service',
+        entityId: id,
+        beforeData: { status: current.status },
+        afterData: { status: updated.status, reason: input.reason },
+        metadata: {
+          controlledResourceCount: operation.affectedCount,
+          infrastructureStatus: operation.affectedCount ? 'pending' : 'ready',
+        },
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+      })
+      return {
+        ...updated,
+        infrastructureStatus: operation.affectedCount ? ('pending' as const) : ('ready' as const),
       }
-      lockConnection.release()
-    }
+    })
   }
 
   /** Permanently removes a cancelled service that has no invoice history. */

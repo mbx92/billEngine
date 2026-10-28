@@ -153,6 +153,11 @@ export interface ApiPlanOption {
 }
 
 export interface ApiService {
+  billingMode?: 'prepaid' | 'postpaid'
+  billingBlocked?: boolean
+  activatedAt?: string | null
+  infrastructureStatus?: 'pending' | 'ready' | 'failed'
+  infrastructureError?: string | null
   id: string
   serviceNumber: string
   name: string

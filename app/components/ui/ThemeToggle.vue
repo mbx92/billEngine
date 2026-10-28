@@ -20,7 +20,7 @@ onMounted(syncTheme)
 <template>
   <button
     type="button"
-    class="focus-ring flex size-9 items-center justify-center rounded-md border bg-surface text-muted transition hover:border-line-strong hover:bg-surface-raised hover:text-ink"
+    class="focus-ring flex size-8 items-center justify-center rounded text-muted transition-colors hover:bg-surface-raised hover:text-ink"
     :aria-label="isDark ? 'Aktifkan light mode' : 'Aktifkan dark mode'"
     :title="isDark ? 'Aktifkan light mode' : 'Aktifkan dark mode'"
     @click="toggleTheme"

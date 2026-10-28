@@ -108,6 +108,7 @@ export const generateRecurringInvoicesSchema = z.object({
 })
 
 export const recordPaymentSchema = z.object({
+  idempotencyKey: z.string().trim().min(8).max(200).optional(),
   invoiceId: uuidSchema,
   amount: idrAmountSchema.refine((value) => value > 0n, 'Jumlah pembayaran harus lebih dari 0.'),
   method: z.string().trim().min(2).max(80),

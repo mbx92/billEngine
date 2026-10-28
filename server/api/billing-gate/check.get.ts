@@ -44,12 +44,22 @@ export default defineEventHandler(async (event) => {
   const host = normalizeRequestHost(
     getHeader(event, 'x-forwarded-host') ?? getHeader(event, 'host'),
   )
-  if (!host) return allow(event)
+  if (!host) {
+    setResponseStatus(event, 403)
+    return { error: 'SERVICE_UNAVAILABLE' }
+  }
 
   const forwardedUri = safeReturnPath(getHeader(event, 'x-forwarded-uri'))
   const forwardedUrl = new URL(forwardedUri, 'http://billing-gate.internal')
   const scheme = forwardedScheme(event)
   const decision = await new BillingAccessControlService().evaluate(host, runtime.secret)
+  if (decision.state === 'blocked' && !decision.invoice) {
+    setResponseStatus(event, 403)
+    return {
+      error: 'SERVICE_UNAVAILABLE',
+      message: 'Layanan belum aktif atau hubungan billing tidak valid.',
+    }
+  }
 
   if (forwardedUrl.pathname === '/.billing/continue') {
     return handleContinue(

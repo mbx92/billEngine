@@ -13,6 +13,7 @@ import {
   invoices,
   payments,
   serviceBillingRuns,
+  services,
 } from '../../database/schema'
 import { AuditLogRepository } from '../../repositories/audit'
 import { CustomerRepository } from '../../repositories/customers'
@@ -207,11 +208,7 @@ export class InvoiceService {
 
     const today = todayIsoDate(config.timezone)
     const nextStatus =
-      existing.status === 'draft'
-        ? 'draft'
-        : input.dueDate < today
-          ? 'overdue'
-          : 'unpaid'
+      existing.status === 'draft' ? 'draft' : input.dueDate < today ? 'overdue' : 'unpaid'
 
     return this.database.transaction(async (transaction) => {
       const locked = await this.invoices.findByIdForUpdate(id, transaction)
@@ -377,6 +374,19 @@ export class InvoiceService {
     return this.database.transaction(async (transaction) => {
       // Re-check inside the transaction so a concurrent run cannot allocate the
       // same period twice.
+      const [currentService] = await transaction
+        .select()
+        .from(services)
+        .where(eq(services.id, service.id))
+        .limit(1)
+        .for('update')
+      if (
+        !currentService ||
+        currentService.status !== 'active' ||
+        (currentService.billingMode === 'postpaid' && !currentService.activatedAt)
+      ) {
+        throw DomainError.invalidState('Service belum siap ditagih atau sudah tidak aktif.')
+      }
       if (await this.invoices.findBillingRun(service.id, period.start, period.end, transaction)) {
         throw new Error('invoice periode ini sudah ada')
       }
@@ -557,7 +567,10 @@ export class InvoiceService {
         .from(invoiceItems)
         .where(eq(invoiceItems.invoiceId, id))
 
-      const periods = new Map<string, { serviceId: string; periodStart: string; periodEnd: string }>()
+      const periods = new Map<
+        string,
+        { serviceId: string; periodStart: string; periodEnd: string }
+      >()
       if (billingRun) {
         periods.set(`${billingRun.serviceId}:${billingRun.periodStart}:${billingRun.periodEnd}`, {
           serviceId: billingRun.serviceId,
@@ -629,11 +642,7 @@ export class InvoiceService {
    * Moves the service cursor past a voided period so automation cannot bill it
    * again. Never moves the cursor backwards.
    */
-  private async skipBilledPeriod(
-    transaction: Transaction,
-    serviceId: string,
-    periodStart: string,
-  ) {
+  private async skipBilledPeriod(transaction: Transaction, serviceId: string, periodStart: string) {
     const service = await this.invoices.findServiceSchedule(serviceId, transaction)
     if (!service) return null
 

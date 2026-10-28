@@ -64,6 +64,7 @@ const today = new Date().toLocaleDateString('en-CA', {
   timeZone: appSettings.value.billingTimezone,
 })
 const form = reactive({
+  billingMode: 'postpaid',
   customerId: '',
   planId: '',
   name: '',
@@ -232,6 +233,7 @@ async function addService() {
         method: 'POST',
         body: {
           customerId: form.customerId,
+          billingMode: form.billingMode,
           planId: form.planId,
           name: form.name,
           description: form.description,
@@ -322,7 +324,7 @@ async function transitionService() {
       method: 'POST',
       body: { status: transitionTarget.value, reason: transitionReason.value },
     })
-    actionMessage.value = `${selectedService.value.serviceNumber} sekarang berstatus ${transitionTarget.value}.`
+    actionMessage.value = `Permintaan ${transitionTarget.value} untuk ${selectedService.value.serviceNumber} tersimpan. Pantau status penerapannya di server.`
     showTransitionForm.value = false
     await Promise.all([refresh(), refreshOptions()])
   } catch (caught) {
@@ -597,7 +599,25 @@ async function applyInfrastructure() {
               Harga dan siklus disalin dari plan sebagai snapshot saat service dibuat.
             </p>
           </div>
-          <UiInput v-model="form.billingStartDate" label="Mulai billing" type="date" />
+          <label class="block text-sm text-ink">
+            Model billing
+            <select
+              v-model="form.billingMode"
+              class="mt-1 w-full rounded border border-line bg-surface px-3 py-2"
+            >
+              <option value="postpaid">Pascabayar — mulai saat deployment siap</option>
+              <option value="prepaid">Prabayar — aktivasi setelah invoice lunas</option>
+            </select>
+          </label>
+          <p v-if="form.billingMode === 'postpaid'" class="text-xs text-muted">
+            Tanggal mulai dan invoice pertama ditetapkan saat deployment siap.
+          </p>
+          <UiInput
+            v-model="form.billingStartDate"
+            label="Mulai billing"
+            type="date"
+            :disabled="form.billingMode === 'postpaid'"
+          />
           <UiInput
             v-model="form.nextDueDate"
             label="Jadwal invoice pertama"
@@ -1063,12 +1083,12 @@ async function applyInfrastructure() {
         </label>
         <p class="mt-3 text-xs text-muted">
           <template v-if="transitionTarget === 'suspended'">
-            Semua application resource yang terhubung akan dihentikan tanpa Docker cleanup. Service
-            juga berhenti menghasilkan recurring invoice baru.
+            Penghentian resource akan masuk antrean agent. Akses layanan dan penerbitan invoice baru
+            dihentikan; data resource tetap disimpan.
           </template>
           <template v-else-if="transitionTarget === 'active'">
-            Semua application resource yang terhubung akan dijalankan kembali dan recurring billing
-            akan aktif.
+            Aktivasi resource akan masuk antrean jika persyaratan pembayaran terpenuhi. Pantau
+            status penerapan sampai server siap.
           </template>
           <template v-else>
             Service tidak akan menghasilkan recurring invoice baru. Cancellation bersifat permanen
@@ -1251,9 +1271,30 @@ async function applyInfrastructure() {
                 </td>
                 <td class="px-4 py-3">
                   <ResourceStatusBadge :status="service.status" />
+                  <span v-if="service.billingBlocked" class="mt-1 block text-xs text-muted"
+                    >Akses menunggu penyelesaian billing</span
+                  >
+                  <span
+                    v-if="service.infrastructureStatus === 'pending'"
+                    class="mt-1 block text-xs text-muted"
+                    >Menunggu penerapan di server</span
+                  >
+                  <span
+                    v-else-if="service.infrastructureStatus === 'failed'"
+                    class="mt-1 block text-xs text-danger"
+                    :title="service.infrastructureError ?? undefined"
+                    >Penerapan gagal · periksa operasi</span
+                  >
                 </td>
                 <td class="px-4 py-3">
                   <div class="flex justify-end gap-1">
+                    <UiButton
+                      v-if="service.infrastructureStatus === 'failed'"
+                      variant="ghost"
+                      size="sm"
+                      @click="openTransition(service, service.status)"
+                      >Coba terapkan lagi</UiButton
+                    >
                     <UiButton
                       v-if="service.status !== 'cancelled'"
                       variant="ghost"

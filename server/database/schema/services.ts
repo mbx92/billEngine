@@ -81,6 +81,17 @@ export const services = pgTable(
     name: varchar('name', { length: 200 }).notNull(),
     description: text('description'),
     status: serviceStatus('status').notNull().default('active'),
+    infrastructureStatus: varchar('infrastructure_status', { length: 24 })
+      .$type<'pending' | 'ready' | 'failed'>()
+      .notNull()
+      .default('pending'),
+    infrastructureError: text('infrastructure_error'),
+    billingMode: varchar('billing_mode', { length: 16 })
+      .$type<'prepaid' | 'postpaid'>()
+      .notNull()
+      .default('postpaid'),
+    billingBlocked: boolean('billing_blocked').notNull().default(false),
+    activatedAt: timestamp('activated_at', { withTimezone: true }),
     currency: varchar('currency', { length: 3 }).notNull().default('IDR'),
     priceAmount: bigint('price_amount', { mode: 'bigint' }).notNull(),
     billingCycle: billingCycle('billing_cycle').notNull(),
@@ -154,8 +165,7 @@ export const infrastructureServiceDatabases = pgTable(
   'infrastructure_service_databases',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    serviceId: uuid('service_id')
-      .references(() => services.id, { onDelete: 'restrict' }),
+    serviceId: uuid('service_id').references(() => services.id, { onDelete: 'restrict' }),
     databaseClusterId: uuid('database_cluster_id')
       .notNull()
       .references(() => infrastructureDatabaseClusters.id, { onDelete: 'restrict' }),
@@ -211,13 +221,7 @@ export const infrastructureServiceDatabases = pgTable(
 )
 
 export type InfrastructureDatabaseBackupStatus =
-  | 'queued'
-  | 'creating'
-  | 'available'
-  | 'restoring'
-  | 'failed'
-  | 'deleting'
-  | 'deleted'
+  'queued' | 'creating' | 'available' | 'restoring' | 'failed' | 'deleting' | 'deleted'
 
 export const infrastructureBackupPolicies = pgTable(
   'infrastructure_backup_policies',

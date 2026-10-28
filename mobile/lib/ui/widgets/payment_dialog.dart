@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -35,6 +37,10 @@ class _PaymentDialog extends StatefulWidget {
 }
 
 class _PaymentDialogState extends State<_PaymentDialog> {
+  final _requestKey = List.generate(
+    32,
+    (_) => Random.secure().nextInt(16).toRadixString(16),
+  ).join();
   final _formKey = GlobalKey<FormState>();
   final _amount = TextEditingController();
   final _reference = TextEditingController();
@@ -102,6 +108,7 @@ class _PaymentDialogState extends State<_PaymentDialog> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_invoiceId == null) {
       setState(() => _error = 'Pilih invoice yang akan dibayar.');
@@ -115,11 +122,13 @@ class _PaymentDialogState extends State<_PaymentDialog> {
 
     try {
       await context.read<ApiService>().recordPayment(<String, dynamic>{
+        'idempotencyKey': _requestKey,
         'invoiceId': _invoiceId,
         'amount': _amount.text.trim(),
         'method': _method,
         'status': _status,
-        if (_reference.text.trim().isNotEmpty) 'reference': _reference.text.trim(),
+        if (_reference.text.trim().isNotEmpty)
+          'reference': _reference.text.trim(),
         if (_notes.text.trim().isNotEmpty) 'notes': _notes.text.trim(),
       });
       if (!mounted) return;
@@ -164,12 +173,17 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                           padding: const EdgeInsets.only(bottom: 10),
                           child: Text(
                             _error!,
-                            style: TextStyle(fontSize: 12, color: colors.danger),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: colors.danger,
+                            ),
                           ),
                         ),
                       DropdownButtonFormField<String>(
                         initialValue:
-                            _options.any((option) => option.id == _invoiceId) ? _invoiceId : null,
+                            _options.any((option) => option.id == _invoiceId)
+                            ? _invoiceId
+                            : null,
                         isExpanded: true,
                         decoration: const InputDecoration(labelText: 'Invoice'),
                         items: [
@@ -183,13 +197,15 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                               ),
                             ),
                         ],
-                        validator: (value) => value == null ? 'Invoice wajib dipilih.' : null,
+                        validator: (value) =>
+                            value == null ? 'Invoice wajib dipilih.' : null,
                         onChanged: _saving
                             ? null
                             : (value) => setState(() {
                                 _invoiceId = value;
                                 final option = _selected;
-                                if (option != null) _amount.text = option.balanceDue;
+                                if (option != null)
+                                  _amount.text = option.balanceDue;
                               }),
                       ),
                       if (selected != null)
@@ -207,13 +223,16 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                           labelText: 'Jumlah',
-                          prefixText: selected == null ? null : '${selected.currency} ',
+                          prefixText: selected == null
+                              ? null
+                              : '${selected.currency} ',
                         ),
                         validator: (value) {
                           final text = value?.trim() ?? '';
                           if (text.isEmpty) return 'Jumlah wajib diisi.';
                           final parsed = int.tryParse(text);
-                          if (parsed == null || parsed <= 0) return 'Jumlah harus lebih dari 0.';
+                          if (parsed == null || parsed <= 0)
+                            return 'Jumlah harus lebih dari 0.';
                           return null;
                         },
                       ),
@@ -223,28 +242,44 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                         decoration: const InputDecoration(labelText: 'Metode'),
                         items: [
                           for (final entry in _methods.entries)
-                            DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+                            DropdownMenuItem(
+                              value: entry.key,
+                              child: Text(entry.value),
+                            ),
                         ],
                         onChanged: _saving
                             ? null
-                            : (value) => setState(() => _method = value ?? 'transfer'),
+                            : (value) =>
+                                  setState(() => _method = value ?? 'transfer'),
                       ),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
                         initialValue: _status,
-                        decoration: const InputDecoration(labelText: 'Status pembayaran'),
+                        decoration: const InputDecoration(
+                          labelText: 'Status pembayaran',
+                        ),
                         items: const [
-                          DropdownMenuItem(value: 'completed', child: Text('Lunas (completed)')),
-                          DropdownMenuItem(value: 'pending', child: Text('Menunggu (pending)')),
+                          DropdownMenuItem(
+                            value: 'completed',
+                            child: Text('Lunas (completed)'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'pending',
+                            child: Text('Menunggu (pending)'),
+                          ),
                         ],
                         onChanged: _saving
                             ? null
-                            : (value) => setState(() => _status = value ?? 'completed'),
+                            : (value) => setState(
+                                () => _status = value ?? 'completed',
+                              ),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _reference,
-                        decoration: const InputDecoration(labelText: 'Referensi transfer'),
+                        decoration: const InputDecoration(
+                          labelText: 'Referensi transfer',
+                        ),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(

@@ -42,6 +42,7 @@ export const createServiceSchema = z
   .object({
     customerId: z.uuid(),
     planId: z.uuid(),
+    billingMode: z.enum(['prepaid', 'postpaid']).default('postpaid'),
     name: z.string().trim().min(2).max(200),
     description: optionalText(5_000),
     billingStartDate: z.iso.date(),

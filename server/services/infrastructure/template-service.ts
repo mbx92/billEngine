@@ -19,11 +19,7 @@ import { DomainError } from '../../utils/errors'
 import { validateApplicationPolicy } from './policy'
 import { InfrastructureReleaseService } from './release-service'
 import { ApplicationBuildService } from './application-build-service'
-import {
-  releaseImageSource,
-  validateLocalImageNode,
-  validateSecretDelivery,
-} from './local-image'
+import { releaseImageSource, validateLocalImageNode, validateSecretDelivery } from './local-image'
 import { validateDeploymentNetwork } from './docker-network'
 
 export class InfrastructureTemplateService {
@@ -132,7 +128,9 @@ export class InfrastructureTemplateService {
   ) {
     const target = await this.repository.findApplicationTemplateSyncTarget(resourceId)
     if (!target) {
-      throw DomainError.notFound('Resource application tidak ditemukan atau tidak memiliki template.')
+      throw DomainError.notFound(
+        'Resource application tidak ditemukan atau tidak memiliki template.',
+      )
     }
     if (target.resource.desiredState === 'deleting') {
       throw DomainError.invalidState('Resource yang sedang dihapus tidak dapat disinkronkan.')
@@ -163,7 +161,7 @@ export class InfrastructureTemplateService {
     for (const parameter of definition.parameters) {
       const supplied = input.values[parameter.key]
       if (parameter.type === 'secret') {
-        delete environment[parameter.environmentKey]
+        Reflect.deleteProperty(environment, parameter.environmentKey)
         if (supplied) {
           const secretId = randomUUID()
           const reference = `managed://${secretId}@1`
@@ -211,9 +209,9 @@ export class InfrastructureTemplateService {
       if (parameter.required && !value) {
         throw DomainError.validation(`${parameter.label} wajib diisi.`)
       }
-      delete secretReferences[parameter.environmentKey]
+      Reflect.deleteProperty(secretReferences, parameter.environmentKey)
       if (value) environment[parameter.environmentKey] = value
-      else delete environment[parameter.environmentKey]
+      else Reflect.deleteProperty(environment, parameter.environmentKey)
     }
 
     const ports = definition.spec.ports.map((port, index) => ({
@@ -374,6 +372,16 @@ export class InfrastructureTemplateService {
       throw DomainError.validation(
         'Akses port langsung hanya untuk resource internal atau ignored. Gunakan domain untuk resource billable.',
       )
+    }
+    if (input.classification === 'billable' && !input.serviceId) {
+      throw DomainError.validation('Resource billable wajib terhubung ke service.')
+    }
+    if (
+      input.classification === 'billable' &&
+      isApplication &&
+      definition.spec.ports.some((port) => port.hostPort)
+    ) {
+      throw DomainError.validation('Template billable tidak boleh menerbitkan host port langsung.')
     }
     const targetPort = definition.spec.ports.find((port) => port.protocol === 'tcp')?.containerPort
     if (isApplication && !targetPort) {

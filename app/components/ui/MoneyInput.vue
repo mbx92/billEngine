@@ -25,14 +25,14 @@ function updateValue(event: Event) {
 
 <template>
   <label class="block">
-    <span v-if="label" class="mb-2 block text-xs font-semibold text-muted">{{ label }}</span>
+    <span v-if="label" class="mb-2 block text-xs font-medium text-ink">{{ label }}</span>
     <span class="relative block">
       <input
         :value="displayValue"
         v-bind="$attrs"
         type="text"
         inputmode="numeric"
-        class="focus-ring h-10 w-full rounded-md border bg-canvas px-3 pr-14 font-mono text-sm text-ink placeholder:text-muted/60"
+        class="focus-ring h-10 w-full rounded-md border bg-surface px-3 pr-14 font-mono text-sm text-ink transition-colors placeholder:text-muted/60 disabled:cursor-not-allowed disabled:bg-surface-raised disabled:opacity-60"
         :class="error ? 'border-danger' : 'border-line-strong'"
         @input="updateValue"
       />

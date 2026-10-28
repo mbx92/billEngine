@@ -197,10 +197,30 @@ func (a *Agent) Run(ctx context.Context) error {
 			Networks:   networks,
 		})
 	}
+	journalPath := filepath.Join(filepath.Dir(a.config.StateFile), "operation.json")
 	processOperation := func() error {
+		if err := flushOperationJournal(ctx, journalPath, client, identity); err != nil {
+			return err
+		}
 		operation, operationErr := client.NextOperation(ctx, identity.Credential)
 		if operationErr != nil || operation == nil {
 			return operationErr
+		}
+		durable := operation.Action != "agent.upgrade" && operation.Action != "agent.rollback"
+		if durable {
+			if err := writeOperationJournal(journalPath, operationJournal{NodeID: identity.NodeID, OperationID: operation.ID, AttemptCount: operation.AttemptCount}); err != nil {
+				return err
+			}
+		}
+		report := func(request controlplane.OperationStatusRequest) error {
+			request.AttemptCount = operation.AttemptCount
+			if !durable {
+				return client.UpdateOperation(ctx, identity.Credential, operation.ID, request)
+			}
+			if err := writeOperationJournal(journalPath, operationJournal{NodeID: identity.NodeID, OperationID: operation.ID, AttemptCount: operation.AttemptCount, Result: &request}); err != nil {
+				return err
+			}
+			return flushOperationJournal(ctx, journalPath, client, identity)
 		}
 		operationCtx, cancelOperation := context.WithCancel(ctx)
 		if !operation.ExpiresAt.IsZero() {
@@ -219,7 +239,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			"expires_at", operation.ExpiresAt,
 		)
 		if err := client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
-			Status: "running",
+			Status: "running", AttemptCount: operation.AttemptCount,
 		}); err != nil {
 			return err
 		}
@@ -246,7 +266,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			if updateFailure != nil {
 				logReporter.Emit("error", "Self-update gagal: "+updateFailure.Message)
 				logReporter.Flush()
-				return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+				return report(controlplane.OperationStatusRequest{
 					Status: "failed", Retryable: updateFailure.Retryable,
 					ErrorCode: updateFailure.Code, ErrorMessage: updateFailure.Message,
 				})
@@ -254,7 +274,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			if err := prepared.Trigger(); err != nil {
 				logReporter.Emit("error", "Agent updater gagal dijalankan")
 				logReporter.Flush()
-				return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+				return report(controlplane.OperationStatusRequest{
 					Status: "failed", Retryable: true,
 					ErrorCode: "update_trigger_failed", ErrorMessage: "agent updater could not be triggered",
 				})
@@ -271,20 +291,20 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.logger.Warn("operation force stopped", "operation_id", operation.ID, "action", operation.Action)
 				logReporter.Emit("warning", "Operation dihentikan secara paksa saat mengambil secret")
 				logReporter.Flush()
-				return nil
+				return report(controlplane.OperationStatusRequest{Status: "failed", ErrorCode: "operation_cancelled"})
 			}
 			if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
 				a.logger.Warn("operation timed out", "operation_id", operation.ID, "action", operation.Action)
 				logReporter.Emit("error", "Deadline tercapai saat mengambil secret operation")
 				logReporter.Flush()
-				return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+				return report(controlplane.OperationStatusRequest{
 					Status: "failed", ErrorCode: "operation_timeout",
 					ErrorMessage: "operation exceeded its execution deadline",
 				})
 			}
 			logReporter.Emit("error", "Secret operation gagal diambil dari control plane")
 			logReporter.Flush()
-			return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+			return report(controlplane.OperationStatusRequest{
 				Status: "failed", Retryable: true,
 				ErrorCode: "secret_delivery_failed", ErrorMessage: "operation secrets could not be retrieved",
 			})
@@ -310,13 +330,13 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.logger.Warn("operation force stopped", "operation_id", operation.ID, "action", operation.Action)
 			logReporter.Emit("warning", "Operation dihentikan secara paksa oleh control plane")
 			logReporter.Flush()
-			return nil
+			return report(controlplane.OperationStatusRequest{Status: "failed", ErrorCode: "operation_cancelled"})
 		}
 		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
 			a.logger.Warn("operation timed out", "operation_id", operation.ID, "action", operation.Action)
 			logReporter.Emit("error", "Operation mencapai deadline dan proses aktif dihentikan")
 			logReporter.Flush()
-			return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+			return report(controlplane.OperationStatusRequest{
 				Status: "failed", ErrorCode: "operation_timeout",
 				ErrorMessage: "operation exceeded its execution deadline",
 			})
@@ -330,13 +350,13 @@ func (a *Agent) Run(ctx context.Context) error {
 			)
 			logReporter.Emit("error", "Operation gagal dengan kode "+executionErr.Code)
 			logReporter.Flush()
-			return client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+			return report(controlplane.OperationStatusRequest{
 				Status: "failed", Retryable: executionErr.Retryable,
 				ErrorCode: executionErr.Code, ErrorMessage: executionErr.Message,
 			})
 		}
 		a.logger.Info("operation succeeded", "operation_id", operation.ID, "action", operation.Action)
-		statusErr := client.UpdateOperation(ctx, identity.Credential, operation.ID, controlplane.OperationStatusRequest{
+		statusErr := report(controlplane.OperationStatusRequest{
 			Status: "succeeded", Result: result, ObservedRevision: revision,
 		})
 		if statusErr != nil {

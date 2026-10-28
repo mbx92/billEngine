@@ -13,5 +13,12 @@ export default defineEventHandler(async (event) => {
     requestActor(event, session.user.id),
   )
 
-  return { data: { id: service.id, status: service.status } }
+  setResponseStatus(event, service.infrastructureStatus === 'pending' ? 202 : 200)
+  return {
+    data: {
+      id: service.id,
+      status: service.status,
+      infrastructureStatus: service.infrastructureStatus,
+    },
+  }
 })

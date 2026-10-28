@@ -19,6 +19,8 @@ import {
   infrastructureOperations,
   infrastructureResources,
   resourceRoutes,
+  serviceResources,
+  services,
 } from '../../database/schema'
 import {
   decryptInfrastructureCredential,
@@ -571,6 +573,14 @@ export class InfrastructureReleaseService {
     }
     const operations = []
     for (const resource of resources) {
+      if (resource.desiredState !== 'running') continue
+      const linkedServices = await transaction
+        .select({ status: services.status, blocked: services.billingBlocked })
+        .from(serviceResources)
+        .innerJoin(services, eq(services.id, serviceResources.serviceId))
+        .where(eq(serviceResources.resourceId, resource.id))
+      if (linkedServices.some((service) => service.status !== 'active' || service.blocked)) continue
+      if (resource.classification === 'billable' && linkedServices.length !== 1) continue
       if (resource.releaseId === release.id) {
         if (resource.applicationId !== release.applicationId || resource.releasePolicy !== policy) {
           await transaction

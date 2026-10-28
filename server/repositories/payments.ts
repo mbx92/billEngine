@@ -16,6 +16,8 @@ export interface PaymentListFilters {
 export interface NewPayment {
   invoiceId: string
   paymentNumber: string
+  idempotencyKey?: string
+  requestFingerprint?: string
   amount: bigint
   currency: string
   method: string

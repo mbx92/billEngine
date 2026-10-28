@@ -17,6 +17,7 @@ const fromFilter = ref('')
 const toFilter = ref('')
 const showRecordForm = ref(false)
 const saving = ref(false)
+const paymentRequestKey = ref('')
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 
@@ -74,6 +75,7 @@ function fillOutstandingBalance() {
 }
 
 function openRecordForm(invoiceId?: string) {
+  paymentRequestKey.value = crypto.randomUUID()
   actionError.value = null
   Object.assign(form, {
     invoiceId: invoiceId ?? invoiceOptions.value[0]?.id ?? '',
@@ -92,6 +94,7 @@ async function refreshAll() {
 }
 
 async function recordPayment() {
+  if (saving.value) return
   actionError.value = null
   const invoice = selectedInvoice.value
   const amount = form.amount ? BigInt(form.amount) : 0n
@@ -115,6 +118,7 @@ async function recordPayment() {
       data: { payment: { paymentNumber: string }; invoice: { status: string } }
     }>('/api/payments', {
       method: 'POST',
+      headers: { 'Idempotency-Key': paymentRequestKey.value },
       body: {
         invoiceId: form.invoiceId,
         amount: form.amount,

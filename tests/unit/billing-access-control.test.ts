@@ -35,9 +35,11 @@ describe('billing access control service', () => {
     expect(repository.findServiceByHost).not.toHaveBeenCalled()
   })
 
-  it('does no lookup when access control is disabled', async () => {
+  it('still checks service entitlement when overdue access control is disabled', async () => {
     const repository = {
-      findServiceByHost: vi.fn(),
+      findServiceByHost: vi
+        .fn()
+        .mockResolvedValue({ id: 'service-1', status: 'active', billingBlocked: false }),
       findOldestOpenOverdueInvoice: vi.fn(),
     } as unknown as BillingAccessRepository
     const settingsService = {
@@ -54,7 +56,7 @@ describe('billing access control service', () => {
     )
 
     expect(decision.state).toBe('normal')
-    expect(repository.findServiceByHost).not.toHaveBeenCalled()
+    expect(repository.findServiceByHost).toHaveBeenCalled()
   })
 
   it('returns grace and blocked decisions from the oldest open invoice', async () => {
@@ -63,6 +65,8 @@ describe('billing access control service', () => {
         id: 'service-1',
         name: 'Customer app',
         serviceNumber: 'SVC-1',
+        status: 'active',
+        billingBlocked: false,
       }),
       findOldestOpenOverdueInvoice: vi.fn().mockResolvedValue({
         id: 'invoice-1',
@@ -83,4 +87,27 @@ describe('billing access control service', () => {
       service.evaluate('app.example.test', 'secret', '2026-09-18'),
     ).resolves.toMatchObject({ state: 'blocked', daysPastDue: 8 })
   })
+  it.each([
+    null,
+    { id: 'service-1', status: 'suspended' },
+    { id: 'service-1', status: 'cancelled' },
+  ])(
+    'denies missing or inactive service ownership even without an overdue invoice',
+    async (owner) => {
+      const repository = {
+        findServiceByHost: vi.fn().mockResolvedValue(owner),
+        findOldestOpenOverdueInvoice: vi.fn(),
+      } as unknown as BillingAccessRepository
+      const settingsService = {
+        getBillingSettings: vi.fn().mockResolvedValue(settings),
+      } as unknown as SettingsService
+      const decision = await new BillingAccessControlService(repository, settingsService).evaluate(
+        'app.example.test',
+        'secret',
+        '2026-09-18',
+      )
+      expect(decision.state).toBe('blocked')
+      expect(repository.findOldestOpenOverdueInvoice).not.toHaveBeenCalled()
+    },
+  )
 })

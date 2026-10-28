@@ -16,6 +16,9 @@ func TestLocalBuildLoadsImageWithoutPublishing(t *testing.T) {
 	imageID := "sha256:" + strings.Repeat("a", 64)
 	var commands [][]string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		commands = append(commands, append([]string{name}, args...))
 		if len(args) > 1 && args[0] == "image" && args[1] == "inspect" {
 			return []byte(imageID + "\n"), nil
@@ -70,6 +73,9 @@ func TestEnvironmentSecretsUsePrivateTemporaryFile(t *testing.T) {
 	secret := "private-session-secret-with-equals=and$dollars"
 	envPath := ""
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+			return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+		}
 		if strings.Contains(strings.Join(args, " "), secret) {
 			t.Fatal("secret leaked into command arguments")
 		}
@@ -151,6 +157,9 @@ func TestLocalRedeployNeverPullsAndPreservesContainerWhenImageMissing(t *testing
 			})
 			var commands [][]string
 			run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+				if len(args) > 2 && args[0] == "inspect" && args[2] == "{{json .State}}" {
+					return []byte(`{"Running":true,"Health":{"Status":"healthy"}}`), nil
+				}
 				commands = append(commands, append([]string{name}, args...))
 				if len(args) > 1 && args[0] == "image" && args[1] == "inspect" {
 					if !imagePresent {

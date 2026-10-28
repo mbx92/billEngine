@@ -33,7 +33,7 @@ const tones = {
           v-for="item in toast.toasts.value"
           :key="item.id"
           role="status"
-          class="pointer-events-auto flex w-full items-start gap-3 rounded-lg border bg-surface-raised p-3 text-sm shadow-xl shadow-black/15"
+          class="pointer-events-auto flex w-full items-start gap-3 rounded-md border bg-surface p-3 text-sm shadow-md"
           :class="tones[item.tone]"
         >
           <component :is="icons[item.tone]" :size="17" class="mt-0.5 shrink-0" />

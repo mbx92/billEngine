@@ -2,6 +2,7 @@
 import {
   AlertTriangle,
   Copy,
+  ChevronDown,
   Download,
   Network,
   Package,
@@ -17,7 +18,7 @@ import { apiErrorMessage } from '~/lib/api-error'
 import { copyText } from '~/lib/clipboard'
 
 definePageMeta({ middleware: 'auth' })
-useHead({ title: 'Nodes · Billing Infra' })
+useHead({ title: 'Servers · Billing Infra' })
 
 interface NodeImage {
   id: string
@@ -149,6 +150,39 @@ const { data, status, error, refresh } = await useFetch<{ data: InfrastructureNo
   '/api/infrastructure/nodes',
 )
 const nodes = computed(() => data.value?.data ?? [])
+const search = ref('')
+const nodeFilter = ref('all')
+function resetFilters() {
+  search.value = ''
+  nodeFilter.value = 'all'
+}
+const onlineCount = computed(() => nodes.value.filter((node) => node.status === 'online').length)
+function needsAttention(node: InfrastructureNode) {
+  return (
+    ['offline', 'degraded', 'unknown'].includes(node.status) ||
+    node.gatewayStatus === 'failed' ||
+    node.agentUpdateStatus === 'failed' ||
+    node.stuckOperationCount > 0 ||
+    ['warning', 'critical'].includes(node.diskWatermark)
+  )
+}
+const attentionCount = computed(() => nodes.value.filter(needsAttention).length)
+const visibleNodes = computed(() => {
+  const query = search.value.trim().toLowerCase()
+  return nodes.value.filter(
+    (node) =>
+      (!query ||
+        [node.name, node.environment, node.role, node.agentVersion ?? '']
+          .join(' ')
+          .toLowerCase()
+          .includes(query)) &&
+      (nodeFilter.value === 'all' ||
+        (nodeFilter.value === 'attention'
+          ? needsAttention(node)
+          : node.status === nodeFilter.value)),
+  )
+})
+
 const imageDialogNode = computed(
   () => nodes.value.find((node) => node.id === imageDialogNodeId.value) ?? null,
 )
@@ -462,26 +496,19 @@ function closeEnrollment() {
 
 <template>
   <div class="mx-auto max-w-7xl">
-    <header class="mb-5 flex flex-col justify-between gap-4 sm:mb-6 sm:flex-row sm:items-end">
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
-          Infrastructure / Nodes
-        </p>
-        <h1 class="text-2xl font-semibold tracking-tight text-ink">Nodes</h1>
-        <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">
-          Kelola server Ubuntu yang menjalankan OC Agent. Docker sh hanya tersedia untuk container
-          managed yang running; dashboard tidak menerima Docker socket atau shell host.
-        </p>
-      </div>
+    <InfrastructurePageHeader
+      title="Servers"
+      description="Status server, kapasitas, dan versi agent."
+    >
       <div class="flex gap-2">
         <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
         <UiButton @click="showEnrollmentForm = !showEnrollmentForm">
           <X v-if="showEnrollmentForm" :size="15" aria-hidden="true" />
           <Plus v-else :size="15" aria-hidden="true" />
-          {{ showEnrollmentForm ? 'Tutup' : 'Enroll node' }}
+          {{ showEnrollmentForm ? 'Tutup' : 'Tambah server' }}
         </UiButton>
       </div>
-    </header>
+    </InfrastructurePageHeader>
 
     <p
       v-if="actionMessage"
@@ -597,8 +624,40 @@ function closeEnrollment() {
       </div>
     </UiCard>
 
-    <div v-if="isInitialLoading" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <UiSkeleton v-for="card in 3" :key="card" height="13rem" />
+    <div
+      v-if="!isInitialLoading && !error"
+      class="mb-5 grid grid-cols-3 divide-x divide-line rounded-md border bg-surface"
+    >
+      <InfrastructureMetric label="Server terdaftar" :value="format.count(nodes.length)" />
+      <InfrastructureMetric label="Online" :value="format.count(onlineCount)" />
+      <InfrastructureMetric
+        label="Perlu perhatian"
+        :value="format.count(attentionCount)"
+        :tone="attentionCount ? 'warning' : 'neutral'"
+      />
+    </div>
+    <InfrastructureToolbar
+      v-if="nodes.length"
+      v-model="search"
+      placeholder="Cari server, environment, atau agent…"
+      :count="visibleNodes.length"
+      :total="nodes.length"
+      unit="server"
+    >
+      <select
+        v-model="nodeFilter"
+        aria-label="Filter status server"
+        class="focus-ring h-9 rounded-md border border-line-strong bg-surface px-3 text-sm text-ink"
+      >
+        <option value="all">Semua status</option>
+        <option value="online">Online</option>
+        <option value="attention">Perlu perhatian</option>
+        <option value="revoked">Akses dicabut</option>
+      </select>
+    </InfrastructureToolbar>
+
+    <div v-if="isInitialLoading" class="space-y-2">
+      <UiSkeleton v-for="card in 3" :key="card" height="5rem" />
     </div>
 
     <UiCard v-else-if="error" :padded="false">
@@ -617,256 +676,299 @@ function closeEnrollment() {
       />
     </UiCard>
 
-    <div v-else class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <UiCard v-for="node in nodes" :key="node.id">
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0">
-            <h2 class="flex items-center gap-2 truncate text-sm font-semibold text-ink">
-              <ServerIcon :size="15" aria-hidden="true" />
-              {{ node.name }}
-            </h2>
-            <p class="mt-1 font-mono text-[11px] text-muted">
-              {{ node.environment }} · {{ node.architecture || 'arsitektur belum diketahui' }}
-            </p>
-          </div>
-          <div class="flex shrink-0 flex-col items-end gap-2">
-            <UiBadge :tone="statusTone(node.status)" dot>{{ node.status }}</UiBadge>
-            <UiBadge tone="info">{{ node.role }}</UiBadge>
-            <UiBadge
-              :tone="agentVersionTone(node.agentVersion)"
-              :title="
-                node.agentVersion && !supportsCurrentFeatures(node.agentVersion)
-                  ? `Bootstrap ke ${minimumAgentVersion}+ diperlukan untuk remote update dan rollback`
-                  : 'Versi OC Agent yang dilaporkan pada heartbeat terakhir'
-              "
-            >
-              Agent {{ node.agentVersion ? `v${node.agentVersion}` : 'belum diketahui' }}
-            </UiBadge>
-            <UiBadge
-              v-if="['queued', 'staging'].includes(node.agentUpdateStatus)"
-              tone="warning"
-              dot
-            >
-              {{ node.agentUpdateStatus === 'queued' ? 'Update queued' : 'Update staging' }}
-            </UiBadge>
-          </div>
-        </div>
-
-        <dl class="mt-4 grid grid-cols-2 gap-3 border-t pt-4 text-xs">
-          <div>
-            <dt class="text-muted">Resources</dt>
-            <dd class="mt-1 font-mono text-ink">{{ format.count(node.resourceCount) }}</dd>
-          </div>
-          <div>
-            <dt class="text-muted">Docker images</dt>
-            <dd class="mt-1 flex flex-wrap items-center gap-2 font-mono text-ink">
-              <span>{{ format.count(node.imageCount) }}</span>
-              <UiBadge v-if="node.usedImageCount" tone="success">
-                {{ node.usedImageCount }} used
-              </UiBadge>
-            </dd>
-          </div>
-          <div class="col-span-2">
-            <dt class="flex items-center gap-2 text-muted">
-              <Network :size="13" /> Docker networks
-            </dt>
-            <dd v-if="node.networks.length" class="mt-2 flex flex-wrap gap-2">
-              <UiBadge
-                v-for="network in node.networks"
-                :key="network.id"
-                :tone="network.managed ? 'info' : 'neutral'"
-                :title="`${network.driver}/${network.scope} · ${network.containerCount} container${network.internal ? ' · internal' : ''}`"
-              >
-                {{ network.name }} · {{ network.containerCount }}
-              </UiBadge>
-            </dd>
-            <dd v-else class="mt-1 text-xs text-muted">
-              Menunggu network inventory dari agent v0.12.9+.
-            </dd>
-          </div>
-          <div>
-            <dt class="text-muted">CPU usage</dt>
-            <dd class="mt-1 font-mono text-ink">
-              {{ usagePercent(node.cpuUsageBasisPoints) }}
-              <span class="text-muted">
-                / {{ node.capacityCpuMilli ? `${node.capacityCpuMilli / 1000} core` : '—' }}
-              </span>
-            </dd>
-          </div>
-          <div>
-            <dt class="text-muted">Memory usage</dt>
-            <dd class="mt-1 font-mono text-ink">
-              {{ memoryUsagePercent(node) }}
-              <span class="text-muted">
-                · {{ humanBytes(node.memoryUsedBytes) }} /
-                {{ humanBytes(node.capacityMemoryBytes) }}
-              </span>
-            </dd>
-          </div>
-          <div class="col-span-2">
-            <dt class="text-muted">Root disk</dt>
-            <dd class="mt-1 flex flex-wrap items-center gap-2 font-mono text-ink">
-              <UiBadge :tone="diskWatermarkTone(node.diskWatermark)" dot>
-                {{ usagePercent(node.diskUsageBasisPoints) }} · {{ node.diskWatermark }}
-              </UiBadge>
-              <span
-                >{{ humanBytes(node.diskUsedBytes) }} /
-                {{ humanBytes(node.capacityDiskBytes) }}</span
-              >
-            </dd>
-          </div>
-          <div
-            v-if="node.stuckOperationCount > 0"
-            class="col-span-2 rounded border border-warning/30 bg-warning/10 px-3 py-2"
-          >
-            <dt class="flex items-center gap-2 font-semibold text-warning">
-              <AlertTriangle :size="14" /> {{ node.stuckOperationCount }} operation stuck
-            </dt>
-            <dd class="mt-1 text-warning">
-              Sejak {{ format.dateTime(node.oldestStuckOperationAt) }} ·
-              <NuxtLink to="/deployments" class="underline">buka Deployments</NuxtLink>
-            </dd>
-          </div>
-          <div class="col-span-2">
-            <dt class="text-muted">Host</dt>
-            <dd class="mt-1 truncate font-mono text-ink">{{ node.osRelease || '—' }}</dd>
-          </div>
-          <div class="col-span-2">
-            <dt class="text-muted">Docker / Compose</dt>
-            <dd class="mt-1 truncate font-mono text-ink">
-              {{ node.dockerVersion || '—' }} / {{ node.composeVersion || '—' }}
-            </dd>
-          </div>
-          <div class="col-span-2">
-            <div class="flex items-center justify-between gap-3">
-              <dt class="text-muted">Image inventory</dt>
-              <UiButton
-                v-if="node.images.length"
-                variant="secondary"
-                size="sm"
-                type="button"
-                @click="imageDialogNodeId = node.id"
-              >
-                <Package :size="13" aria-hidden="true" />
-                Kelola images
-              </UiButton>
-            </div>
-            <dd v-if="!node.images.length" class="mt-1 text-xs text-muted">
-              {{
-                supportsImageInventory(node.agentVersion)
-                  ? 'Tidak ada image Docker pada server.'
-                  : 'Menunggu inventory dari agent v0.12.4+.'
-              }}
-            </dd>
-          </div>
-          <div v-if="node.role !== 'builder'" class="col-span-2">
-            <dt class="text-muted">Traefik gateway</dt>
-            <dd class="mt-1 flex items-center gap-2">
-              <UiBadge :tone="gatewayStatusTone(node.gatewayStatus)" dot>
-                {{ node.gatewayStatus }}
-              </UiBadge>
-              <span class="truncate font-mono text-ink">{{ node.gatewayVersion || '—' }}</span>
-            </dd>
-            <p v-if="node.gatewayLastError" class="mt-2 text-xs leading-5 text-danger">
-              {{ node.gatewayLastError }}
-            </p>
-            <p v-if="node.gatewayLastObservedAt" class="mt-1 text-[11px] text-muted">
-              Observed {{ format.dateTime(node.gatewayLastObservedAt) }}
-            </p>
-          </div>
-          <div v-if="node.role !== 'deployment'" class="col-span-2">
-            <dt class="text-muted">Builder capability</dt>
-            <dd class="mt-1">
-              <UiBadge :tone="node.capabilities.includes('image-build') ? 'success' : 'danger'" dot>
-                {{ node.capabilities.includes('image-build') ? 'ready' : 'git/buildx unavailable' }}
-              </UiBadge>
-            </dd>
-          </div>
-          <div class="col-span-2">
-            <dt class="text-muted">Heartbeat terakhir</dt>
-            <dd class="mt-1 font-mono text-ink">{{ format.dateTime(node.lastHeartbeatAt) }}</dd>
-          </div>
-          <div class="col-span-2">
-            <dt class="text-muted">Agent release</dt>
-            <dd class="mt-1 text-ink">
-              Tersedia v{{ node.availableAgentVersion }}
-              <span v-if="node.previousAgentVersion" class="text-muted">
-                · rollback v{{ node.previousAgentVersion }}
-              </span>
-            </dd>
-            <p v-if="node.agentLastUpdateError" class="mt-2 text-xs leading-5 text-danger">
-              {{ node.agentLastUpdateError }}
-            </p>
-            <p v-else-if="node.agentLastUpdateAt" class="mt-1 text-[11px] text-muted">
-              Update terakhir {{ format.dateTime(node.agentLastUpdateAt) }}
-            </p>
-            <p
-              v-if="node.upgradeAvailable && !node.agentArtifactReady"
-              class="mt-2 text-xs leading-5 text-warning"
-            >
-              Artifact {{ node.architecture }} belum tersedia di control plane. Jalankan
-              <code>npm run agent:build:linux:all</code>.
-            </p>
-          </div>
-        </dl>
-
-        <div
-          v-if="node.status !== 'revoked'"
-          class="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4"
+    <UiEmptyState
+      v-else-if="!visibleNodes.length"
+      title="Server tidak ditemukan"
+      description="Coba nama atau status lain."
+    >
+      <UiButton variant="secondary" size="sm" @click="resetFilters">Reset filter</UiButton>
+    </UiEmptyState>
+    <div v-else class="divide-y overflow-hidden rounded-md border bg-surface">
+      <details v-for="node in visibleNodes" :key="node.id" class="group">
+        <summary
+          class="focus-ring flex cursor-pointer list-none items-center gap-4 px-4 py-4 hover:bg-surface-raised/60 [&::-webkit-details-marker]:hidden"
         >
-          <UiButton variant="secondary" size="sm" @click="openRoleDialog(node)">
-            <Settings2 :size="14" aria-hidden="true" />
-            Ubah mode
-          </UiButton>
-          <UiButton
-            v-if="node.upgradeAvailable && !node.remoteUpdateSupported"
-            variant="secondary"
-            size="sm"
-            :disabled="!node.agentArtifactReady"
-            @click="copyBootstrapCommand(node)"
+          <div
+            class="grid min-w-0 flex-1 gap-3 sm:grid-cols-[minmax(0,2fr)_1fr_1fr] xl:grid-cols-[minmax(0,2fr)_1fr_1fr_1fr]"
           >
-            <Copy :size="14" aria-hidden="true" />
-            Bootstrap updater
-          </UiButton>
-          <UiButton
-            v-else-if="node.upgradeAvailable"
-            size="sm"
-            :disabled="
-              updatingNodeId === node.id ||
-              !node.agentArtifactReady ||
-              !['online', 'degraded'].includes(node.status) ||
-              ['queued', 'staging'].includes(node.agentUpdateStatus)
-            "
-            @click="pendingAgentAction = { node, action: 'upgrade' }"
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <ServerIcon :size="15" class="text-muted" aria-hidden="true" />
+                <h2 class="truncate text-sm font-semibold text-ink">{{ node.name }}</h2>
+                <UiBadge :tone="statusTone(node.status)" dot>{{ node.status }}</UiBadge>
+                <UiBadge v-if="needsAttention(node)" tone="warning">Perlu perhatian</UiBadge>
+              </div>
+              <p class="mt-1 text-xs text-muted">
+                {{ node.environment }} · {{ node.role }} · {{ node.resourceCount }} resource<span
+                  v-if="node.isDraining"
+                >
+                  · Draining</span
+                >
+              </p>
+            </div>
+            <div class="text-xs">
+              <p class="text-muted">CPU / Memory</p>
+              <p class="mt-1 font-mono text-ink">
+                {{ usagePercent(node.cpuUsageBasisPoints) }} / {{ memoryUsagePercent(node) }}
+              </p>
+            </div>
+            <div class="text-xs">
+              <p class="text-muted">Disk</p>
+              <p
+                class="mt-1 font-mono"
+                :class="
+                  ['warning', 'critical'].includes(node.diskWatermark) ? 'text-warning' : 'text-ink'
+                "
+              >
+                {{ usagePercent(node.diskUsageBasisPoints) }}
+                <span class="text-muted">/ {{ humanBytes(node.capacityDiskBytes) }}</span>
+              </p>
+            </div>
+            <div class="hidden text-xs xl:block">
+              <p class="text-muted">Agent</p>
+              <div class="mt-1 flex flex-wrap items-center gap-2">
+                <UiBadge :tone="agentVersionTone(node.agentVersion)">{{
+                  node.agentVersion ? `v${node.agentVersion}` : 'Belum terhubung'
+                }}</UiBadge>
+                <span
+                  v-if="['queued', 'staging'].includes(node.agentUpdateStatus)"
+                  class="text-warning"
+                  >{{ node.agentUpdateStatus }}</span
+                >
+              </div>
+            </div>
+          </div>
+          <ChevronDown
+            :size="16"
+            class="shrink-0 text-muted transition-transform group-open:rotate-180"
+            aria-hidden="true"
+          />
+        </summary>
+        <div class="border-t bg-surface-raised/30 px-4 pb-4">
+          <dl class="grid grid-cols-2 gap-x-8 gap-y-4 pt-4 text-xs lg:grid-cols-4">
+            <div>
+              <dt class="text-muted">Resources</dt>
+              <dd class="mt-1 font-mono text-ink">{{ format.count(node.resourceCount) }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted">Docker images</dt>
+              <dd class="mt-1 flex flex-wrap items-center gap-2 font-mono text-ink">
+                <span>{{ format.count(node.imageCount) }}</span>
+                <UiBadge v-if="node.usedImageCount" tone="success">
+                  {{ node.usedImageCount }} used
+                </UiBadge>
+              </dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="flex items-center gap-2 text-muted">
+                <Network :size="13" /> Docker networks
+              </dt>
+              <dd v-if="node.networks.length" class="mt-2 flex flex-wrap gap-2">
+                <UiBadge
+                  v-for="network in node.networks"
+                  :key="network.id"
+                  :tone="network.managed ? 'info' : 'neutral'"
+                  :title="`${network.driver}/${network.scope} · ${network.containerCount} container${network.internal ? ' · internal' : ''}`"
+                >
+                  {{ network.name }} · {{ network.containerCount }}
+                </UiBadge>
+              </dd>
+              <dd v-else class="mt-1 text-xs text-muted">
+                Menunggu network inventory dari agent v0.12.9+.
+              </dd>
+            </div>
+            <div>
+              <dt class="text-muted">CPU usage</dt>
+              <dd class="mt-1 font-mono text-ink">
+                {{ usagePercent(node.cpuUsageBasisPoints) }}
+                <span class="text-muted">
+                  / {{ node.capacityCpuMilli ? `${node.capacityCpuMilli / 1000} core` : '—' }}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt class="text-muted">Memory usage</dt>
+              <dd class="mt-1 font-mono text-ink">
+                {{ memoryUsagePercent(node) }}
+                <span class="text-muted">
+                  · {{ humanBytes(node.memoryUsedBytes) }} /
+                  {{ humanBytes(node.capacityMemoryBytes) }}
+                </span>
+              </dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-muted">Root disk</dt>
+              <dd class="mt-1 flex flex-wrap items-center gap-2 font-mono text-ink">
+                <UiBadge :tone="diskWatermarkTone(node.diskWatermark)" dot>
+                  {{ usagePercent(node.diskUsageBasisPoints) }} · {{ node.diskWatermark }}
+                </UiBadge>
+                <span
+                  >{{ humanBytes(node.diskUsedBytes) }} /
+                  {{ humanBytes(node.capacityDiskBytes) }}</span
+                >
+              </dd>
+            </div>
+            <div
+              v-if="node.stuckOperationCount > 0"
+              class="col-span-2 rounded border border-warning/30 bg-warning/10 px-3 py-2"
+            >
+              <dt class="flex items-center gap-2 font-semibold text-warning">
+                <AlertTriangle :size="14" /> {{ node.stuckOperationCount }} operation stuck
+              </dt>
+              <dd class="mt-1 text-warning">
+                Sejak {{ format.dateTime(node.oldestStuckOperationAt) }} ·
+                <NuxtLink to="/deployments" class="underline">buka Deployments</NuxtLink>
+              </dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-muted">Host</dt>
+              <dd class="mt-1 truncate font-mono text-ink">{{ node.osRelease || '—' }}</dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-muted">Docker / Compose</dt>
+              <dd class="mt-1 truncate font-mono text-ink">
+                {{ node.dockerVersion || '—' }} / {{ node.composeVersion || '—' }}
+              </dd>
+            </div>
+            <div class="col-span-2">
+              <div class="flex items-center justify-between gap-3">
+                <dt class="text-muted">Image inventory</dt>
+                <UiButton
+                  v-if="node.images.length"
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  @click="imageDialogNodeId = node.id"
+                >
+                  <Package :size="13" aria-hidden="true" />
+                  Kelola images
+                </UiButton>
+              </div>
+              <dd v-if="!node.images.length" class="mt-1 text-xs text-muted">
+                {{
+                  supportsImageInventory(node.agentVersion)
+                    ? 'Tidak ada image Docker pada server.'
+                    : 'Menunggu inventory dari agent v0.12.4+.'
+                }}
+              </dd>
+            </div>
+            <div v-if="node.role !== 'builder'" class="col-span-2">
+              <dt class="text-muted">Traefik gateway</dt>
+              <dd class="mt-1 flex items-center gap-2">
+                <UiBadge :tone="gatewayStatusTone(node.gatewayStatus)" dot>
+                  {{ node.gatewayStatus }}
+                </UiBadge>
+                <span class="truncate font-mono text-ink">{{ node.gatewayVersion || '—' }}</span>
+              </dd>
+              <p v-if="node.gatewayLastError" class="mt-2 text-xs leading-5 text-danger">
+                {{ node.gatewayLastError }}
+              </p>
+              <p v-if="node.gatewayLastObservedAt" class="mt-1 text-[11px] text-muted">
+                Observed {{ format.dateTime(node.gatewayLastObservedAt) }}
+              </p>
+            </div>
+            <div v-if="node.role !== 'deployment'" class="col-span-2">
+              <dt class="text-muted">Builder capability</dt>
+              <dd class="mt-1">
+                <UiBadge
+                  :tone="node.capabilities.includes('image-build') ? 'success' : 'danger'"
+                  dot
+                >
+                  {{
+                    node.capabilities.includes('image-build') ? 'ready' : 'git/buildx unavailable'
+                  }}
+                </UiBadge>
+              </dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-muted">Heartbeat terakhir</dt>
+              <dd class="mt-1 font-mono text-ink">{{ format.dateTime(node.lastHeartbeatAt) }}</dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-muted">Agent</dt>
+              <dd class="mt-1 text-ink">
+                <span :title="`Remote update membutuhkan agent ${minimumAgentVersion}+`">
+                  Terpasang {{ node.agentVersion ? `v${node.agentVersion}` : '—' }} ·
+                </span>
+                Tersedia v{{ node.availableAgentVersion }}
+                <span v-if="node.previousAgentVersion" class="text-muted">
+                  · rollback v{{ node.previousAgentVersion }}
+                </span>
+              </dd>
+              <p v-if="node.agentLastUpdateError" class="mt-2 text-xs leading-5 text-danger">
+                {{ node.agentLastUpdateError }}
+              </p>
+              <p v-else-if="node.agentLastUpdateAt" class="mt-1 text-[11px] text-muted">
+                Update terakhir {{ format.dateTime(node.agentLastUpdateAt) }}
+              </p>
+              <p
+                v-if="node.upgradeAvailable && !node.agentArtifactReady"
+                class="mt-2 text-xs leading-5 text-warning"
+              >
+                Artifact {{ node.architecture }} belum tersedia di control plane. Jalankan
+                <code>npm run agent:build:linux:all</code>.
+              </p>
+            </div>
+          </dl>
+
+          <div
+            v-if="node.status !== 'revoked'"
+            class="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4"
           >
-            <Download :size="14" aria-hidden="true" />
-            Update ke v{{ node.availableAgentVersion }}
-          </UiButton>
-          <UiButton
-            v-if="node.previousAgentVersion && node.remoteUpdateSupported"
-            variant="secondary"
-            size="sm"
-            :disabled="
-              updatingNodeId === node.id ||
-              !['online', 'degraded'].includes(node.status) ||
-              ['queued', 'staging'].includes(node.agentUpdateStatus)
-            "
-            @click="pendingAgentAction = { node, action: 'rollback' }"
-          >
-            <RotateCcw :size="14" aria-hidden="true" />
-            Rollback v{{ node.previousAgentVersion }}
-          </UiButton>
-          <UiButton
-            variant="danger"
-            size="sm"
-            :disabled="revokingNodeId === node.id"
-            @click="pendingRevokeNode = node"
-          >
-            <ShieldX :size="14" aria-hidden="true" />
-            {{ revokingNodeId === node.id ? 'Mencabut…' : 'Cabut identity' }}
-          </UiButton>
+            <UiButton variant="secondary" size="sm" @click="openRoleDialog(node)">
+              <Settings2 :size="14" aria-hidden="true" />
+              Ubah mode
+            </UiButton>
+            <UiButton
+              v-if="node.upgradeAvailable && !node.remoteUpdateSupported"
+              variant="secondary"
+              size="sm"
+              :disabled="!node.agentArtifactReady"
+              @click="copyBootstrapCommand(node)"
+            >
+              <Copy :size="14" aria-hidden="true" />
+              Bootstrap updater
+            </UiButton>
+            <UiButton
+              v-else-if="node.upgradeAvailable"
+              size="sm"
+              :disabled="
+                updatingNodeId === node.id ||
+                !node.agentArtifactReady ||
+                !['online', 'degraded'].includes(node.status) ||
+                ['queued', 'staging'].includes(node.agentUpdateStatus)
+              "
+              @click="pendingAgentAction = { node, action: 'upgrade' }"
+            >
+              <Download :size="14" aria-hidden="true" />
+              Update ke v{{ node.availableAgentVersion }}
+            </UiButton>
+            <UiButton
+              v-if="node.previousAgentVersion && node.remoteUpdateSupported"
+              variant="secondary"
+              size="sm"
+              :disabled="
+                updatingNodeId === node.id ||
+                !['online', 'degraded'].includes(node.status) ||
+                ['queued', 'staging'].includes(node.agentUpdateStatus)
+              "
+              @click="pendingAgentAction = { node, action: 'rollback' }"
+            >
+              <RotateCcw :size="14" aria-hidden="true" />
+              Rollback v{{ node.previousAgentVersion }}
+            </UiButton>
+            <UiButton
+              variant="danger"
+              size="sm"
+              :disabled="revokingNodeId === node.id"
+              @click="pendingRevokeNode = node"
+            >
+              <ShieldX :size="14" aria-hidden="true" />
+              {{ revokingNodeId === node.id ? 'Mencabut…' : 'Cabut identity' }}
+            </UiButton>
+          </div>
         </div>
-      </UiCard>
+      </details>
     </div>
 
     <UiDialog

@@ -249,6 +249,7 @@ export const updateApplicationResourceSchema = z
 export const operationIdSchema = z.string().uuid()
 
 export const operationStatusUpdateSchema = z.object({
+  attemptCount: z.number().int().min(1).optional(),
   status: z.enum(AGENT_OPERATION_STATUSES),
   retryable: z.boolean().default(false),
   result: z.record(z.string(), z.unknown()).optional(),

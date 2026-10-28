@@ -2,8 +2,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --color-canvas: var(--ui-canvas);
   --color-sidebar: var(--ui-sidebar);
@@ -15,49 +14,55 @@
   --color-muted: var(--ui-muted);
   --color-brand: var(--ui-brand);
   --color-brand-strong: var(--ui-brand-strong);
+  --color-brand-contrast: var(--ui-brand-contrast);
   --color-danger: var(--ui-danger);
   --color-warning: var(--ui-warning);
   --color-info: var(--ui-info);
+  --color-success: var(--ui-success);
 }
 
 @layer base {
   :root {
     color-scheme: light;
-    --ui-canvas: #f4f6f8;
-    --ui-sidebar: #ffffff;
+    --ui-canvas: #ffffff;
+    --ui-sidebar: #f6f6f4;
     --ui-surface: #ffffff;
-    --ui-surface-raised: #eef2f5;
-    --ui-line: #dce2e8;
-    --ui-line-strong: #c5ced8;
-    --ui-ink: #17202b;
-    --ui-muted: #667386;
-    --ui-brand: #15803d;
-    --ui-brand-strong: #166534;
+    --ui-surface-raised: #f3f3f1;
+    --ui-line: #e4e4e1;
+    --ui-line-strong: #c9cbc6;
+    --ui-ink: #262725;
+    --ui-muted: #696d67;
+    --ui-brand: #315a8a;
+    --ui-brand-strong: #24476e;
+    --ui-brand-contrast: #ffffff;
     --ui-danger: #be123c;
     --ui-warning: #b45309;
     --ui-info: #2563eb;
-    --ui-focus: #15803d;
-    --ui-focus-ring: rgba(21, 128, 61, 0.22);
+    --ui-success: #35734b;
+    --ui-focus: #315a8a;
+    --ui-focus-ring: rgba(49, 90, 138, 0.18);
     --ui-grid-line: rgba(15, 23, 42, 0.035);
   }
 
   :root.dark {
     color-scheme: dark;
-    --ui-canvas: #080b10;
-    --ui-sidebar: #0b0f15;
-    --ui-surface: #10151d;
-    --ui-surface-raised: #151b24;
-    --ui-line: #242c38;
-    --ui-line-strong: #334052;
-    --ui-ink: #e8edf4;
-    --ui-muted: #8c98a8;
-    --ui-brand: #4ade80;
-    --ui-brand-strong: #22c55e;
+    --ui-canvas: #1a1b1a;
+    --ui-sidebar: #20211f;
+    --ui-surface: #1e1f1e;
+    --ui-surface-raised: #282a27;
+    --ui-line: #343631;
+    --ui-line-strong: #4d514a;
+    --ui-ink: #e8e9e5;
+    --ui-muted: #a4a99e;
+    --ui-brand: #9abbe4;
+    --ui-brand-strong: #b7ceeb;
+    --ui-brand-contrast: #1c2a3c;
     --ui-danger: #fb7185;
     --ui-warning: #fbbf24;
     --ui-info: #60a5fa;
-    --ui-focus: #4ade80;
-    --ui-focus-ring: rgba(74, 222, 128, 0.3);
+    --ui-success: #8dc69d;
+    --ui-focus: #9abbe4;
+    --ui-focus-ring: rgba(154, 187, 228, 0.2);
     --ui-grid-line: rgba(255, 255, 255, 0.018);
   }
 
@@ -67,6 +72,7 @@
 
   body {
     @apply min-h-screen bg-canvas text-ink antialiased transition-colors duration-200;
+    font-family: var(--font-sans);
   }
 
   * {
@@ -74,7 +80,106 @@
   }
 
   ::selection {
-    @apply bg-brand/25 text-white;
+    @apply bg-brand/20 text-ink;
+  }
+
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ui-focus);
+    outline-offset: 3px;
+  }
+}
+
+.app-content > div > header h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.ui-card > :first-child {
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+
+.ui-card > :last-child {
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
+
+.app-content table thead th {
+  background: var(--ui-surface-raised);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  padding-top: 0.625rem;
+  padding-bottom: 0.625rem;
+}
+
+.app-content table td {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+.app-content table tbody tr {
+  transition: background-color 150ms;
+}
+
+.app-content :is(select, textarea).focus-ring {
+  border-radius: 0.375rem;
+}
+
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-line-strong) transparent;
+}
+
+.nav-link {
+  position: relative;
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.625rem;
+  border-radius: 0.25rem;
+  padding: 0.375rem 0.625rem;
+  color: var(--ui-muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  transition:
+    color 150ms,
+    background-color 150ms;
+}
+
+.nav-link:hover {
+  color: var(--ui-ink);
+  background: var(--ui-surface-raised);
+}
+
+.nav-link[data-active='true'] {
+  color: var(--ui-ink);
+  background: var(--ui-line);
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

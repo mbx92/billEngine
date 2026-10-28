@@ -1479,8 +1479,12 @@ func ensureApplication(
 	if _, err := run(ctx, "docker", "start", containerName); err != nil {
 		return nil, commandError("container_start_failed", err, true)
 	}
+	if failure := waitApplicationReady(ctx, containerName, run); failure != nil {
+		return nil, failure
+	}
 	result := map[string]any{
 		"externalId": containerID, "containerName": containerName, "networkName": payload.Spec.NetworkName,
+		"ready": true,
 	}
 	if local {
 		result["imageDigest"] = payload.Spec.Source.Reference
@@ -1563,8 +1567,10 @@ func lifecycle(
 	name := containerName(payload.ResourceID)
 	owner, err := run(ctx, "docker", "inspect", "--format", `{{index .Config.Labels "oc.resource-id"}}`, name)
 	if err != nil {
-		if operation.Action == "application.delete" && dockerObjectNotFound(owner, err) {
-			_ = os.RemoveAll(filepath.Join(secretDirectory, payload.ResourceID))
+		if (operation.Action == "application.delete" || operation.Action == "application.stop") && dockerObjectNotFound(owner, err) {
+			if operation.Action == "application.delete" {
+				_ = os.RemoveAll(filepath.Join(secretDirectory, payload.ResourceID))
+			}
 			return map[string]any{"externalId": name, "alreadyAbsent": true}, nil
 		}
 		return nil, commandError("lifecycle_inspect_failed", err, true)
@@ -1590,10 +1596,15 @@ func lifecycle(
 	if _, err := run(ctx, "docker", args...); err != nil {
 		return nil, commandError("lifecycle_failed", err, true)
 	}
+	if operation.Action == "application.start" || operation.Action == "application.restart" {
+		if failure := waitApplicationReady(ctx, name, run); failure != nil {
+			return nil, failure
+		}
+	}
 	if operation.Action == "application.delete" {
 		_ = os.RemoveAll(filepath.Join(secretDirectory, payload.ResourceID))
 	}
-	return map[string]any{"externalId": name}, nil
+	return map[string]any{"externalId": name, "ready": operation.Action == "application.start" || operation.Action == "application.restart"}, nil
 }
 
 func dockerObjectNotFound(output []byte, err error) bool {

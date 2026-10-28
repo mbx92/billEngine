@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gt, inArray, isNull, lt, min, ne, or } from 'drizzle-orm'
+import { and, asc, count, eq, gt, inArray, isNull, lt, min, ne, or, sql } from 'drizzle-orm'
 import type {
   AgentHeartbeatInput,
   AgentInventoryInput,
@@ -460,7 +460,7 @@ export class InfrastructureControlRepository {
           .set({
             externalId: observation.externalId,
             observedState: observation.state,
-            observedRevision: observation.observedRevision,
+            observedRevision: sql`greatest(${infrastructureResources.observedRevision}, ${observation.observedRevision})`,
             imageReference: observation.imageReference,
             imageDigest: observation.imageDigest,
             observedSpec: observation.snapshot,

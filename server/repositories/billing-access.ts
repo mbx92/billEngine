@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, lt, ne } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNull, lt } from 'drizzle-orm'
 import { useDatabase, type Database } from '../database/client'
 import {
   infrastructureResources,
@@ -20,6 +20,7 @@ export class BillingAccessRepository {
         name: services.name,
         serviceNumber: services.serviceNumber,
         status: services.status,
+        billingBlocked: services.billingBlocked,
         managedHostname: resourceRoutes.hostname,
         managedDomainStatus: resourceRoutes.observedStatus,
       })
@@ -32,9 +33,9 @@ export class BillingAccessRepository {
       .innerJoin(resourceRoutes, eq(resourceRoutes.resourceId, infrastructureResources.id))
       .where(
         and(
-          ne(services.status, 'cancelled'),
+          isNull(infrastructureResources.deletedAt),
           eq(infrastructureResources.kind, 'application'),
-          eq(resourceRoutes.observedStatus, 'active'),
+          eq(resourceRoutes.billingGateEnabled, true),
         ),
       )
 
@@ -43,7 +44,7 @@ export class BillingAccessRepository {
     )
     const serviceIds = new Set(matches.map((match) => match.id))
 
-    // Ambiguous host ownership must fail open instead of blocking the wrong customer.
+    // Missing/ambiguous ownership is denied by the billing gate caller.
     return serviceIds.size === 1 ? matches[0]! : null
   }
 

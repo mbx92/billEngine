@@ -10,17 +10,18 @@ defineProps<{
 <template>
   <UiCard class="min-w-0">
     <div class="flex items-center justify-between gap-3">
-      <p class="text-xs font-semibold tracking-wide text-muted uppercase">{{ label }}</p>
-      <span
-        class="size-1.5 rounded-full"
-        :class="
-          tone === 'warning' ? 'bg-warning' : tone === 'success' ? 'bg-brand' : 'bg-line-strong'
-        "
-      />
+      <p class="text-xs font-medium text-muted">{{ label }}</p>
+      <span v-if="$slots.icon" class="text-muted">
+        <slot name="icon" />
+      </span>
     </div>
-    <p class="mt-3 truncate font-mono text-2xl font-semibold tracking-tight text-ink">
+    <p
+      class="mt-2 break-words text-2xl leading-tight font-medium tracking-tight tabular-nums"
+      :class="tone === 'warning' ? 'text-warning' : 'text-ink'"
+      :title="value"
+    >
       {{ value }}
     </p>
-    <p v-if="detail" class="mt-1 text-xs text-muted">{{ detail }}</p>
+    <p v-if="detail" class="mt-1 text-xs leading-5 text-muted">{{ detail }}</p>
   </UiCard>
 </template>

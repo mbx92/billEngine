@@ -300,15 +300,9 @@ export class InvoiceRepository {
     return created
   }
 
-  async replaceItems(
-    transaction: Transaction,
-    invoiceId: string,
-    items: NewInvoiceItem[],
-  ) {
+  async replaceItems(transaction: Transaction, invoiceId: string, items: NewInvoiceItem[]) {
     await transaction.delete(invoiceItems).where(eq(invoiceItems.invoiceId, invoiceId))
-    await transaction
-      .insert(invoiceItems)
-      .values(items.map((item) => ({ ...item, invoiceId })))
+    await transaction.insert(invoiceItems).values(items.map((item) => ({ ...item, invoiceId })))
   }
 
   async updateEditable(
@@ -438,6 +432,7 @@ export class InvoiceRepository {
       .where(
         and(
           eq(services.status, 'active'),
+          or(eq(services.billingMode, 'prepaid'), isNotNull(services.activatedAt)),
           or(
             and(
               isNull(services.nextDueDate),
@@ -476,10 +471,7 @@ export class InvoiceRepository {
       .where(eq(services.id, serviceId))
   }
 
-  async findServiceSchedule(
-    serviceId: string,
-    database: Transaction | Database = this.database,
-  ) {
+  async findServiceSchedule(serviceId: string, database: Transaction | Database = this.database) {
     const [service] = await database
       .select({
         id: services.id,

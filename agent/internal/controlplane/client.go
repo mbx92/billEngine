@@ -87,12 +87,22 @@ type Operation struct {
 }
 
 type OperationStatusRequest struct {
+	AttemptCount     int            `json:"attemptCount,omitempty"`
 	Status           string         `json:"status"`
 	Retryable        bool           `json:"retryable"`
 	Result           map[string]any `json:"result,omitempty"`
 	ErrorCode        string         `json:"errorCode,omitempty"`
 	ErrorMessage     string         `json:"errorMessage,omitempty"`
 	ObservedRevision *int           `json:"observedRevision,omitempty"`
+}
+
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("control plane returned HTTP %d: %s", e.StatusCode, e.Message)
 }
 
 type OperationLogEntry struct {
@@ -283,7 +293,7 @@ func (c *Client) do(
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		limited, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("control plane returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(limited)))
+		return &HTTPError{StatusCode: response.StatusCode, Message: strings.TrimSpace(string(limited))}
 	}
 	if result == nil {
 		_, _ = io.Copy(io.Discard, response.Body)

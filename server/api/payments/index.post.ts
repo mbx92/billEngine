@@ -5,9 +5,13 @@ import { requestActor } from '../../utils/actor'
 export default defineEventHandler(async (event) => {
   const session = await requireAdmin(event)
   const input = recordPaymentSchema.parse(await readBody(event))
-  const result = await new PaymentService().record(input, requestActor(event, session.user.id))
+  const result = await new PaymentService().record(
+    input,
+    requestActor(event, session.user.id),
+    getHeader(event, 'idempotency-key'),
+  )
 
-  setResponseStatus(event, 201)
+  setResponseStatus(event, 'replayed' in result && result.replayed ? 200 : 201)
   return {
     data: {
       payment: {

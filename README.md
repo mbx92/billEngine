@@ -5,7 +5,14 @@ services, invoices, releases, deployment templates, resources, operations, and a
 
 ## Local development
 
-Requirements: Node.js 22.22.2+ and Docker.
+Requirements: Node.js 22.23.4 (see `.nvmrc`), npm 10.9.9, and Docker.
+
+With nvm installed, select the project's Node.js version before installing dependencies:
+
+```bash
+nvm install 22.23.4
+nvm use 22.23.4
+```
 
 ```bash
 cp .env.example .env

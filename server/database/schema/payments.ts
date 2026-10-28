@@ -22,6 +22,8 @@ export const payments = pgTable(
       .notNull()
       .references(() => invoices.id, { onDelete: 'restrict' }),
     paymentNumber: varchar('payment_number', { length: 48 }).notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 200 }),
+    requestFingerprint: varchar('request_fingerprint', { length: 64 }),
     status: paymentStatus('status').notNull().default('completed'),
     amount: bigint('amount', { mode: 'bigint' }).notNull(),
     currency: varchar('currency', { length: 3 }).notNull(),
@@ -35,6 +37,7 @@ export const payments = pgTable(
   },
   (table) => [
     uniqueIndex('payments_payment_number_uidx').on(table.paymentNumber),
+    uniqueIndex('payments_idempotency_key_uidx').on(table.idempotencyKey),
     index('payments_invoice_id_idx').on(table.invoiceId),
     index('payments_status_idx').on(table.status),
     index('payments_paid_at_idx').on(table.paidAt),

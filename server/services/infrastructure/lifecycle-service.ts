@@ -1,72 +1,108 @@
 import { randomUUID } from 'node:crypto'
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
 import type { ServiceStatus } from '../../../shared/constants/domain'
-import { useDatabase, type Database } from '../../database/client'
-import { InfrastructureRepository } from '../../repositories/infrastructure'
-import { NativeInfrastructureRepository } from '../../repositories/native-infrastructure'
-import { DomainError } from '../../utils/errors'
-import { NativeInfrastructureService } from './native-service'
+import type { Transaction } from '../../database/client'
+import {
+  infrastructureOperations,
+  infrastructureResources,
+  serviceResources,
+  services,
+} from '../../database/schema'
 
-export interface InfrastructureLifecycleOperation {
-  affectedCount: number
-  rollback: () => Promise<boolean>
-}
-
+/** The caller owns the transaction: entitlement and every operation commit together. */
 export class InfrastructureLifecycleService {
-  private readonly native: NativeInfrastructureService
-
-  constructor(
-    database: Database = useDatabase(),
-    private readonly repository = new InfrastructureRepository(database),
-  ) {
-    this.native = new NativeInfrastructureService(new NativeInfrastructureRepository(database))
-  }
-
   async apply(
+    transaction: Transaction,
     serviceId: string,
     targetStatus: Extract<ServiceStatus, 'active' | 'suspended'>,
     actorUserId: string | null,
-  ): Promise<InfrastructureLifecycleOperation> {
-    if (!actorUserId) throw DomainError.invalidState('Actor lifecycle operation tidak tersedia.')
-    const target = await this.repository.findServiceTarget(serviceId)
-    if (!target) throw DomainError.notFound('Service tidak ditemukan.')
-    if (target.resources.length === 0) return noLifecycleOperation()
-    if (target.resources.some((resource) => resource.resourceType !== 'application')) {
-      throw DomainError.invalidState('Suspend otomatis hanya mendukung application resource.')
-    }
-
-    const action = targetStatus === 'suspended' ? 'application.stop' : 'application.start'
-    const rollbackAction = targetStatus === 'suspended' ? 'application.start' : 'application.stop'
-    const completed: string[] = []
-
-    for (const resource of target.resources) {
-      await this.native.createLifecycleOperation(
-        resource.id,
-        action,
-        actorUserId,
-        `service:${serviceId}:${resource.id}:${randomUUID()}`,
-      )
-      completed.push(resource.id)
-    }
-
-    return {
-      affectedCount: completed.length,
-      rollback: async () => {
-        const results = await Promise.allSettled(
-          completed.map((resourceId) =>
-            this.native.createLifecycleOperation(
-              resourceId,
-              rollbackAction,
-              actorUserId,
-              `service-rollback:${serviceId}:${resourceId}:${randomUUID()}`,
+  ) {
+    const links = await transaction
+      .select({ id: serviceResources.resourceId })
+      .from(serviceResources)
+      .where(eq(serviceResources.serviceId, serviceId))
+    const resources = links.length
+      ? await transaction
+          .select()
+          .from(infrastructureResources)
+          .where(
+            and(
+              inArray(
+                infrastructureResources.id,
+                links.map((link) => link.id),
+              ),
+              isNull(infrastructureResources.deletedAt),
             ),
+          )
+          .orderBy(asc(infrastructureResources.id))
+          .for('update')
+      : []
+    const correlationId = randomUUID()
+    for (const resource of resources) {
+      // A database provisioning result owns the first application deployment.
+      // It will consult the current entitlement before queuing that deployment.
+      const databasePending = resource.labels['oc.deployment-gate'] === 'database'
+      const revision = resource.desiredRevision + 1
+      const running = targetStatus === 'active'
+      await transaction
+        .update(infrastructureResources)
+        .set({
+          desiredState: running ? (databasePending ? 'pending' : 'running') : 'stopped',
+          desiredRevision: revision,
+          updatedAt: new Date(),
+        })
+        .where(eq(infrastructureResources.id, resource.id))
+      await transaction
+        .update(infrastructureOperations)
+        .set({
+          status: 'cancelled',
+          errorCode: 'superseded',
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(infrastructureOperations.resourceId, resource.id),
+            eq(infrastructureOperations.status, 'queued'),
+            inArray(infrastructureOperations.action, [
+              'application.start',
+              'application.stop',
+              'application.restart',
+              'application.ensure',
+              'application.redeploy',
+            ]),
           ),
         )
-        return results.every((result) => result.status === 'fulfilled')
-      },
+      if (running && databasePending) continue
+      const ensure = running && resource.externalId.startsWith('pending:')
+      await transaction.insert(infrastructureOperations).values({
+        nodeId: resource.nodeId,
+        resourceId: resource.id,
+        actorUserId,
+        correlationId,
+        idempotencyKey: `service:${serviceId}:${resource.id}:${revision}`,
+        action: ensure ? 'application.ensure' : running ? 'application.start' : 'application.stop',
+        expectedResourceRevision: revision,
+        // Queue lifetime is separate from the execution deadline assigned at dispatch.
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+        payload: ensure
+          ? {
+              resourceId: resource.id,
+              name: resource.name,
+              kind: resource.kind,
+              revision,
+              spec: resource.desiredSpec,
+            }
+          : { resourceId: resource.id, revision },
+      })
     }
+    await transaction
+      .update(services)
+      .set({
+        infrastructureStatus: resources.length ? 'pending' : 'ready',
+        infrastructureError: null,
+      })
+      .where(eq(services.id, serviceId))
+    return { affectedCount: resources.length }
   }
-}
-
-function noLifecycleOperation(): InfrastructureLifecycleOperation {
-  return { affectedCount: 0, rollback: async () => true }
 }

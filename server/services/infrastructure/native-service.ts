@@ -8,7 +8,7 @@ import type {
 } from '../../../shared/schemas/infrastructure'
 import { NativeInfrastructureRepository } from '../../repositories/native-infrastructure'
 import { DomainError } from '../../utils/errors'
-import { canTransitionOperation, retryDelayMilliseconds } from './operation-state'
+import { retryDelayMilliseconds } from './operation-state'
 import { validateApplicationPolicy } from './policy'
 import { ApplicationBuildService } from './application-build-service'
 
@@ -19,8 +19,8 @@ export class NativeInfrastructureService {
     return this.repository.listResources()
   }
 
-  listOperations(limit?: number) {
-    return this.repository.listOperations(limit)
+  listOperations(limit?: number, resourceId?: string) {
+    return this.repository.listOperations(limit, resourceId)
   }
 
   async createApplication(
@@ -183,6 +183,7 @@ export class NativeInfrastructureService {
       }
       await this.repository.recordOperationStatus(nodeId, operation.id, {
         status: 'failed',
+        attemptCount: operation.attemptCount,
         retryable: false,
         errorCode: 'operation_timeout',
         errorMessage: 'Operation melewati batas waktu eksekusi dan dihentikan oleh watchdog.',
@@ -213,25 +214,10 @@ export class NativeInfrastructureService {
   ) {
     const operation = await this.repository.findOperationForNode(nodeId, operationId)
     if (!operation) throw DomainError.notFound('Operation tidak ditemukan.')
-    const targetStatus = input.status
-    if (operation.status === targetStatus) {
-      if (operation.action === 'application.build') {
-        await new ApplicationBuildService().synchronizeOperation(
-          operation.id,
-          input,
-          operation.status,
-        )
-      }
-      return operation
-    }
-    if (!canTransitionOperation(operation.status, targetStatus)) {
-      throw DomainError.invalidState(
-        `Transition operation ${operation.status} -> ${targetStatus} ditolak.`,
-      )
-    }
     const nextAttemptAt = input.retryable
       ? new Date(Date.now() + retryDelayMilliseconds(operation.attemptCount))
       : undefined
+    // Transition and attempt checks must happen under the repository row lock.
     const updated = await this.repository.recordOperationStatus(
       nodeId,
       operationId,
@@ -239,17 +225,16 @@ export class NativeInfrastructureService {
       nextAttemptAt,
     )
     if (!updated) throw DomainError.notFound('Operation tidak ditemukan.')
+    if (input.status === 'running' && updated.status !== 'running') {
+      throw DomainError.conflict('Operation telah digantikan; jangan jalankan payload lama.')
+    }
     if (operation.action === 'application.build') {
       await new ApplicationBuildService().synchronizeOperation(operation.id, input, updated.status)
     }
     return updated
   }
 
-  async appendOperationLogs(
-    nodeId: string,
-    operationId: string,
-    input: OperationLogAppendInput,
-  ) {
+  async appendOperationLogs(nodeId: string, operationId: string, input: OperationLogAppendInput) {
     const operation = await this.repository.appendOperationLogs(nodeId, operationId, input)
     if (!operation) throw DomainError.notFound('Operation tidak ditemukan.')
     return {

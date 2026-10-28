@@ -144,6 +144,7 @@ export class InfrastructureReconciliationService {
           {
             name: resource.name,
             classification: resource.classification,
+            serviceId,
             spec: {
               ...spec,
               limits: {

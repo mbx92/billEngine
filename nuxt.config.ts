@@ -36,6 +36,8 @@ const themeBootstrap = `
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-29',
+  // Do not inherit a global DEBUG value: hook tracing leaves browser timers open.
+  debug: false,
   devtools: { enabled: true },
   modules: ['@nuxt/eslint'],
   css: ['~/assets/css/main.css'],

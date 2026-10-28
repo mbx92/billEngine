@@ -26,11 +26,8 @@ const displayName = computed(
   <div class="mx-auto max-w-7xl">
     <header class="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
       <div>
-        <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
-          Customer portal / ringkasan
-        </p>
         <h1 class="text-2xl font-semibold tracking-tight text-ink">{{ displayName }}</h1>
-        <p class="mt-2 text-sm text-muted">Lihat invoice, layanan, dan sisa tagihan akun Anda.</p>
+        <p class="mt-2 text-sm leading-6 text-muted">Ringkasan layanan dan tagihan Anda.</p>
       </div>
       <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
     </header>

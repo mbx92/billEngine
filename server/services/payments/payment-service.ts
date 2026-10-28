@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto'
+import { eq, sql } from 'drizzle-orm'
+import { payments } from '../../database/schema'
+import { requireIdempotencyKey } from '../infrastructure/native-service'
 import type { RecordPaymentInput } from '../../../shared/schemas/invoices'
 import { useDatabase, type Database } from '../../database/client'
 import { AuditLogRepository } from '../../repositories/audit'
@@ -45,12 +49,42 @@ export class PaymentService {
    * Records a manual payment and recomputes the invoice state in the same
    * transaction, so an invoice can never end up paid without its payment row.
    */
-  async record(input: RecordPaymentInput, actor: ActorContext) {
+  async record(input: RecordPaymentInput, actor: ActorContext, requestKey?: string) {
+    const idempotencyKey = requireIdempotencyKey(requestKey ?? input.idempotencyKey)
+    const requestFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          invoiceId: input.invoiceId,
+          amount: input.amount.toString(),
+          status: input.status,
+          method: input.method,
+          reference: input.reference ?? null,
+          notes: input.notes ?? null,
+          paidAt: input.paidAt ? new Date(input.paidAt).toISOString() : null,
+        }),
+      )
+      .digest('hex')
     const paidAt = input.paidAt ? new Date(input.paidAt) : new Date()
     const config = await useBillingConfig()
     const today = todayIsoDate(config.timezone)
 
     return this.database.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`payment:${idempotencyKey}`}))`,
+      )
+      const [previous] = await transaction
+        .select()
+        .from(payments)
+        .where(eq(payments.idempotencyKey, idempotencyKey))
+        .limit(1)
+      if (previous) {
+        if (previous.requestFingerprint !== requestFingerprint) {
+          throw DomainError.conflict('Idempotency-Key sudah digunakan untuk pembayaran berbeda.')
+        }
+        const invoice = await this.invoices.findByIdForUpdate(previous.invoiceId, transaction)
+        if (!invoice) throw DomainError.notFound('Invoice tidak ditemukan.')
+        return { payment: previous, invoice, replayed: true }
+      }
       // Serialize balance-changing operations for this invoice. Without this
       // lock, two simultaneous payments can both validate against the same
       // stale balance and create an overpayment.
@@ -85,6 +119,8 @@ export class PaymentService {
       const sequence = await allocateDocumentNumber(transaction, 'payment', today.slice(0, 4))
 
       const payment = await this.payments.create(transaction, {
+        idempotencyKey,
+        requestFingerprint,
         invoiceId: invoice.id,
         paymentNumber: formatDocumentNumber('PAY', sequence),
         amount: input.amount,

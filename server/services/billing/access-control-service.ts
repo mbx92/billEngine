@@ -43,14 +43,26 @@ export class BillingAccessControlService {
       noticeIntervalHours: settings.graceNoticeIntervalHours,
     })
 
-    if (!settings.billingAccessControlEnabled) return normal()
-
     const service = await this.repository.findServiceByHost(host)
-    if (!service) return normal()
+    if (!service || service.status !== 'active') {
+      return {
+        ...normal(),
+        state: 'blocked',
+        service: service
+          ? {
+              id: service.id,
+              name: service.name,
+              serviceNumber: service.serviceNumber,
+            }
+          : null,
+      }
+    }
+    if (!settings.billingAccessControlEnabled)
+      return { ...normal(), state: service.billingBlocked ? 'blocked' : 'normal' }
 
     const effectiveDate = asOf ?? todayIsoDate(settings.billingTimezone)
     const invoice = await this.repository.findOldestOpenOverdueInvoice(service.id, effectiveDate)
-    if (!invoice) return normal()
+    if (!invoice) return { ...normal(), state: service.billingBlocked ? 'blocked' : 'normal' }
 
     const window = overdueAccessWindow(invoice.dueDate, effectiveDate, settings.overdueGraceDays)
     if (!window) return normal()

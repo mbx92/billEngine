@@ -1,4 +1,6 @@
-FROM node:22-alpine AS dependencies
+ARG NODE_VERSION=22.23.4
+
+FROM node:${NODE_VERSION}-alpine AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -20,7 +22,7 @@ RUN mkdir -p /out \
     "$agent_version" "$amd64_sha" "$amd64_size" "$arm64_sha" "$arm64_size" \
     >/out/oc-agent-manifest.json
 
-FROM node:22-alpine AS builder
+FROM node:${NODE_VERSION}-alpine AS builder
 WORKDIR /app
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
@@ -43,7 +45,7 @@ COPY server/database/create-admin.ts ./server/database/create-admin.ts
 COPY server/database/schema ./server/database/schema
 CMD ["sh", "-c", "if [ -n \"$ADMIN_EMAIL\" ] && [ -n \"$ADMIN_PASSWORD\" ]; then exec npx tsx server/database/create-admin.ts; else echo 'Admin bootstrap skipped.'; fi"]
 
-FROM node:22-alpine AS backup
+FROM node:${NODE_VERSION}-alpine AS backup
 WORKDIR /app
 RUN apk add --no-cache postgresql-client
 ENV NODE_ENV=production
@@ -51,7 +53,7 @@ ENV BACKUP_DIR=/backups
 COPY scripts/backup-database.mjs ./scripts/backup-database.mjs
 CMD ["node", "scripts/backup-database.mjs"]
 
-FROM node:22-alpine AS runner
+FROM node:${NODE_VERSION}-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
