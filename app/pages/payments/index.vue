@@ -193,19 +193,24 @@ async function recordPayment() {
 
         <label class="block sm:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">Invoice</span>
-          <select
+          <UiSelect
             v-model="form.invoiceId"
             autofocus
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            class="w-full"
+            :options="
+              (invoiceOptions ?? []).map((invoice) => ({
+                value: invoice.id,
+                label:
+                  invoice.invoiceNumber +
+                  ' · ' +
+                  (invoice.customerCompanyName || invoice.customerName) +
+                  ' · ' +
+                  format.money(invoice.balanceDue, invoice.currency),
+              }))
+            "
             @change="fillOutstandingBalance"
-          >
-            <option v-for="invoice in invoiceOptions" :key="invoice.id" :value="invoice.id">
-              {{ invoice.invoiceNumber }} ·
-              {{ invoice.customerCompanyName || invoice.customerName }} ·
-              {{ format.money(invoice.balanceDue, invoice.currency) }}
-            </option>
-          </select>
+          />
         </label>
 
         <div
@@ -228,15 +233,12 @@ async function recordPayment() {
         />
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Metode</span>
-          <select
+          <UiSelect
             v-model="form.method"
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option v-for="method in PAYMENT_METHODS" :key="method" :value="method">
-              {{ method }}
-            </option>
-          </select>
+            class="w-full"
+            :options="(PAYMENT_METHODS ?? []).map((method) => ({ value: method, label: method }))"
+          />
         </label>
         <UiInput v-model="form.paidAt" label="Tanggal pembayaran" type="datetime-local" required />
         <UiInput
@@ -275,18 +277,19 @@ async function recordPayment() {
       >
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Status</span>
-          <select
+          <UiSelect
             v-model="statusFilter"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            class="w-full"
+            :options="[
+              { value: '', label: 'Semua status' },
+              { value: 'completed', label: 'Completed' },
+              { value: 'pending', label: 'Pending' },
+              { value: 'failed', label: 'Failed' },
+              { value: 'refunded', label: 'Refunded' },
+              { value: 'cancelled', label: 'Cancelled' },
+            ]"
             @change="page = 1"
-          >
-            <option value="">Semua status</option>
-            <option value="completed">Completed</option>
-            <option value="pending">Pending</option>
-            <option value="failed">Failed</option>
-            <option value="refunded">Refunded</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
+          />
         </label>
         <UiInput v-model="fromFilter" label="Dari tanggal" type="date" @change="page = 1" />
         <UiInput v-model="toFilter" label="Sampai tanggal" type="date" @change="page = 1" />

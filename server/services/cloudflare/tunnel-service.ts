@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import type {
   ApiCloudflareTunnel,
   ApiCloudflareTunnelDetail,
@@ -19,6 +20,7 @@ import {
 import { useDatabase } from '../../database/client'
 import { AuditLogRepository } from '../../repositories/audit'
 import { DomainError } from '../../utils/errors'
+import { tunnelHostnameMatches } from '../../../shared/utils/tunnel-hostname'
 
 interface TunnelActor {
   userId: string | null
@@ -60,7 +62,9 @@ export class CloudflareTunnelService {
           ? {
               version: configuration.version ?? null,
               updatedAt: configuration.created_at ?? null,
-              routes: configuration.config.ingress.map(serializeRoute),
+              routes: configuration.config.ingress.map((rule) =>
+                serializeRoute(rule, configuration.config.originRequest),
+              ),
             }
           : null,
       }
@@ -83,6 +87,61 @@ export class CloudflareTunnelService {
         const insertAt = catchAllIndex === -1 ? config.ingress.length : catchAllIndex
         config.ingress.splice(insertAt, 0, buildRule(input))
         ensureCatchAll(config)
+      },
+    )
+  }
+
+  async connectApplicationRoute(
+    tunnelId: string,
+    input: CloudflareTunnelRouteInput,
+    actor: TunnelActor,
+  ) {
+    return this.mutateConfiguration(
+      tunnelId,
+      actor,
+      'cloudflare.application_domain.connected',
+      (config) => {
+        if (config.originRequest?.httpHostHeader)
+          throw DomainError.conflict(
+            'Tunnel memiliki HTTP Host Header global. Hapus override tersebut melalui konfigurasi tunnel agar hostname aplikasi sampai ke Traefik.',
+          )
+        const exact = config.ingress.find(
+          (rule) => rule.hostname?.toLowerCase() === input.hostname && !rule.path,
+        )
+        if (exact) {
+          if (
+            exact.service.replace(/\/$/, '') !== input.service.replace(/\/$/, '') ||
+            exact.originRequest?.httpHostHeader
+          ) {
+            throw DomainError.conflict(
+              'Domain ini sudah mengarah ke origin lain atau memakai Host Header khusus. Kelola route tersebut melalui halaman Tunnels.',
+            )
+          }
+          const earlier = config.ingress.slice(0, config.ingress.indexOf(exact))
+          if (
+            earlier.some(
+              (rule) => !rule.hostname || tunnelHostnameMatches(rule.hostname, input.hostname),
+            )
+          ) {
+            throw DomainError.conflict(
+              'Ada aturan lebih awal yang dapat mengambil trafik domain ini. Periksa urutan route melalui halaman Tunnels.',
+            )
+          }
+          return
+        }
+        if (
+          config.ingress.some(
+            (rule) =>
+              rule.path && (!rule.hostname || tunnelHostnameMatches(rule.hostname, input.hostname)),
+          )
+        ) {
+          throw DomainError.conflict(
+            'Domain memiliki aturan path. Kelola melalui halaman Tunnels agar aturan tersebut tidak tertimpa.',
+          )
+        }
+        // Put this exact hostname ahead of wildcard rules without changing other hosts.
+        config.ingress.unshift(buildRule(input))
+        if (!config.ingress.some(isCatchAll)) config.ingress.push({ service: 'http_status:404' })
       },
     )
   }
@@ -140,23 +199,31 @@ export class CloudflareTunnelService {
     this.assertConfigured()
 
     try {
-      const [tunnel, current] = await Promise.all([
-        this.client().getTunnel(tunnelId),
-        this.client().getConfiguration(tunnelId),
-      ])
-      if (configSource(tunnel) !== 'cloudflare') {
-        throw DomainError.invalidState(
-          'Tunnel memakai konfigurasi lokal dan hanya dapat diubah dari file cloudflared.',
+      return await useDatabase().transaction(async (transaction) => {
+        // Serialize BillEngine's read/modify/write operations for the same tunnel.
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`cloudflare-tunnel:${tunnelId}`}, 0))`,
         )
-      }
+        const [tunnel, current] = await Promise.all([
+          this.client().getTunnel(tunnelId),
+          this.client().getConfiguration(tunnelId),
+        ])
+        if (configSource(tunnel) !== 'cloudflare') {
+          throw DomainError.invalidState(
+            'Tunnel memakai konfigurasi lokal dan hanya dapat diubah dari file cloudflared.',
+          )
+        }
 
-      const before = current.config.ingress.map(serializeRoute)
-      const next = structuredClone(current.config)
-      mutate(next)
-      const updated = await this.client().updateConfiguration(tunnelId, next)
-      const after = updated.config.ingress.map(serializeRoute)
+        const before = current.config.ingress.map((rule) =>
+          serializeRoute(rule, current.config.originRequest),
+        )
+        const next = structuredClone(current.config)
+        mutate(next)
+        const updated = await this.client().updateConfiguration(tunnelId, next)
+        const after = updated.config.ingress.map((rule) =>
+          serializeRoute(rule, updated.config.originRequest),
+        )
 
-      await useDatabase().transaction(async (transaction) => {
         await new AuditLogRepository().record(transaction, {
           actorUserId: actor.userId,
           action,
@@ -168,17 +235,17 @@ export class CloudflareTunnelService {
           ipAddress: actor.ipAddress,
           userAgent: actor.userAgent,
         })
-      })
 
-      return {
-        tunnel: serializeTunnel(tunnel),
-        editable: true,
-        configuration: {
-          version: updated.version ?? null,
-          updatedAt: updated.created_at ?? null,
-          routes: after,
-        },
-      } satisfies ApiCloudflareTunnelDetail
+        return {
+          tunnel: serializeTunnel(tunnel),
+          editable: true,
+          configuration: {
+            version: updated.version ?? null,
+            updatedAt: updated.created_at ?? null,
+            routes: after,
+          },
+        } satisfies ApiCloudflareTunnelDetail
+      })
     } catch (error) {
       if (error instanceof DomainError) throw error
       throw mapCloudflareError(error)
@@ -222,14 +289,17 @@ function serializeTunnel(tunnel: CloudflareTunnel): ApiCloudflareTunnel {
   }
 }
 
-function serializeRoute(rule: CloudflareTunnelIngressRule): ApiCloudflareTunnelRoute {
+function serializeRoute(
+  rule: CloudflareTunnelIngressRule,
+  defaults?: CloudflareTunnelConfig['originRequest'],
+): ApiCloudflareTunnelRoute {
   return {
     hostname: rule.hostname?.trim().toLowerCase() || null,
     path: rule.path?.trim() || null,
     service: rule.service,
-    noTlsVerify: rule.originRequest?.noTLSVerify ?? false,
-    httpHostHeader: rule.originRequest?.httpHostHeader ?? null,
-    originServerName: rule.originRequest?.originServerName ?? null,
+    noTlsVerify: rule.originRequest?.noTLSVerify ?? defaults?.noTLSVerify ?? false,
+    httpHostHeader: rule.originRequest?.httpHostHeader ?? defaults?.httpHostHeader ?? null,
+    originServerName: rule.originRequest?.originServerName ?? defaults?.originServerName ?? null,
     catchAll: isCatchAll(rule),
   }
 }
@@ -273,7 +343,7 @@ function findRuleIndex(rules: CloudflareTunnelIngressRule[], key: CloudflareTunn
 }
 
 function isCatchAll(rule: CloudflareTunnelIngressRule) {
-  return !rule.hostname?.trim()
+  return !rule.hostname?.trim() && !rule.path?.trim()
 }
 
 function ensureCatchAll(config: CloudflareTunnelConfig) {

@@ -501,16 +501,19 @@ async function applyInfrastructure() {
         <div v-if="wizardStep === 1" class="grid gap-4 md:grid-cols-2">
           <label class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Customer</span>
-            <select
+            <UiSelect
               v-model="form.customerId"
               autofocus
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="" disabled>Pilih customer aktif</option>
-              <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-                {{ customer.companyName || customer.name }} · {{ customer.customerNumber }}
-              </option>
-            </select>
+              class="w-full"
+              placeholder="Pilih customer aktif"
+              :options="[
+                { value: '', label: 'Pilih customer aktif', disabled: true },
+                ...(customers ?? []).map((customer) => ({
+                  value: customer.id,
+                  label: (customer.companyName || customer.name) + ' · ' + customer.customerNumber,
+                })),
+              ]"
+            />
             <span v-if="customers.length === 0" class="mt-1.5 block text-xs text-warning">
               Belum ada customer aktif.
               <NuxtLink class="font-semibold underline" to="/customers">Tambah customer</NuxtLink>
@@ -519,15 +522,18 @@ async function applyInfrastructure() {
           </label>
           <label class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Plan</span>
-            <select
+            <UiSelect
               v-model="form.planId"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="" disabled>Pilih plan aktif</option>
-              <option v-for="plan in plans" :key="plan.id" :value="plan.id">
-                {{ plan.name }} · {{ format.money(plan.priceAmount, plan.currency) }}
-              </option>
-            </select>
+              class="w-full"
+              placeholder="Pilih plan aktif"
+              :options="[
+                { value: '', label: 'Pilih plan aktif', disabled: true },
+                ...(plans ?? []).map((plan) => ({
+                  value: plan.id,
+                  label: plan.name + ' · ' + format.money(plan.priceAmount, plan.currency),
+                })),
+              ]"
+            />
             <span v-if="plans.length === 0" class="mt-1.5 block text-xs text-warning">
               Belum ada plan aktif.
               <NuxtLink class="font-semibold underline" to="/plans">Buat plan</NuxtLink>
@@ -601,13 +607,14 @@ async function applyInfrastructure() {
           </div>
           <label class="block text-sm text-ink">
             Model billing
-            <select
+            <UiSelect
               v-model="form.billingMode"
-              class="mt-1 w-full rounded border border-line bg-surface px-3 py-2"
-            >
-              <option value="postpaid">Pascabayar — mulai saat deployment siap</option>
-              <option value="prepaid">Prabayar — aktivasi setelah invoice lunas</option>
-            </select>
+              class="mt-1 w-full"
+              :options="[
+                { value: 'postpaid', label: 'Pascabayar — mulai saat deployment siap' },
+                { value: 'prepaid', label: 'Prabayar — aktivasi setelah invoice lunas' },
+              ]"
+            />
           </label>
           <p v-if="form.billingMode === 'postpaid'" class="text-xs text-muted">
             Tanggal mulai dan invoice pertama ditetapkan saat deployment siap.
@@ -1002,14 +1009,16 @@ async function applyInfrastructure() {
         <UiInput v-model="editForm.name" label="Nama service" required />
         <label>
           <span class="mb-2 block text-xs font-semibold text-muted">Plan</span>
-          <select
+          <UiSelect
             v-model="editForm.planId"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option v-for="plan in plans" :key="plan.id" :value="plan.id">
-              {{ plan.name }} · {{ format.money(plan.priceAmount, plan.currency) }}
-            </option>
-          </select>
+            class="w-full"
+            :options="
+              (plans ?? []).map((plan) => ({
+                value: plan.id,
+                label: plan.name + ' · ' + format.money(plan.priceAmount, plan.currency),
+              }))
+            "
+          />
         </label>
         <UiInput v-model="editForm.nextDueDate" label="Invoice berikutnya" type="date" />
         <UiInput v-model="editForm.taxRate" label="Tax rate" placeholder="0.11" />

@@ -71,8 +71,8 @@ useHead(() => ({
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#f5f7fa] text-[#17202a]">
-    <header class="border-b border-[#dfe3e8] bg-white">
+  <div class="flex min-h-dvh flex-col bg-[#f5f7fa] text-[#17202a]">
+    <header class="shrink-0 border-b border-[#dfe3e8] bg-white">
       <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-4">
         <div class="flex items-center gap-3">
           <span class="grid size-9 place-items-center rounded-lg bg-[#17202a] text-white">
@@ -104,7 +104,7 @@ useHead(() => ({
       </div>
     </header>
 
-    <main class="mx-auto grid min-h-[calc(100vh-74px)] max-w-6xl place-items-center px-5 py-12">
+    <main class="mx-auto grid w-full max-w-6xl flex-1 place-items-center px-5 py-12">
       <section
         v-if="status === 'pending' && !customer"
         class="w-full max-w-lg rounded-2xl border border-[#dfe3e8] bg-white p-8 text-center"
@@ -265,13 +265,16 @@ useHead(() => ({
       </section>
     </main>
 
-    <div class="fixed right-4 bottom-4">
+    <footer
+      class="shrink-0 px-5 pb-[max(1rem,env(safe-area-inset-bottom))]"
+      aria-label="Informasi demo"
+    >
       <div
-        class="flex items-center gap-2 rounded-full border border-[#d0d5dd] bg-white px-3 py-2 text-xs text-[#475467] shadow-sm"
+        class="mx-auto flex w-full max-w-6xl items-start gap-2 border-t border-[#dfe3e8] pt-4 text-xs leading-5 text-[#475467] sm:justify-end"
       >
-        <CheckCircle2 :size="14" class="text-[#16803c]" aria-hidden="true" /> Status database ·
-        refresh 5 detik
+        <CheckCircle2 :size="14" class="mt-0.5 shrink-0 text-[#16803c]" aria-hidden="true" />
+        <span>Status database · refresh 5 detik</span>
       </div>
-    </div>
+    </footer>
   </div>
 </template>

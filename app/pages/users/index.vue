@@ -160,26 +160,30 @@ async function updatePassword() {
         <UiInput v-model="form.password" label="Password awal" type="password" required />
         <label>
           <span class="mb-2 block text-xs font-semibold text-muted">Role</span>
-          <select
+          <UiSelect
             v-model="form.role"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="customer">Customer</option>
-            <option value="admin">Admin</option>
-          </select>
+            class="w-full"
+            :options="[
+              { value: 'customer', label: 'Customer' },
+              { value: 'admin', label: 'Admin' },
+            ]"
+          />
         </label>
         <label v-if="form.role === 'customer'">
           <span class="mb-2 block text-xs font-semibold text-muted">Customer</span>
-          <select
+          <UiSelect
             v-model="form.customerId"
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="" disabled>Pilih customer</option>
-            <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-              {{ customer.companyName || customer.name }} · {{ customer.customerNumber }}
-            </option>
-          </select>
+            class="w-full"
+            placeholder="Pilih customer"
+            :options="[
+              { value: '', label: 'Pilih customer', disabled: true },
+              ...(customers ?? []).map((customer) => ({
+                value: customer.id,
+                label: (customer.companyName || customer.name) + ' · ' + customer.customerNumber,
+              })),
+            ]"
+          />
         </label>
       </form>
       <template #footer>
@@ -260,26 +264,31 @@ async function updatePassword() {
                 ><span class="text-xs text-muted">{{ user.email }}</span>
               </td>
               <td class="px-4 py-3">
-                <select
+                <UiSelect
                   v-model="accessDrafts[user.id]!.role"
-                  class="focus-ring h-8 rounded-md border bg-canvas px-2 text-xs text-ink"
-                >
-                  <option value="super_admin">Super admin</option>
-                  <option value="admin">Admin</option>
-                  <option value="customer">Customer</option>
-                </select>
+                  size="sm"
+                  :options="[
+                    { value: 'super_admin', label: 'Super admin' },
+                    { value: 'admin', label: 'Admin' },
+                    { value: 'customer', label: 'Customer' },
+                  ]"
+                />
               </td>
               <td class="px-4 py-3 text-xs text-muted">
-                <select
+                <UiSelect
                   v-if="accessDrafts[user.id]?.role === 'customer'"
                   v-model="accessDrafts[user.id]!.customerId"
-                  class="focus-ring h-8 max-w-64 rounded-md border bg-canvas px-2 text-xs text-ink"
-                >
-                  <option :value="null" disabled>Pilih customer</option>
-                  <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-                    {{ customer.companyName || customer.name }}
-                  </option>
-                </select>
+                  class="max-w-64"
+                  size="sm"
+                  placeholder="Pilih customer"
+                  :options="[
+                    { value: null, label: 'Pilih customer', disabled: true },
+                    ...(customers ?? []).map((customer) => ({
+                      value: customer.id,
+                      label: customer.companyName || customer.name,
+                    })),
+                  ]"
+                />
                 <span v-else>—</span>
               </td>
               <td class="px-4 py-3 font-mono text-xs text-muted">

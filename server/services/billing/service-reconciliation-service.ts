@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, isNull } from 'drizzle-orm'
 import { useDatabase, type Database, type Transaction } from '../../database/client'
+import { isTransientDatabaseError } from '../../database/connection-errors'
 import {
   infrastructureOperations,
   infrastructureResources,
@@ -37,6 +38,7 @@ export class ServiceReconciliationService {
             this.reconcile(transaction, service.id, settings),
           )
         } catch (error) {
+          if (isTransientDatabaseError(error)) throw error
           console.error(
             '[service-reconciliation]',
             service.id,

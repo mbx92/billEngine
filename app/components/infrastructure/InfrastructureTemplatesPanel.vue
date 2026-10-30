@@ -558,7 +558,7 @@ function supportsDatabaseProvisioning(version: string | null) {
   <div class="mx-auto max-w-7xl">
     <InfrastructurePageHeader
       :level="props.embedded ? 2 : 1"
-      :title="props.embedded ? 'Deploy release' : 'Templates'"
+      :title="props.embedded ? 'Template & deployment' : 'Templates'"
       description="Konfigurasi siap pakai untuk deployment baru."
     >
       <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
@@ -628,37 +628,44 @@ function supportsDatabaseProvisioning(version: string | null) {
         :key="section.key"
         :class="sectionIndex > 0 ? 'border-t border-line pt-5' : ''"
       >
-        <div class="mb-4">
+        <div v-if="!props.embedded" class="mb-4">
           <h2 class="text-base font-semibold text-ink">{{ section.title }}</h2>
           <p class="mt-1 text-sm text-muted">{{ section.description }}</p>
         </div>
-        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <UiCard v-for="template in section.items" :key="template.id">
+        <div
+          class="grid gap-4"
+          :class="props.embedded ? 'xl:grid-cols-2' : 'md:grid-cols-2 xl:grid-cols-3'"
+        >
+          <UiCard
+            v-for="template in section.items"
+            :key="template.id"
+            class="flex min-w-0 flex-col"
+          >
             <div class="flex items-start justify-between gap-4">
               <div
-                class="flex size-10 items-center justify-center rounded-md bg-surface-raised text-muted"
+                class="flex size-10 shrink-0 items-center justify-center rounded-lg border border-brand/20 bg-brand/10 text-brand"
               >
                 <Database v-if="template.category === 'database'" :size="20" />
                 <Box v-else :size="20" />
               </div>
-              <div class="flex gap-2">
+              <div class="flex flex-wrap justify-end gap-2">
                 <UiBadge tone="info">{{ categoryLabel(template.category) }}</UiBadge>
                 <UiBadge v-if="template.applicationId" tone="success">Application</UiBadge>
                 <UiBadge v-if="template.isBuiltin" tone="neutral">Built-in</UiBadge>
               </div>
             </div>
-            <h3 class="mt-4 text-base font-semibold text-ink">{{ template.name }}</h3>
+            <h3 class="mt-4 break-words text-base font-semibold text-ink">{{ template.name }}</h3>
             <p class="mt-1 min-h-10 text-sm leading-5 text-muted">{{ template.description }}</p>
             <dl class="mt-4 space-y-2 border-t pt-4 text-xs">
               <div class="flex justify-between gap-3">
                 <dt class="text-muted">Image</dt>
-                <dd class="truncate font-mono text-ink">
+                <dd class="min-w-0 break-all text-right font-mono text-ink">
                   {{ template.definition.spec.source.reference }}
                 </dd>
               </div>
               <div v-if="template.resolvedRelease" class="flex justify-between gap-3">
                 <dt class="text-muted">Release</dt>
-                <dd class="font-mono text-ink">
+                <dd class="min-w-0 break-words text-right font-mono text-ink">
                   {{ template.resolvedRelease.version }} ·
                   {{
                     template.releasePolicy === 'track_latest'
@@ -680,7 +687,7 @@ function supportsDatabaseProvisioning(version: string | null) {
                 </dd>
               </div>
             </dl>
-            <div class="mt-4 flex justify-end gap-2">
+            <div class="mt-auto flex flex-wrap justify-end gap-2 pt-5">
               <UiButton
                 v-if="template.applicationId && !template.isBuiltin"
                 variant="secondary"
@@ -752,24 +759,26 @@ function supportsDatabaseProvisioning(version: string | null) {
           />
           <label class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Restart policy</span>
-            <select
+            <UiSelect
               v-model="editForm.restartPolicy"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="unless-stopped">Unless stopped</option>
-              <option value="on-failure">On failure</option>
-              <option value="no">No restart</option>
-            </select>
+              class="w-full"
+              :options="[
+                { value: 'unless-stopped', label: 'Unless stopped' },
+                { value: 'on-failure', label: 'On failure' },
+                { value: 'no', label: 'No restart' },
+              ]"
+            />
           </label>
           <label class="block md:col-span-2">
             <span class="mb-2 block text-xs font-semibold text-muted">Pengiriman secret</span>
-            <select
+            <UiSelect
               v-model="editForm.secretDelivery"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="environment">Environment variable</option>
-              <option value="files">Secret file</option>
-            </select>
+              class="w-full"
+              :options="[
+                { value: 'environment', label: 'Environment variable' },
+                { value: 'files', label: 'Secret file' },
+              ]"
+            />
           </label>
           <label class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Environment keys</span>
@@ -846,21 +855,20 @@ function supportsDatabaseProvisioning(version: string | null) {
             <span class="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
               <Server :size="13" /> Ubuntu node
             </span>
-            <select
+            <UiSelect
               v-model="form.nodeId"
               required
               :disabled="Boolean(selectedDatabaseParameter && form.databaseMode === 'managed')"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="" disabled>Pilih node</option>
-              <option
-                v-for="node in nodesForTemplate(selectedTemplate)"
-                :key="node.id"
-                :value="node.id"
-              >
-                {{ node.name }} · {{ node.environment }} · {{ node.status }}
-              </option>
-            </select>
+              class="w-full"
+              placeholder="Pilih node"
+              :options="[
+                { value: '', label: 'Pilih node', disabled: true },
+                ...(nodesForTemplate(selectedTemplate) ?? []).map((node) => ({
+                  value: node.id,
+                  label: node.name + ' · ' + node.environment + ' · ' + node.status,
+                })),
+              ]"
+            />
             <span
               v-if="selectedTemplate.resolvedRelease?.localNodeId"
               class="mt-2 block text-xs text-muted"
@@ -870,16 +878,26 @@ function supportsDatabaseProvisioning(version: string | null) {
           </label>
           <label class="block md:col-span-2">
             <span class="mb-2 block text-xs font-semibold text-muted">Docker network</span>
-            <select
+            <UiSelect
               v-model="form.networkName"
               required
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option v-for="network in deploymentNetworks" :key="network.id" :value="network.name">
-                {{ network.name }} · {{ network.driver }}/{{ network.scope }} ·
-                {{ network.containerCount }} container{{ network.managed ? ' · managed' : '' }}
-              </option>
-            </select>
+              class="w-full"
+              :options="
+                (deploymentNetworks ?? []).map((network) => ({
+                  value: network.name,
+                  label:
+                    network.name +
+                    ' · ' +
+                    network.driver +
+                    '/' +
+                    network.scope +
+                    ' · ' +
+                    network.containerCount +
+                    ' container' +
+                    (network.managed ? ' · managed' : ''),
+                }))
+              "
+            />
             <span class="mt-1.5 block text-xs text-muted">
               Application, shared PostgreSQL, dan gateway memakai network yang sama.
               <template v-if="selectedNode?.lastInventoryAt">
@@ -919,13 +937,14 @@ function supportsDatabaseProvisioning(version: string | null) {
           />
           <label v-if="selectedTemplate.definition.resourceKind === 'application'" class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Akses aplikasi</span>
-            <select
+            <UiSelect
               v-model="form.exposure"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="port">Port server · akses LAN langsung</option>
-              <option value="domain">Domain · melalui gateway</option>
-            </select>
+              class="w-full"
+              :options="[
+                { value: 'port', label: 'Port server · akses LAN langsung' },
+                { value: 'domain', label: 'Domain · melalui gateway' },
+              ]"
+            />
           </label>
           <UiInput
             v-if="
@@ -949,37 +968,40 @@ function supportsDatabaseProvisioning(version: string | null) {
           />
           <label class="block md:col-span-2">
             <span class="mb-2 block text-xs font-semibold text-muted">Classification</span>
-            <select
+            <UiSelect
               v-model="form.classification"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="internal">Internal</option>
-              <option
-                value="billable"
-                :disabled="
-                  selectedTemplate.definition.resourceKind === 'application' &&
-                  form.exposure === 'port'
-                "
-              >
-                Billable
-              </option>
-              <option value="ignored">Ignored</option>
-            </select>
+              class="w-full"
+              :options="[
+                { value: 'internal', label: 'Internal' },
+                {
+                  value: 'billable',
+                  label: 'Billable',
+                  disabled:
+                    selectedTemplate.definition.resourceKind === 'application' &&
+                    form.exposure === 'port',
+                },
+                { value: 'ignored', label: 'Ignored' },
+              ]"
+            />
           </label>
           <label v-if="form.classification === 'billable'" class="block md:col-span-2">
             <span class="mb-2 block text-xs font-semibold text-muted">
               Billing service (wajib)
             </span>
-            <select
+            <UiSelect
               v-model="form.serviceId"
               required
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="" disabled>Pilih service</option>
-              <option v-for="service in services" :key="service.id" :value="service.id">
-                {{ service.serviceNumber }} · {{ service.customerName }} · {{ service.name }}
-              </option>
-            </select>
+              class="w-full"
+              placeholder="Pilih service"
+              :options="[
+                { value: '', label: 'Pilih service', disabled: true },
+                ...(services ?? []).map((service) => ({
+                  value: service.id,
+                  label:
+                    service.serviceNumber + ' · ' + service.customerName + ' · ' + service.name,
+                })),
+              ]"
+            />
             <span class="mt-1 block text-xs text-muted">
               Hanya deployment billable yang ditautkan ke Service dan masuk billing gate.
             </span>
@@ -999,32 +1021,34 @@ function supportsDatabaseProvisioning(version: string | null) {
           <div class="grid gap-4 p-4 md:grid-cols-2">
             <label class="block">
               <span class="mb-2 block text-xs font-semibold text-muted">Sumber database</span>
-              <select
+              <UiSelect
                 v-model="form.databaseMode"
-                class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-              >
-                <option value="managed" :disabled="availableDatabaseClusters.length === 0">
-                  PostgreSQL cluster terkelola
-                </option>
-                <option value="external">Database URL eksternal</option>
-              </select>
+                class="w-full"
+                :options="[
+                  {
+                    value: 'managed',
+                    label: 'PostgreSQL cluster terkelola',
+                    disabled: availableDatabaseClusters.length === 0,
+                  },
+                  { value: 'external', label: 'Database URL eksternal' },
+                ]"
+              />
             </label>
             <label v-if="form.databaseMode === 'managed'" class="block">
               <span class="mb-2 block text-xs font-semibold text-muted">PostgreSQL cluster</span>
-              <select
+              <UiSelect
                 v-model="form.databaseClusterId"
                 required
-                class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-              >
-                <option value="" disabled>Pilih cluster</option>
-                <option
-                  v-for="cluster in availableDatabaseClusters"
-                  :key="cluster.id"
-                  :value="cluster.id"
-                >
-                  {{ cluster.name }} · {{ cluster.nodeName }}
-                </option>
-              </select>
+                class="w-full"
+                placeholder="Pilih cluster"
+                :options="[
+                  { value: '', label: 'Pilih cluster', disabled: true },
+                  ...(availableDatabaseClusters ?? []).map((cluster) => ({
+                    value: cluster.id,
+                    label: cluster.name + ' · ' + cluster.nodeName,
+                  })),
+                ]"
+              />
             </label>
             <p
               v-if="form.databaseMode === 'managed'"

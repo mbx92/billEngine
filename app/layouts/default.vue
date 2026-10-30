@@ -34,7 +34,6 @@ const searchQuery = ref('')
 const sidebar = useTemplateRef<HTMLElement>('sidebar')
 const menuButton = useTemplateRef<HTMLButtonElement>('menuButton')
 const appSettings = useAppSettings()
-const appVersion = useAppVersion()
 const { data: currentUserResponse } = await useFetch<{ data: ApiCurrentUser }>('/api/me')
 const currentUser = computed(() => currentUserResponse.value?.data)
 const isCustomer = computed(() => currentUser.value?.role === 'customer')
@@ -209,7 +208,7 @@ async function signOut() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-canvas">
+  <div class="min-h-dvh bg-canvas">
     <a
       href="#main-content"
       class="focus-ring fixed top-3 left-3 z-50 -translate-y-24 rounded bg-surface px-4 py-3 text-sm focus:translate-y-0"
@@ -337,9 +336,9 @@ async function signOut() {
       </div>
     </aside>
 
-    <div :inert="mobileOpen" class="min-w-0 lg:pl-56">
+    <div :inert="mobileOpen" class="flex min-h-dvh min-w-0 flex-col lg:pl-56">
       <header
-        class="flex h-14 items-center justify-between gap-3 border-b bg-canvas px-4 md:px-6 lg:px-8"
+        class="flex h-14 shrink-0 items-center justify-between gap-3 border-b bg-canvas px-4 md:px-6 lg:px-8"
       >
         <div class="flex min-w-0 items-center gap-3">
           <button
@@ -376,16 +375,11 @@ async function signOut() {
       <main
         id="main-content"
         tabindex="-1"
-        class="app-content min-h-[calc(100vh-3.5rem)] px-4 py-6 outline-none md:px-6 lg:px-8 lg:py-8"
+        class="app-content min-w-0 flex-1 px-4 py-6 outline-none md:px-6 lg:px-8 lg:py-8"
       >
         <slot />
-        <footer
-          class="mx-auto mt-12 flex max-w-7xl flex-wrap items-center justify-between gap-3 border-t pt-4 text-[10px] text-muted"
-        >
-          <span>{{ appSettings.billingTimezone }}</span
-          ><span>{{ appVersion.label }}</span>
-        </footer>
       </main>
+      <AppFooter />
     </div>
 
     <UiDialog v-if="searchOpen" title="Cari halaman" size="md" @close="searchOpen = false">

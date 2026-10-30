@@ -7,7 +7,6 @@ useHead({ title: 'Sign in · Billing Infra' })
 
 const route = useRoute()
 const appSettings = useAppSettings()
-const appVersion = useAppVersion()
 const email = ref('')
 const password = ref('')
 const showPassword = ref(false)
@@ -37,7 +36,7 @@ async function submit() {
 </script>
 
 <template>
-  <div class="my-12 w-full max-w-[340px]">
+  <div class="w-full max-w-[340px]">
     <p class="mb-9 text-sm font-semibold">{{ appSettings.companyName }}</p>
     <h1 class="text-2xl font-semibold tracking-tight">Masuk</h1>
     <p class="mt-2 text-sm text-muted">Gunakan email dan password akun Anda.</p>
@@ -87,6 +86,5 @@ async function submit() {
       }}</UiButton>
     </form>
     <p class="mt-6 text-xs leading-5 text-muted">Kesulitan masuk? Hubungi administrator.</p>
-    <p class="mt-10 border-t pt-4 text-[10px] text-muted">{{ appVersion.label }}</p>
   </div>
 </template>

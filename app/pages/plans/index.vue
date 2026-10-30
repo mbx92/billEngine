@@ -225,14 +225,13 @@ async function toggleStatus(plan: ApiPlan) {
         <UiInput v-model="form.name" label="Nama plan" placeholder="Starter Hosting" required />
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Siklus billing</span>
-          <select
+          <UiSelect
             v-model="form.billingCycle"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option v-for="cycle in billingCycles" :key="cycle.value" :value="cycle.value">
-              {{ cycle.label }}
-            </option>
-          </select>
+            class="w-full"
+            :options="
+              (billingCycles ?? []).map((cycle) => ({ value: cycle.value, label: cycle.label }))
+            "
+          />
         </label>
         <UiMoneyInput
           v-model="form.priceAmount"
@@ -275,14 +274,19 @@ async function toggleStatus(plan: ApiPlan) {
           </div>
           <label class="mt-4 block">
             <span class="mb-2 block text-xs font-semibold text-muted">Mode database</span>
-            <select
+            <UiSelect
               v-model="form.databaseMode"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="none">Tanpa database</option>
-              <option value="shared">PostgreSQL shared</option>
-              <option value="dedicated" disabled>PostgreSQL dedicated (fase lanjutan)</option>
-            </select>
+              class="w-full"
+              :options="[
+                { value: 'none', label: 'Tanpa database' },
+                { value: 'shared', label: 'PostgreSQL shared' },
+                {
+                  value: 'dedicated',
+                  label: 'PostgreSQL dedicated (fase lanjutan)',
+                  disabled: true,
+                },
+              ]"
+            />
           </label>
         </div>
         <label class="block md:col-span-2">

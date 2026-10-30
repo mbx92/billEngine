@@ -60,8 +60,8 @@ const selectedTunnel = computed(() =>
 const routeForm = reactive({
   hostname: '',
   path: '',
-  service: 'https://localhost:443',
-  noTlsVerify: true,
+  service: 'http://localhost:80',
+  noTlsVerify: false,
   httpHostHeader: '',
   originServerName: '',
 })
@@ -100,8 +100,8 @@ function openCreateRoute() {
   Object.assign(routeForm, {
     hostname: props.hostname ?? '',
     path: '',
-    service: 'https://localhost:443',
-    noTlsVerify: true,
+    service: 'http://localhost:80',
+    noTlsVerify: false,
     httpHostHeader: '',
     originServerName: '',
   })
@@ -472,8 +472,8 @@ function statusTone(value: CloudflareTunnelStatus) {
           <UiInput
             v-model="routeForm.service"
             label="Origin service"
-            hint="Contoh: https://localhost:443, http://localhost:3000, atau http_status:404."
-            placeholder="https://localhost:443"
+            hint="Gateway agent: http://localhost:80 jika cloudflared berjalan di host yang sama. Jika cloudflared di Docker, gunakan http://oc-gateway:80 pada network yang sama, atau alamat node yang dapat dijangkau."
+            placeholder="http://localhost:80"
             autocomplete="off"
             required
           />
@@ -481,6 +481,7 @@ function statusTone(value: CloudflareTunnelStatus) {
         <UiInput
           v-model="routeForm.httpHostHeader"
           label="HTTP Host Header (opsional)"
+          hint="Biarkan kosong agar hostname publik diteruskan ke rule Host Traefik."
           autocomplete="off"
         />
         <UiInput
@@ -497,8 +498,9 @@ function statusTone(value: CloudflareTunnelStatus) {
           <span>
             <span class="block text-sm font-semibold text-ink">No TLS Verify</span>
             <span class="mt-1 block text-xs leading-5 text-muted">
-              Gunakan hanya jika origin HTTPS memakai sertifikat untuk hostname publik, misalnya
-              reverse proxy lokal di https://localhost:443.
+              Melewati verifikasi sertifikat origin HTTPS. Tidak diperlukan untuk gateway HTTP
+              bawaan agent. Untuk origin HTTPS, utamakan sertifikat valid dan Origin Server Name
+              yang sesuai.
             </span>
           </span>
         </label>

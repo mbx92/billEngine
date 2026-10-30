@@ -588,7 +588,14 @@ onBeforeUnmount(() => {
       {{ actionError }}
     </p>
 
-    <UiCard v-if="catalog && !localBuilders.some((node) => node.ready)" class="mb-4">
+    <UiCard
+      v-if="
+        catalog &&
+        applications.some((application) => application.imageStorage === 'local') &&
+        !localBuilders.some((node) => node.ready)
+      "
+      class="mb-4"
+    >
       <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div>
           <h2 class="font-semibold text-ink">Siapkan server hybrid untuk build lokal</h2>
@@ -633,18 +640,24 @@ onBeforeUnmount(() => {
       <UiButton variant="secondary" size="sm" @click="search = ''">Reset pencarian</UiButton>
     </UiEmptyState>
     <div v-else class="divide-y overflow-hidden rounded-md border bg-surface">
-      <details
+      <component
+        :is="props.embedded ? 'section' : 'details'"
         v-for="application in visibleApplications"
         :key="application.id"
         :open="Boolean(props.applicationId)"
         class="group"
       >
-        <summary
-          class="focus-ring cursor-pointer list-none px-4 py-4 hover:bg-surface-raised/60 [&::-webkit-details-marker]:hidden"
+        <component
+          :is="props.embedded ? 'header' : 'summary'"
+          class="focus-ring list-none p-4 sm:p-5 [&::-webkit-details-marker]:hidden"
+          :class="!props.embedded ? 'cursor-pointer hover:bg-surface-raised/60' : ''"
         >
           <div class="flex items-start justify-between gap-4">
             <div class="flex min-w-0 items-start gap-3">
-              <span class="mt-0.5 shrink-0 text-muted"><Package :size="17" /></span>
+              <span
+                class="flex size-10 shrink-0 items-center justify-center rounded-lg border border-brand/20 bg-brand/10 text-brand"
+                ><GitBranch :size="20" aria-hidden="true"
+              /></span>
               <div class="min-w-0">
                 <h2 class="truncate font-semibold text-ink">
                   <NuxtLink
@@ -659,7 +672,7 @@ onBeforeUnmount(() => {
                   :href="application.repositoryUrl"
                   target="_blank"
                   rel="noreferrer"
-                  class="mt-1 block truncate text-xs text-brand hover:underline"
+                  class="mt-1 block break-all text-xs leading-5 text-brand hover:underline"
                   >{{ application.repositoryUrl }}</a
                 >
               </div>
@@ -669,12 +682,14 @@ onBeforeUnmount(() => {
             }}</UiBadge>
           </div>
           <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-            <span>{{ application.defaultBranch }}</span>
+            <span class="inline-flex items-center gap-1.5"
+              ><GitBranch :size="13" aria-hidden="true" />{{ application.defaultBranch }}</span
+            >
             <span>{{ releasesFor(application.id).length }} release</span>
             <UiBadge v-if="activeBuild(application.id)" tone="warning" dot
               >Build {{ activeBuild(application.id)?.status }}</UiBadge
             >
-            <span class="ml-auto flex items-center gap-2"
+            <span v-if="!props.embedded" class="ml-auto flex items-center gap-2"
               >Build &amp; release
               <ChevronDown
                 :size="15"
@@ -682,22 +697,24 @@ onBeforeUnmount(() => {
                 aria-hidden="true"
             /></span>
           </p>
-        </summary>
-        <div class="border-t bg-surface-raised/20 px-4 pb-4">
-          <dl class="grid gap-3 pt-4 text-xs lg:grid-cols-3">
-            <div class="flex justify-between gap-4">
+        </component>
+        <div class="space-y-4 border-t bg-surface-raised/20 p-4 sm:p-5">
+          <dl class="grid gap-4 rounded-md border bg-surface p-4 text-xs xl:grid-cols-3">
+            <div class="min-w-0 space-y-2">
               <dt class="text-muted">Image</dt>
-              <dd class="truncate font-mono text-ink">{{ application.imageRepository }}</dd>
+              <dd class="break-all font-mono leading-5 text-ink">
+                {{ application.imageRepository }}
+              </dd>
             </div>
-            <div class="flex justify-between gap-4">
+            <div class="min-w-0 space-y-2">
               <dt class="text-muted">Build</dt>
-              <dd class="font-mono text-ink">
+              <dd class="break-all font-mono leading-5 text-ink">
                 {{ application.defaultBranch }} · {{ application.dockerfilePath }}
               </dd>
             </div>
-            <div class="flex justify-between gap-4">
+            <div class="min-w-0 space-y-2">
               <dt class="text-muted">Penyimpanan image</dt>
-              <dd class="text-ink">
+              <dd class="break-words leading-5 text-ink">
                 {{
                   application.imageStorage === 'local'
                     ? `Local · ${localNodeName(application.buildNodeId)}`
@@ -706,154 +723,165 @@ onBeforeUnmount(() => {
               </dd>
             </div>
           </dl>
-          <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">Native build</h3>
-              <p class="mt-1 text-[11px] text-muted">
-                {{
-                  application.imageStorage === 'local'
-                    ? `GitHub → build lokal di ${localNodeName(application.buildNodeId)} → deploy di server yang sama`
-                    : `GitHub → builder → ${registryName(application.registryId)}`
-                }}
-              </p>
-            </div>
-            <UiButton
-              size="sm"
-              :disabled="
-                !builderAvailable(application) ||
-                !!activeBuild(application.id) ||
-                buildingApplicationId === application.id
-              "
-              :title="
-                !builderAvailable(application)
-                  ? 'Pastikan server build online dan agent mendukung mode image yang dipilih'
-                  : activeBuild(application.id)
-                    ? 'Build masih berjalan'
-                    : 'Clone repository dan build image pada server yang dipilih'
-              "
-              @click="queueBuild(application)"
-            >
-              <Hammer :size="13" />
-              {{ buildingApplicationId === application.id ? 'Mengantrekan…' : 'Build image' }}
-            </UiButton>
-          </div>
-          <div v-if="buildsFor(application.id).length" class="mt-2 space-y-2">
-            <div
-              v-for="build in buildsFor(application.id)"
-              :key="build.id"
-              class="rounded-md border border-line-strong px-3 py-2.5"
-            >
-              <div class="flex items-center justify-between gap-3">
-                <div class="min-w-0">
-                  <p class="truncate font-mono text-xs font-semibold text-ink">
-                    {{ build.version }}
-                  </p>
-                  <p class="mt-0.5 truncate text-[10px] text-muted">
-                    {{ build.nodeName }} · {{ format.dateTime(build.createdAt) }}
-                  </p>
-                </div>
-                <UiBadge :tone="buildTone(build.status)" dot>{{ build.status }}</UiBadge>
-              </div>
-              <p v-if="build.errorMessage" class="mt-2 text-xs leading-5 text-danger">
-                {{ build.errorMessage }}
-              </p>
-              <details v-if="build.logExcerpt" class="mt-2 text-xs">
-                <summary class="cursor-pointer text-brand">Log build</summary>
-                <pre
-                  class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-canvas p-2 font-mono text-[10px] leading-4 text-muted"
-                  >{{ build.logExcerpt }}</pre>
-              </details>
-            </div>
-          </div>
-          <p
-            v-else-if="!builderAvailable(application)"
-            class="mt-2 rounded-md border border-dashed px-3 py-3 text-center text-xs text-muted"
-          >
-            Server build belum siap atau sedang offline.
-          </p>
-          <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">
-              Release terbaru
-            </h3>
-            <div class="flex gap-2">
-              <UiButton
-                size="sm"
-                variant="secondary"
-                :disabled="!releasesFor(application.id).length"
-                @click="openTemplate(application)"
-              >
-                <FileCode2 :size="13" /> Buat template
-              </UiButton>
-              <UiButton
-                v-if="application.imageStorage === 'registry'"
-                size="sm"
-                variant="secondary"
-                @click="openRelease(application)"
-              >
-                <Plus :size="13" /> Catat release
-              </UiButton>
-            </div>
-          </div>
-          <div
-            v-if="releasesFor(application.id).length"
-            class="mt-2 divide-y rounded-md border border-line-strong"
-          >
-            <div
-              v-for="release in releasesFor(application.id)"
-              :key="release.id"
-              class="flex items-center justify-between gap-3 px-3 py-2.5"
-            >
-              <div class="min-w-0">
-                <p class="font-mono text-xs font-semibold text-ink">{{ release.version }}</p>
-                <p class="mt-0.5 truncate font-mono text-[10px] text-muted">
-                  {{ release.commitSha.slice(0, 12) }} · {{ shortDigest(release.imageDigest) }}
+          <section class="rounded-md border bg-surface p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 class="flex items-center gap-2 text-sm font-semibold">
+                  <Hammer :size="16" class="text-brand" aria-hidden="true" /> Build image
+                </h3>
+                <p class="mt-1 text-[11px] text-muted">
+                  {{
+                    application.imageStorage === 'local'
+                      ? `GitHub → build lokal di ${localNodeName(application.buildNodeId)} → deploy di server yang sama`
+                      : `GitHub → builder → ${registryName(application.registryId)}`
+                  }}
                 </p>
-                <div
-                  v-if="runningResourcesForRelease(release.id).length"
-                  class="mt-2 flex flex-wrap gap-x-3 gap-y-1"
-                >
-                  <span
-                    v-for="resource in runningResourcesForRelease(release.id)"
-                    :key="resource.id"
-                    class="inline-flex items-center gap-2"
-                  >
-                    <a
-                      v-if="resource.accessUrl"
-                      :href="resource.accessUrl"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="inline-flex items-center gap-1 text-[11px] font-semibold text-brand hover:underline"
-                      :title="`Buka ${resource.name} di tab baru`"
-                    >
-                      <ExternalLink :size="11" aria-hidden="true" />
-                      Buka {{ resource.name }}
-                    </a>
-                    <button
-                      v-if="resource.shellAvailable"
-                      type="button"
-                      class="focus-ring inline-flex items-center gap-1 rounded text-[11px] font-semibold text-muted hover:text-ink"
-                      :title="`Buka Docker sh untuk ${resource.name}`"
-                      @click="shellResource = resource"
-                    >
-                      <SquareTerminal :size="11" aria-hidden="true" />
-                      Docker sh
-                    </button>
-                  </span>
-                </div>
               </div>
-              <UiButton size="sm" variant="ghost" @click="openRollout(release)"
-                ><Rocket :size="13" /> Rollout</UiButton
+              <UiButton
+                size="sm"
+                :disabled="
+                  !builderAvailable(application) ||
+                  !!activeBuild(application.id) ||
+                  buildingApplicationId === application.id
+                "
+                :title="
+                  !builderAvailable(application)
+                    ? 'Pastikan server build online dan agent mendukung mode image yang dipilih'
+                    : activeBuild(application.id)
+                      ? 'Build masih berjalan'
+                      : 'Clone repository dan build image pada server yang dipilih'
+                "
+                @click="queueBuild(application)"
               >
+                <Hammer :size="13" />
+                {{ buildingApplicationId === application.id ? 'Mengantrekan…' : 'Build image' }}
+              </UiButton>
             </div>
-          </div>
-          <p
-            v-else
-            class="mt-2 rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted"
-          >
-            Belum ada release. Klik Build image untuk membuat release pertama.
-          </p>
+            <div v-if="buildsFor(application.id).length" class="mt-4 space-y-3">
+              <div
+                v-for="build in buildsFor(application.id)"
+                :key="build.id"
+                class="rounded-md border bg-surface-raised/40 p-3"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="truncate font-mono text-xs font-semibold text-ink">
+                      {{ build.version }}
+                    </p>
+                    <p class="mt-1 text-xs text-muted">
+                      {{ build.nodeName }} · {{ format.dateTime(build.createdAt) }}
+                    </p>
+                  </div>
+                  <UiBadge :tone="buildTone(build.status)" dot>{{ build.status }}</UiBadge>
+                </div>
+                <p v-if="build.errorMessage" class="mt-2 text-xs leading-5 text-danger">
+                  {{ build.errorMessage }}
+                </p>
+                <details v-if="build.logExcerpt" class="mt-2 text-xs">
+                  <summary class="focus-ring cursor-pointer rounded text-brand">
+                    Lihat log build
+                  </summary>
+                  <pre
+                    class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border bg-canvas p-3 font-mono text-xs leading-5 text-muted"
+                    >{{ build.logExcerpt }}</pre>
+                </details>
+              </div>
+            </div>
+            <p
+              v-else-if="!builderAvailable(application)"
+              class="mt-2 rounded-md border border-dashed px-3 py-3 text-center text-xs text-muted"
+            >
+              Server build belum siap atau sedang offline.
+            </p>
+            <p
+              v-else
+              class="mt-4 rounded-md border border-dashed p-5 text-center text-xs leading-5 text-muted"
+            >
+              Belum ada riwayat build. Pilih Build image untuk membuat release dari repository ini.
+            </p>
+          </section>
+          <section class="rounded-md border bg-surface p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h3 class="flex items-center gap-2 text-sm font-semibold">
+                <Package :size="16" class="text-brand" aria-hidden="true" /> Release terbaru
+              </h3>
+              <div class="flex flex-wrap gap-2">
+                <UiButton
+                  size="sm"
+                  variant="secondary"
+                  :disabled="!releasesFor(application.id).length"
+                  @click="openTemplate(application)"
+                >
+                  <FileCode2 :size="13" /> Buat template
+                </UiButton>
+                <UiButton
+                  v-if="application.imageStorage === 'registry'"
+                  size="sm"
+                  variant="secondary"
+                  @click="openRelease(application)"
+                >
+                  <Plus :size="13" /> Catat release
+                </UiButton>
+              </div>
+            </div>
+            <div v-if="releasesFor(application.id).length" class="mt-4 divide-y rounded-md border">
+              <div
+                v-for="release in releasesFor(application.id)"
+                :key="release.id"
+                class="flex flex-wrap items-center justify-between gap-3 p-3"
+              >
+                <div class="min-w-0">
+                  <p class="font-mono text-xs font-semibold text-ink">{{ release.version }}</p>
+                  <p class="mt-1 break-all font-mono text-xs text-muted">
+                    {{ release.commitSha.slice(0, 12) }} · {{ shortDigest(release.imageDigest) }}
+                  </p>
+                  <div
+                    v-if="runningResourcesForRelease(release.id).length"
+                    class="mt-2 flex flex-wrap gap-x-3 gap-y-1"
+                  >
+                    <span
+                      v-for="resource in runningResourcesForRelease(release.id)"
+                      :key="resource.id"
+                      class="inline-flex items-center gap-2"
+                    >
+                      <a
+                        v-if="resource.accessUrl"
+                        :href="resource.accessUrl"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="inline-flex items-center gap-1 text-[11px] font-semibold text-brand hover:underline"
+                        :title="`Buka ${resource.name} di tab baru`"
+                      >
+                        <ExternalLink :size="11" aria-hidden="true" />
+                        Buka {{ resource.name }}
+                      </a>
+                      <button
+                        v-if="resource.shellAvailable"
+                        type="button"
+                        class="focus-ring inline-flex items-center gap-1 rounded text-[11px] font-semibold text-muted hover:text-ink"
+                        :title="`Buka Docker sh untuk ${resource.name}`"
+                        @click="shellResource = resource"
+                      >
+                        <SquareTerminal :size="11" aria-hidden="true" />
+                        Docker sh
+                      </button>
+                    </span>
+                  </div>
+                </div>
+                <UiButton size="sm" variant="ghost" @click="openRollout(release)"
+                  ><Rocket :size="13" /> Rollout</UiButton
+                >
+              </div>
+            </div>
+            <p
+              v-else
+              class="mt-2 rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted"
+            >
+              Belum ada release. Klik Build image untuk membuat release pertama.
+            </p>
+          </section>
         </div>
-      </details>
+      </component>
     </div>
 
     <DockerShellDialog
@@ -951,15 +979,17 @@ onBeforeUnmount(() => {
           </label>
           <label class="block md:col-span-2">
             <span class="mb-2 block text-xs font-semibold text-muted">Pengiriman secret</span>
-            <select
+            <UiSelect
               v-model="templateForm.secretDelivery"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="environment">
-                Environment variable · SESSION_SECRET, DATABASE_URL (agent 0.12.0+)
-              </option>
-              <option value="files">Secret file · SESSION_SECRET_FILE, DATABASE_URL_FILE</option>
-            </select>
+              class="w-full"
+              :options="[
+                {
+                  value: 'environment',
+                  label: 'Environment variable · SESSION_SECRET, DATABASE_URL (agent 0.12.0+)',
+                },
+                { value: 'files', label: 'Secret file · SESSION_SECRET_FILE, DATABASE_URL_FILE' },
+              ]"
+            />
           </label>
           <UiInput
             v-model="templateForm.volumeName"
@@ -1009,15 +1039,17 @@ onBeforeUnmount(() => {
       <form id="registry-form" class="grid gap-4" @submit.prevent="createRegistry">
         <label v-if="registries.length" class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Mode</span>
-          <select
+          <UiSelect
             v-model="registryForm.registryId"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="">Tambah registry baru</option>
-            <option v-for="registry in registries" :key="registry.id" :value="registry.id">
-              Perbarui {{ registry.name }} · {{ registry.host }}
-            </option>
-          </select>
+            class="w-full"
+            :options="[
+              { value: '', label: 'Tambah registry baru' },
+              ...(registries ?? []).map((registry) => ({
+                value: registry.id,
+                label: 'Perbarui ' + registry.name + ' · ' + registry.host,
+              })),
+            ]"
+          />
         </label>
         <UiInput v-model="registryForm.name" label="Nama" required />
         <UiInput
@@ -1158,16 +1190,17 @@ onBeforeUnmount(() => {
         </fieldset>
         <label v-if="applicationForm.imageStorage === 'registry'" class="block"
           ><span class="mb-2 block text-xs font-semibold text-muted">Registry</span
-          ><select
+          ><UiSelect
             v-model="applicationForm.registryId"
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option v-for="registry in activeRegistries" :key="registry.id" :value="registry.id">
-              {{ registry.name }} · {{ registry.host }}
-            </option>
-          </select></label
-        >
+            class="w-full"
+            :options="
+              (activeRegistries ?? []).map((registry) => ({
+                value: registry.id,
+                label: registry.name + ' · ' + registry.host,
+              }))
+            "
+        /></label>
         <UiInput
           v-if="applicationForm.imageStorage === 'registry'"
           v-model="applicationForm.imageRepository"

@@ -106,17 +106,18 @@ async function refresh() {
       :total="applications.length"
       unit="aplikasi"
     >
-      <select
+      <UiSelect
         v-model="filter"
         aria-label="Filter kondisi aplikasi"
-        class="focus-ring h-9 rounded-md border bg-surface px-3 text-sm"
-      >
-        <option value="all">Semua kondisi</option>
-        <option value="running">Berjalan</option>
-        <option value="setup">Dalam persiapan</option>
-        <option value="attention">Perlu perhatian</option>
-        <option value="stopped">Berhenti</option>
-      </select>
+        size="md"
+        :options="[
+          { value: 'all', label: 'Semua kondisi' },
+          { value: 'running', label: 'Berjalan' },
+          { value: 'setup', label: 'Dalam persiapan' },
+          { value: 'attention', label: 'Perlu perhatian' },
+          { value: 'stopped', label: 'Berhenti' },
+        ]"
+      />
     </InfrastructureToolbar>
     <div v-if="pending && !catalog" class="space-y-2">
       <UiSkeleton v-for="i in 3" :key="i" height="5rem" />

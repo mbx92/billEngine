@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import {
   Box,
+  Activity,
+  Cpu,
+  HardDrive,
+  Network,
+  Rocket,
   Copy,
   Eye,
   EyeOff,
@@ -11,13 +16,38 @@ import {
   Plus,
   RotateCw,
   SquareTerminal,
+  Settings2,
   Trash2,
   X,
 } from '@lucide/vue'
 import { apiErrorMessage } from '~/lib/api-error'
 import { copyText } from '~/lib/clipboard'
 
-const props = defineProps<{ resourceId?: string; embedded?: boolean }>()
+const props = withDefaults(
+  defineProps<{
+    resourceId?: string
+    embedded?: boolean
+    view?: 'all' | 'deployment' | 'configuration'
+  }>(),
+  { view: 'all', resourceId: undefined, embedded: false },
+)
+const emit = defineEmits<{ navigate: [tab: 'environment' | 'activity' | 'configuration'] }>()
+const showDeployment = computed(() => props.view !== 'configuration')
+const showConfiguration = computed(() => props.view !== 'deployment')
+const panelTitle = computed(() => {
+  if (!props.resourceId) return 'Resources'
+  if (props.view === 'deployment') return 'Deployment'
+  if (props.view === 'configuration') return 'Konfigurasi'
+  return 'Deployment & konfigurasi'
+})
+const panelDescription = computed(() => {
+  if (!props.resourceId) return 'Container yang berjalan, konfigurasi, dan akses aplikasi.'
+  if (props.view === 'deployment')
+    return 'Pantau status, jalankan operasi container, dan lihat aktivitas deployment.'
+  if (props.view === 'configuration')
+    return 'Kelola image, jaringan, batas resource, dan pengaturan runtime aplikasi.'
+  return 'Pantau kondisi deployment dan kelola pengaturan container.'
+})
 
 type ResourceState =
   | 'pending'
@@ -230,6 +260,68 @@ const resources = computed(() =>
     (resource) => !props.resourceId || resource.id === props.resourceId,
   ),
 )
+const detailResource = computed(() => (props.resourceId ? resources.value[0] : undefined))
+const detailSynced = computed(() =>
+  Boolean(
+    detailResource.value &&
+    detailResource.value.desiredState === detailResource.value.observedState &&
+    detailResource.value.desiredRevision === detailResource.value.observedRevision,
+  ),
+)
+const configurationSections = computed(() => {
+  const resource = detailResource.value
+  if (!resource) return []
+  const spec = resource.desiredSpec
+  return [
+    {
+      title: 'Server & jaringan',
+      icon: Network,
+      items: [
+        { label: 'Server', value: resource.nodeName },
+        { label: 'Docker network', value: spec.networkName || 'oc-private' },
+        {
+          label: 'Port container',
+          value:
+            spec.ports.map((port) => `${port.containerPort}/${port.protocol}`).join(', ') ||
+            'Tidak dikonfigurasi',
+        },
+        {
+          label: 'Port host → container',
+          value:
+            spec.ports
+              .filter((port) => port.hostPort)
+              .map((port) => `${port.hostPort} → ${port.containerPort}/${port.protocol}`)
+              .join(', ') || 'Tidak diekspos langsung',
+        },
+      ],
+    },
+    {
+      title: 'Resource & runtime',
+      icon: Cpu,
+      items: [
+        { label: 'Batas CPU', value: `${spec.limits.cpuMilli / 1000} vCPU` },
+        { label: 'Batas memori', value: humanBytes(spec.limits.memoryBytes) },
+        { label: 'Restart policy', value: spec.restartPolicy },
+        {
+          label: 'Healthcheck',
+          value: spec.healthcheck
+            ? `${spec.healthcheck.path} · port ${spec.healthcheck.port}`
+            : 'Belum diatur',
+        },
+      ],
+    },
+    {
+      title: 'Storage',
+      icon: HardDrive,
+      items: spec.volumes.length
+        ? spec.volumes.map((volume) => ({
+            label: volume.name,
+            value: `${volume.mountTarget} · ${volume.kind === 'persistent' ? 'Persisten' : 'Sementara'}`,
+          }))
+        : [{ label: 'Volume', value: 'Belum ada volume terpasang' }],
+    },
+  ]
+})
 const search = ref('')
 const resourceFilter = ref('all')
 function resetFilters() {
@@ -483,8 +575,14 @@ async function refreshAll() {
 function applicationSpec() {
   const existing = editingResource.value?.desiredSpec
   const healthcheckPath = form.healthcheckPath.trim()
-  const environment: Record<string, string> = {}
-  for (const [index, rawLine] of form.environmentText.split(/\r?\n/).entries()) {
+  const preserveEnvironment = Boolean(existing && props.embedded)
+  const environment: Record<string, string> = preserveEnvironment
+    ? { ...existing!.environment }
+    : {}
+  for (const [index, rawLine] of (preserveEnvironment
+    ? []
+    : form.environmentText.split(/\r?\n/)
+  ).entries()) {
     const line = rawLine.trim()
     if (!line || line.startsWith('#')) continue
     const separator = line.indexOf('=')
@@ -831,8 +929,8 @@ async function copyCredential(key: string, value: string) {
   <div class="mx-auto max-w-7xl">
     <InfrastructurePageHeader
       :level="props.embedded ? 2 : 1"
-      title="Resources"
-      description="Container yang berjalan, konfigurasi, dan akses aplikasi."
+      :title="panelTitle"
+      :description="panelDescription"
     >
       <div class="flex gap-2">
         <UiRefreshButton :action="refreshAll" :pending="status === 'pending'" />
@@ -866,6 +964,7 @@ async function copyCredential(key: string, value: string) {
     </p>
 
     <div
+      v-if="!props.resourceId"
       class="mb-5 grid grid-cols-3 divide-x divide-line overflow-hidden rounded-md border bg-surface"
     >
       <InfrastructureMetric label="Total resource" :value="format.count(resources.length)" />
@@ -891,16 +990,17 @@ async function copyCredential(key: string, value: string) {
       :total="resources.length"
       unit="resource"
     >
-      <select
+      <UiSelect
         v-model="resourceFilter"
         aria-label="Filter status resource"
-        class="focus-ring h-9 rounded-md border border-line-strong bg-surface px-3 text-sm text-ink"
-      >
-        <option value="all">Semua status</option>
-        <option value="running">Running</option>
-        <option value="stopped">Stopped</option>
-        <option value="attention">Perlu perhatian</option>
-      </select>
+        size="md"
+        :options="[
+          { value: 'all', label: 'Semua status' },
+          { value: 'running', label: 'Running' },
+          { value: 'stopped', label: 'Stopped' },
+          { value: 'attention', label: 'Perlu perhatian' },
+        ]"
+      />
     </InfrastructureToolbar>
 
     <UiCard v-if="status === 'pending' && !data" :padded="false">
@@ -940,6 +1040,236 @@ async function copyCredential(key: string, value: string) {
     >
       <UiButton variant="secondary" size="sm" @click="resetFilters">Reset filter</UiButton>
     </UiEmptyState>
+
+    <div v-else-if="detailResource" class="space-y-4">
+      <UiCard :padded="false">
+        <div class="flex flex-wrap items-start justify-between gap-4 p-4 sm:p-5">
+          <div class="flex min-w-0 flex-1 items-start gap-3">
+            <span
+              class="flex size-10 shrink-0 items-center justify-center rounded-lg border border-brand/20 bg-brand/10 text-brand"
+              ><Box :size="20" aria-hidden="true"
+            /></span>
+            <div class="min-w-0">
+              <h3 class="break-words text-base font-semibold">{{ detailResource.name }}</h3>
+              <p class="mt-1 break-all font-mono text-xs leading-5 text-muted">
+                {{ detailResource.imageReference || detailResource.externalId }}
+              </p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <UiBadge>{{ detailResource.classification }}</UiBadge>
+                <UiBadge :tone="detailSynced ? 'success' : 'warning'">{{
+                  detailSynced ? 'Konfigurasi sinkron' : 'Menunggu sinkronisasi'
+                }}</UiBadge>
+              </div>
+            </div>
+          </div>
+          <UiButton
+            v-if="showConfiguration && detailResource.kind === 'application'"
+            :disabled="isBusy(detailResource.id) || detailResource.desiredState === 'deleting'"
+            @click="openEditForm(detailResource)"
+            ><Pencil :size="15" aria-hidden="true" /> Edit konfigurasi</UiButton
+          >
+          <UiButton
+            v-else-if="props.embedded && props.view === 'deployment'"
+            variant="secondary"
+            @click="emit('navigate', 'configuration')"
+            ><Settings2 :size="15" aria-hidden="true" /> Buka konfigurasi</UiButton
+          >
+        </div>
+        <dl
+          v-if="showDeployment"
+          class="grid gap-4 border-y bg-surface-raised/50 p-4 sm:grid-cols-3 sm:p-5"
+        >
+          <div>
+            <dt class="mb-2 text-xs text-muted">Status aktual</dt>
+            <dd>
+              <UiBadge :tone="stateTone(detailResource.observedState)" dot>{{
+                detailResource.observedState
+              }}</UiBadge>
+            </dd>
+          </div>
+          <div>
+            <dt class="mb-2 text-xs text-muted">Status yang dituju</dt>
+            <dd>
+              <UiBadge :tone="stateTone(detailResource.desiredState)" dot>{{
+                detailResource.desiredState
+              }}</UiBadge>
+            </dd>
+          </div>
+          <div>
+            <dt class="mb-2 text-xs text-muted">Revisi aktual / target</dt>
+            <dd class="font-mono text-sm font-medium">
+              {{ detailResource.observedRevision }} / {{ detailResource.desiredRevision }}
+            </dd>
+          </div>
+        </dl>
+        <div v-if="showDeployment" class="space-y-3 p-4 sm:p-5">
+          <div class="flex flex-wrap gap-2">
+            <UiButton
+              v-if="detailResource.desiredState === 'stopped'"
+              variant="secondary"
+              size="sm"
+              :disabled="isBusy(detailResource.id)"
+              @click="requestLifecycle(detailResource, 'application.start')"
+              ><Play :size="14" aria-hidden="true" /> Jalankan</UiButton
+            >
+            <UiButton
+              v-else
+              variant="secondary"
+              size="sm"
+              :disabled="isBusy(detailResource.id) || detailResource.desiredState === 'deleting'"
+              @click="requestLifecycle(detailResource, 'application.stop')"
+              ><Pause :size="14" aria-hidden="true" /> Hentikan</UiButton
+            >
+            <UiButton
+              variant="secondary"
+              size="sm"
+              :disabled="isBusy(detailResource.id) || detailResource.desiredState === 'deleting'"
+              @click="requestLifecycle(detailResource, 'application.restart')"
+              ><RotateCw :size="14" aria-hidden="true" /> Restart</UiButton
+            >
+            <UiButton
+              variant="secondary"
+              size="sm"
+              :disabled="isBusy(detailResource.id) || detailResource.desiredState === 'deleting'"
+              @click="requestLifecycle(detailResource, 'application.redeploy')"
+              ><Rocket :size="14" aria-hidden="true" /> Redeploy</UiButton
+            >
+            <UiButton
+              v-if="
+                detailResource.kind === 'application' &&
+                detailResource.observedState === 'running' &&
+                detailSynced
+              "
+              variant="secondary"
+              size="sm"
+              :disabled="isBusy(detailResource.id) || !supportsContainerExec(detailResource)"
+              @click="shellResource = detailResource"
+              ><SquareTerminal :size="14" aria-hidden="true" /> Terminal</UiButton
+            >
+            <UiButton
+              v-if="props.embedded"
+              variant="ghost"
+              size="sm"
+              @click="emit('navigate', 'activity')"
+              ><Activity :size="14" aria-hidden="true" /> Lihat aktivitas</UiButton
+            >
+          </div>
+          <p class="text-xs leading-5 text-muted">
+            Laporan terakhir: {{ format.dateTime(detailResource.lastObservedAt) }}. Perubahan status
+            ditampilkan setelah agent melaporkan hasil operasi.
+          </p>
+        </div>
+      </UiCard>
+
+      <div v-if="showConfiguration" class="grid min-w-0 gap-4 xl:grid-cols-2">
+        <UiCard v-for="section in configurationSections" :key="section.title" class="min-w-0">
+          <h3 class="mb-4 flex items-center gap-2 text-sm font-semibold">
+            <component :is="section.icon" :size="16" class="text-brand" aria-hidden="true" />
+            {{ section.title }}
+          </h3>
+          <dl class="divide-y">
+            <div
+              v-for="item in section.items"
+              :key="item.label"
+              class="grid gap-1 py-3 first:pt-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] sm:gap-3"
+            >
+              <dt class="break-words text-xs text-muted">{{ item.label }}</dt>
+              <dd class="min-w-0 break-all text-sm sm:text-right">{{ item.value }}</dd>
+            </div>
+          </dl>
+        </UiCard>
+        <UiCard>
+          <h3 class="mb-4 flex items-center gap-2 text-sm font-semibold">
+            <KeyRound :size="16" class="text-brand" aria-hidden="true" /> Environment & akses
+          </h3>
+          <div class="flex flex-wrap gap-2">
+            <UiBadge
+              >{{ Object.keys(detailResource.desiredSpec.environment).length }} variabel</UiBadge
+            ><UiBadge
+              >{{ Object.keys(detailResource.desiredSpec.secretReferences).length }} secret</UiBadge
+            >
+          </div>
+          <p class="mt-3 text-xs leading-5 text-muted">
+            Kelola nilai runtime melalui form KEY/value atau editor .env pada tab Environment.
+          </p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <UiButton
+              v-if="props.embedded"
+              variant="secondary"
+              size="sm"
+              @click="emit('navigate', 'environment')"
+              >Kelola environment</UiButton
+            >
+            <UiButton
+              v-if="Object.keys(detailResource.desiredSpec.secretReferences).length"
+              variant="ghost"
+              size="sm"
+              :disabled="isBusy(detailResource.id)"
+              @click="pendingCredentialReveal = detailResource"
+              ><KeyRound :size="14" aria-hidden="true" /> Lihat credentials</UiButton
+            >
+          </div>
+          <a
+            v-if="detailResource.routeHostname || directResourceHref(detailResource)"
+            :href="resourceRouteHref(detailResource)"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="focus-ring mt-4 block break-all rounded border-t pt-3 text-xs text-brand hover:underline"
+            >{{ resourceRouteLabel(detailResource) }}</a
+          >
+        </UiCard>
+      </div>
+
+      <UiCard v-if="showConfiguration && detailResource.templateId">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="min-w-0">
+            <h3 class="text-sm font-semibold">Template deployment</h3>
+            <p class="mt-1 break-words text-xs text-muted">
+              {{ detailResource.templateName || 'Template' }} · v{{
+                detailResource.templateVersion ?? '—'
+              }}<template
+                v-if="
+                  detailResource.templateCurrentVersion &&
+                  detailResource.templateCurrentVersion > (detailResource.templateVersion ?? 0)
+                "
+              >
+                · v{{ detailResource.templateCurrentVersion }} tersedia</template
+              >
+            </p>
+          </div>
+          <UiButton
+            v-if="detailResource.kind === 'application' && detailResource.templateCurrentVersion"
+            variant="secondary"
+            size="sm"
+            :disabled="isBusy(detailResource.id) || detailResource.desiredState === 'deleting'"
+            @click="openTemplateSync(detailResource)"
+            ><RotateCw :size="14" aria-hidden="true" /> Sinkronkan template</UiButton
+          >
+        </div>
+        <p class="mt-3 text-xs leading-5 text-muted">
+          Sinkronisasi menerapkan konfigurasi dari template dan menjalankan redeploy.
+        </p>
+      </UiCard>
+
+      <div
+        v-if="showDeployment"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-danger/25 p-4"
+      >
+        <div>
+          <h3 class="text-sm font-semibold">Hapus deployment</h3>
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Hentikan dan hapus container deployment ini dari server.
+          </p>
+        </div>
+        <UiButton
+          variant="danger"
+          size="sm"
+          :disabled="isBusy(detailResource.id) || detailResource.desiredState === 'deleting'"
+          @click="requestLifecycle(detailResource, 'application.delete')"
+          ><Trash2 :size="14" aria-hidden="true" /> Hapus deployment</UiButton
+        >
+      </div>
+    </div>
 
     <UiCard v-else :padded="false">
       <div class="overflow-x-auto">
@@ -1168,18 +1498,24 @@ async function copyCredential(key: string, value: string) {
       :title="editingResource ? `Edit ${editingResource.name}` : 'Deploy container image'"
       :description="
         editingResource
-          ? 'Perubahan desired state akan disimpan dan aplikasi otomatis di-redeploy oleh OC Agent.'
+          ? 'Simpan konfigurasi untuk menerapkannya melalui redeploy aplikasi.'
           : 'Operasi akan masuk antrean dan diambil oleh OC Agent pada node Ubuntu.'
       "
-      size="lg"
+      size="xl"
       :close-disabled="saving"
       @close="closeCreateForm"
     >
       <form
         id="create-application-form"
-        class="grid gap-4 sm:grid-cols-2"
+        class="grid gap-x-5 gap-y-4 sm:grid-cols-2"
         @submit.prevent="submitApplication"
       >
+        <div class="sm:col-span-2">
+          <h3 class="text-sm font-semibold">Identitas & image</h3>
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Nama deployment, server tujuan, dan image yang dijalankan.
+          </p>
+        </div>
         <UiInput
           v-model="form.name"
           label="Nama aplikasi"
@@ -1190,47 +1526,198 @@ async function copyCredential(key: string, value: string) {
           autofocus
         />
         <label class="block">
-          <span class="mb-2 block text-xs font-semibold text-muted">Node Ubuntu</span>
-          <select
+          <span class="mb-2 block text-xs font-semibold text-muted">Server</span>
+          <UiSelect
             v-model="form.nodeId"
             :disabled="Boolean(editingResource)"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            class="w-full"
             required
-          >
-            <option v-for="node in availableNodes" :key="node.id" :value="node.id">
-              {{ node.name }} · {{ node.environment }} · {{ node.status }}
-            </option>
-          </select>
+            :options="
+              (availableNodes ?? []).map((node) => ({
+                value: node.id,
+                label: node.name + ' · ' + node.environment + ' · ' + node.status,
+              }))
+            "
+          />
         </label>
         <label v-if="!editingResource" class="block sm:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">Sumber image</span>
-          <select
+          <UiSelect
             v-model="form.imageSource"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="local" :disabled="localImages.length === 0">
-              Image lokal di server{{ localImages.length ? ` (${localImages.length})` : '' }}
-            </option>
-            <option value="registry">Registry / image reference</option>
-          </select>
+            class="w-full"
+            :options="[
+              {
+                value: 'local',
+                label:
+                  'Image lokal di server' + (localImages.length ? ` (${localImages.length})` : ''),
+                disabled: localImages.length === 0,
+              },
+              { value: 'registry', label: 'Registry / image reference' },
+            ]"
+          />
           <span v-if="localImages.length === 0" class="mt-1.5 block text-xs text-muted">
             Server ini belum melaporkan image lokal yang dapat dideploy. Pilih server lain atau
             gunakan registry.
           </span>
         </label>
+        <label v-if="!editingResource && form.imageSource === 'local'" class="block sm:col-span-2">
+          <span class="mb-2 block text-xs font-semibold text-muted">Image lokal</span>
+          <UiSelect
+            v-model="form.localImageId"
+            class="w-full font-mono"
+            required
+            :options="
+              (localImages ?? []).map((image) => ({
+                value: image.id,
+                label:
+                  preferredImageReference(image) +
+                  ' · ' +
+                  shortImageId(image.id) +
+                  ' · ' +
+                  humanBytes(image.sizeBytes) +
+                  (image.used ? ' · digunakan' : ''),
+              }))
+            "
+          />
+          <span class="mt-1.5 block text-xs text-muted">
+            Image ID digunakan secara tetap dan tidak akan di-pull dari registry.
+            <template v-if="selectedNode?.lastInventoryAt">
+              Inventory {{ format.dateTime(selectedNode.lastInventoryAt) }}.
+            </template>
+          </span>
+        </label>
+        <div v-else class="min-w-0 sm:col-span-2">
+          <UiInput
+            v-model="form.imageReference"
+            label="Container image"
+            :readonly="editingResource?.desiredSpec.source.pullPolicy === 'never'"
+            placeholder="ghcr.io/acme/customer-portal:1.0.0"
+            :hint="
+              editingResource?.desiredSpec.source.pullPolicy === 'never'
+                ? 'Release lokal memakai image ID tetap. Gunakan rollout di Applications untuk mengganti release.'
+                : 'Gunakan tag immutable atau digest untuk deployment yang dapat direproduksi.'
+            "
+            required
+          />
+        </div>
+        <div class="border-t pt-5 sm:col-span-2">
+          <h3 class="text-sm font-semibold">Layanan</h3>
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Tentukan penggunaan deployment dan layanan billing yang terhubung.
+          </p>
+        </div>
+        <label class="block">
+          <span class="mb-2 block text-xs font-semibold text-muted">Klasifikasi</span>
+          <UiSelect
+            v-model="form.classification"
+            class="w-full"
+            :options="[
+              { value: 'billable', label: 'Billable' },
+              { value: 'internal', label: 'Internal' },
+              { value: 'ignored', label: 'Ignored' },
+            ]"
+          />
+        </label>
+        <label v-if="form.classification === 'billable'" class="block">
+          <span class="mb-2 block text-xs font-semibold text-muted"> Billing service (wajib) </span>
+          <UiSelect
+            v-model="form.serviceId"
+            required
+            class="w-full"
+            placeholder="Pilih service"
+            :options="[
+              { value: '', label: 'Pilih service', disabled: true },
+              ...(services ?? []).map((service) => ({
+                value: service.id,
+                label: service.serviceNumber + ' · ' + service.customerName + ' · ' + service.name,
+              })),
+            ]"
+          />
+        </label>
+        <div v-if="!editingResource" class="rounded-md border border-line-strong sm:col-span-2">
+          <div class="border-b px-4 py-3">
+            <h3 class="flex items-center gap-2 text-sm font-semibold text-ink">
+              <KeyRound :size="15" /> Database aplikasi
+            </h3>
+            <p class="mt-1 text-xs text-muted">
+              Database cluster bersifat opsional dan tidak membutuhkan Billing Service untuk
+              deployment internal.
+            </p>
+          </div>
+          <div class="grid gap-4 p-4 md:grid-cols-2">
+            <label class="block">
+              <span class="mb-2 block text-xs font-semibold text-muted">Sumber database</span>
+              <UiSelect
+                v-model="form.databaseMode"
+                class="w-full"
+                :options="[
+                  { value: 'none', label: 'Tanpa managed database' },
+                  {
+                    value: 'managed',
+                    label: 'PostgreSQL cluster terkelola',
+                    disabled: availableDatabaseClusters.length === 0,
+                  },
+                ]"
+              />
+            </label>
+            <label v-if="form.databaseMode === 'managed'" class="block">
+              <span class="mb-2 block text-xs font-semibold text-muted">PostgreSQL cluster</span>
+              <UiSelect
+                v-model="form.databaseClusterId"
+                required
+                class="w-full"
+                placeholder="Pilih cluster pada node ini"
+                :options="[
+                  { value: '', label: 'Pilih cluster pada node ini', disabled: true },
+                  ...(availableDatabaseClusters ?? []).map((cluster) => ({
+                    value: cluster.id,
+                    label: cluster.name + ' · ' + cluster.nodeName,
+                  })),
+                ]"
+              />
+            </label>
+            <p class="text-xs leading-5 text-muted md:col-span-2">
+              <template v-if="form.databaseMode === 'managed'">
+                Container PostgreSQL cluster yang sudah berjalan akan dipakai bersama. Sistem hanya
+                membuat database logis serta user/password khusus aplikasi, memasang DATABASE_URL
+                sebagai secret, lalu menjalankan container aplikasi.
+              </template>
+              <template v-else-if="availableDatabaseClusters.length === 0">
+                Belum ada cluster aktif pada node ini. Pilih node yang memiliki cluster atau deploy
+                tanpa managed database.
+              </template>
+            </p>
+          </div>
+        </div>
+        <div class="border-t pt-5 sm:col-span-2">
+          <h3 class="text-sm font-semibold">Jaringan & akses</h3>
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Atur jaringan container dan port akses aplikasi.
+          </p>
+        </div>
         <label class="block sm:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">Docker network</span>
-          <select
+          <UiSelect
             v-model="form.networkName"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+            class="w-full"
             :disabled="Boolean(editingResource)"
             required
-          >
-            <option v-for="network in deploymentNetworks" :key="network.id" :value="network.name">
-              {{ network.name }} · {{ network.driver }}/{{ network.scope }} ·
-              {{ network.containerCount }} container{{ network.managed ? ' · managed' : '' }}
-            </option>
-          </select>
+            :options="
+              (deploymentNetworks ?? []).map((network) => ({
+                value: network.name,
+                label:
+                  network.name +
+                  ' · ' +
+                  network.driver +
+                  '/' +
+                  network.scope +
+                  ' · ' +
+                  network.containerCount +
+                  ' container' +
+                  (network.managed ? ' · managed' : ''),
+              }))
+            "
+          />
           <span class="mt-1.5 block text-xs text-muted">
             Aplikasi, shared PostgreSQL, dan gateway akan dihubungkan ke network ini. Network tidak
             dapat dipindah setelah resource dibuat.
@@ -1239,7 +1726,7 @@ async function copyCredential(key: string, value: string) {
             </template>
           </span>
           <div
-            v-if="reportedNetworks.length"
+            v-if="reportedNetworks.length && !editingResource"
             class="mt-3 rounded-md border border-line bg-canvas/60 p-3"
           >
             <span class="block text-[11px] font-semibold tracking-wide text-muted uppercase">
@@ -1263,127 +1750,6 @@ async function copyCredential(key: string, value: string) {
             </div>
           </div>
         </label>
-        <label v-if="!editingResource && form.imageSource === 'local'" class="block sm:col-span-2">
-          <span class="mb-2 block text-xs font-semibold text-muted">Image lokal</span>
-          <select
-            v-model="form.localImageId"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 font-mono text-sm text-ink"
-            required
-          >
-            <option v-for="image in localImages" :key="image.id" :value="image.id">
-              {{ preferredImageReference(image) }} · {{ shortImageId(image.id) }} ·
-              {{ humanBytes(image.sizeBytes) }}{{ image.used ? ' · digunakan' : '' }}
-            </option>
-          </select>
-          <span class="mt-1.5 block text-xs text-muted">
-            Image ID digunakan secara tetap dan tidak akan di-pull dari registry.
-            <template v-if="selectedNode?.lastInventoryAt">
-              Inventory {{ format.dateTime(selectedNode.lastInventoryAt) }}.
-            </template>
-          </span>
-        </label>
-        <UiInput
-          v-else
-          v-model="form.imageReference"
-          class="sm:col-span-2"
-          label="Container image"
-          :readonly="editingResource?.desiredSpec.source.pullPolicy === 'never'"
-          placeholder="ghcr.io/acme/customer-portal:1.0.0"
-          :hint="
-            editingResource?.desiredSpec.source.pullPolicy === 'never'
-              ? 'Release lokal memakai image ID tetap. Gunakan rollout di Applications untuk mengganti release.'
-              : 'Gunakan tag immutable atau digest untuk deployment yang dapat direproduksi.'
-          "
-          required
-        />
-        <label class="block">
-          <span class="mb-2 block text-xs font-semibold text-muted">Classification</span>
-          <select
-            v-model="form.classification"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="billable">Billable</option>
-            <option value="internal">Internal</option>
-            <option value="ignored">Ignored</option>
-          </select>
-        </label>
-        <label v-if="form.classification === 'billable'" class="block">
-          <span class="mb-2 block text-xs font-semibold text-muted"> Billing service (wajib) </span>
-          <select
-            v-model="form.serviceId"
-            required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="" disabled>Pilih service</option>
-            <option v-for="service in services" :key="service.id" :value="service.id">
-              {{ service.serviceNumber }} · {{ service.customerName }} · {{ service.name }}
-            </option>
-          </select>
-        </label>
-        <label class="block">
-          <span class="mb-2 block text-xs font-semibold text-muted">Restart policy</span>
-          <select
-            v-model="form.restartPolicy"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="unless-stopped">Unless stopped</option>
-            <option value="on-failure">On failure</option>
-            <option value="no">No restart</option>
-          </select>
-        </label>
-        <div v-if="!editingResource" class="rounded-md border border-line-strong sm:col-span-2">
-          <div class="border-b px-4 py-3">
-            <h3 class="flex items-center gap-2 text-sm font-semibold text-ink">
-              <KeyRound :size="15" /> Database aplikasi
-            </h3>
-            <p class="mt-1 text-xs text-muted">
-              Database cluster bersifat opsional dan tidak membutuhkan Billing Service untuk
-              deployment internal.
-            </p>
-          </div>
-          <div class="grid gap-4 p-4 md:grid-cols-2">
-            <label class="block">
-              <span class="mb-2 block text-xs font-semibold text-muted">Sumber database</span>
-              <select
-                v-model="form.databaseMode"
-                class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-              >
-                <option value="none">Tanpa managed database</option>
-                <option value="managed" :disabled="availableDatabaseClusters.length === 0">
-                  PostgreSQL cluster terkelola
-                </option>
-              </select>
-            </label>
-            <label v-if="form.databaseMode === 'managed'" class="block">
-              <span class="mb-2 block text-xs font-semibold text-muted">PostgreSQL cluster</span>
-              <select
-                v-model="form.databaseClusterId"
-                required
-                class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-              >
-                <option value="" disabled>Pilih cluster pada node ini</option>
-                <option
-                  v-for="cluster in availableDatabaseClusters"
-                  :key="cluster.id"
-                  :value="cluster.id"
-                >
-                  {{ cluster.name }} · {{ cluster.nodeName }}
-                </option>
-              </select>
-            </label>
-            <p class="text-xs leading-5 text-muted md:col-span-2">
-              <template v-if="form.databaseMode === 'managed'">
-                Container PostgreSQL cluster yang sudah berjalan akan dipakai bersama. Sistem hanya
-                membuat database logis serta user/password khusus aplikasi, memasang DATABASE_URL
-                sebagai secret, lalu menjalankan container aplikasi.
-              </template>
-              <template v-else-if="availableDatabaseClusters.length === 0">
-                Belum ada cluster aktif pada node ini. Pilih node yang memiliki cluster atau deploy
-                tanpa managed database.
-              </template>
-            </p>
-          </div>
-        </div>
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Container port</span>
           <input
@@ -1409,6 +1775,12 @@ async function copyCredential(key: string, value: string) {
             Akses langsung melalui IP server. Gunakan Traefik untuk staging/production.
           </span>
         </label>
+        <div class="border-t pt-5 sm:col-span-2">
+          <h3 class="text-sm font-semibold">Resource & runtime</h3>
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Batas penggunaan server, restart otomatis, dan pemeriksaan kesehatan.
+          </p>
+        </div>
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">CPU limit (millicore)</span>
           <input
@@ -1432,14 +1804,25 @@ async function copyCredential(key: string, value: string) {
             class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
           />
         </label>
+        <label class="block">
+          <span class="mb-2 block text-xs font-semibold text-muted">Restart policy</span>
+          <UiSelect
+            v-model="form.restartPolicy"
+            class="w-full"
+            :options="[
+              { value: 'unless-stopped', label: 'Unless stopped' },
+              { value: 'on-failure', label: 'On failure' },
+              { value: 'no', label: 'No restart' },
+            ]"
+          />
+        </label>
         <UiInput
           v-model="form.healthcheckPath"
-          class="sm:col-span-2"
           label="Healthcheck path (opsional)"
           placeholder="/health"
           pattern="/[A-Za-z0-9._~/%-]*"
         />
-        <label class="block sm:col-span-2">
+        <label v-if="!editingResource || !props.embedded" class="block sm:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">
             Environment variables non-secret
           </span>
@@ -1456,6 +1839,26 @@ async function copyCredential(key: string, value: string) {
             sudah ada tetap dipertahankan.
           </span>
         </label>
+        <div
+          v-if="editingResource && props.embedded"
+          class="flex items-start gap-3 rounded-md border bg-surface-raised p-4 sm:col-span-2"
+        >
+          <KeyRound :size="17" class="mt-0.5 shrink-0 text-brand" aria-hidden="true" />
+          <div>
+            <h3 class="text-sm font-medium">Environment dikelola terpisah</h3>
+            <p class="mt-1 text-xs leading-5 text-muted">
+              Gunakan tab Environment untuk mengubah variabel dan secret. Nilai yang sudah tersimpan
+              tetap dipakai saat konfigurasi ini disimpan.
+            </p>
+          </div>
+        </div>
+        <p
+          v-if="actionError"
+          role="alert"
+          class="rounded-md border border-danger/25 bg-danger/5 p-3 text-sm text-danger sm:col-span-2"
+        >
+          {{ actionError }}
+        </p>
       </form>
 
       <template #footer>

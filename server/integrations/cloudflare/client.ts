@@ -120,6 +120,12 @@ export class CloudflareClient {
     return { id: parsed.id, name: parsed.name, content: parsed.content, changed: true as const }
   }
 
+  async hostnameDnsRecord(hostname: string) {
+    const records = await this.listDnsRecords(hostname)
+    // An absent exact record does not rule out wildcard DNS or an external DNS provider.
+    return records.find((record) => ['CNAME', 'A', 'AAAA'].includes(record.type)) ?? null
+  }
+
   private async listDnsRecords(name: string) {
     const payload = await this.rawRequest(
       `/zones/${encodeURIComponent(this.zoneId)}/dns_records?name=${encodeURIComponent(name)}&per_page=100`,

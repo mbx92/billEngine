@@ -329,14 +329,25 @@ export class NativeInfrastructureRepository {
       .leftJoin(resourceRoutes, eq(resourceRoutes.resourceId, infrastructureResources.id))
       .leftJoin(serviceResources, eq(serviceResources.resourceId, infrastructureResources.id))
       .where(isNull(infrastructureResources.deletedAt))
-      .orderBy(asc(infrastructureResources.name))
+      .orderBy(
+        asc(infrastructureResources.name),
+        asc(resourceRoutes.createdAt),
+        asc(resourceRoutes.id),
+      )
 
-    return rows.map((row) => ({
-      ...row,
-      lastObservedAt: row.lastObservedAt?.toISOString() ?? null,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
-    }))
+    const seen = new Set<string>()
+    return rows
+      .filter((row) => {
+        if (seen.has(row.id)) return false
+        seen.add(row.id)
+        return true
+      })
+      .map((row) => ({
+        ...row,
+        lastObservedAt: row.lastObservedAt?.toISOString() ?? null,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      }))
   }
 
   async listOperations(limit = 100, resourceId?: string) {

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import {
   CheckCircle2,
+  ChevronDown,
   Copy,
   Database,
   Download,
   Eye,
-  KeyRound,
   Plus,
   RefreshCw,
   RotateCw,
@@ -171,6 +171,7 @@ const busyBackupIds = ref<string[]>([])
 const actionMessage = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const toast = useToast()
+const format = useFormat()
 const form = reactive({ resourceId: '', name: '', defaultConnectionLimit: 20 })
 const provisionForm = reactive({
   clusterId: '',
@@ -482,12 +483,21 @@ function statusTone(clusterStatus: ClusterStatus) {
     <InfrastructurePageHeader
       :level="props.embedded ? 2 : 1"
       :title="props.embedded ? 'Database aplikasi' : 'Database clusters'"
-      description="Cluster PostgreSQL dan database untuk setiap aplikasi."
+      :description="
+        props.embedded
+          ? 'Koneksi database, kredensial, dan backup untuk deployment ini.'
+          : 'Cluster PostgreSQL dan database untuk setiap aplikasi.'
+      "
     >
       <div class="flex gap-2">
         <UiRefreshButton :action="refresh" :pending="status === 'pending'" />
-        <UiButton :disabled="!overview?.candidates.some(candidateReady)" @click="openActivation()">
-          <Plus :size="15" /> Activate cluster
+        <UiButton
+          v-if="!props.embedded || overview?.candidates.length"
+          variant="secondary"
+          :disabled="!overview?.candidates.some(candidateReady)"
+          @click="openActivation()"
+        >
+          <Plus :size="15" /> Aktifkan cluster
         </UiButton>
       </div>
     </InfrastructurePageHeader>
@@ -516,15 +526,37 @@ function statusTone(clusterStatus: ClusterStatus) {
         description="Pastikan migration database terbaru sudah diterapkan."
       />
     </UiCard>
-    <template v-else>
-      <section>
-        <div class="mb-3 flex items-center justify-between gap-3">
+    <div v-else class="flex flex-col gap-6">
+      <component
+        :is="props.embedded && overview?.allocations.length ? 'details' : 'section'"
+        class="min-w-0"
+        :class="props.embedded ? 'order-2 rounded-md border bg-surface p-4 sm:p-5' : ''"
+      >
+        <component
+          :is="props.embedded && overview?.allocations.length ? 'summary' : 'div'"
+          class="flex flex-wrap items-center justify-between gap-3 list-none [&::-webkit-details-marker]:hidden"
+          :class="
+            props.embedded && overview?.allocations.length
+              ? 'focus-ring cursor-pointer rounded'
+              : 'mb-4'
+          "
+        >
           <div>
-            <h2 class="text-sm font-semibold text-ink">Active clusters</h2>
-            <p class="mt-1 text-xs text-muted">Mode awal adalah standalone dengan satu primary.</p>
+            <h3 class="flex items-center gap-2 text-sm font-semibold text-ink">
+              <Server :size="16" class="text-brand" aria-hidden="true" /> Cluster PostgreSQL
+            </h3>
+            <p class="mt-1 text-xs leading-5 text-muted">
+              Kapasitas dan konfigurasi cluster pada server aplikasi.
+            </p>
           </div>
-          <UiBadge tone="neutral">{{ overview?.clusters.length ?? 0 }} cluster</UiBadge>
-        </div>
+          <span class="flex items-center gap-2"
+            ><UiBadge tone="neutral">{{ overview?.clusters.length ?? 0 }} cluster</UiBadge
+            ><ChevronDown
+              v-if="props.embedded && overview?.allocations.length"
+              :size="16"
+              aria-hidden="true"
+          /></span>
+        </component>
 
         <UiCard v-if="!overview?.clusters.length" :padded="false">
           <UiEmptyState
@@ -532,14 +564,14 @@ function statusTone(clusterStatus: ClusterStatus) {
             description="Deploy PostgreSQL dari Templates, pastikan agent terbaru, lalu aktifkan resource tersebut sebagai cluster."
           />
         </UiCard>
-        <div v-else class="grid gap-4 lg:grid-cols-2">
+        <div v-else class="grid gap-4" :class="props.embedded ? 'mt-4' : 'lg:grid-cols-2'">
           <UiCard v-for="cluster in overview.clusters" :key="cluster.id">
             <div class="flex items-start justify-between gap-4">
               <div class="flex min-w-0 items-start gap-3">
                 <span class="rounded-md bg-brand/10 p-2 text-brand"><Database :size="18" /></span>
                 <div class="min-w-0">
-                  <h3 class="truncate text-sm font-semibold text-ink">{{ cluster.name }}</h3>
-                  <p class="mt-1 font-mono text-xs text-muted">
+                  <h3 class="break-words text-sm font-semibold text-ink">{{ cluster.name }}</h3>
+                  <p class="mt-1 break-all font-mono text-xs text-muted">
                     {{ cluster.primaryResourceName }} · {{ cluster.nodeName }}
                   </p>
                 </div>
@@ -584,11 +616,14 @@ function statusTone(clusterStatus: ClusterStatus) {
             </p>
             <UiButton
               class="mt-4 w-full"
-              :disabled="!clusterReadyForProvisioning(cluster)"
+              :disabled="
+                !clusterReadyForProvisioning(cluster) ||
+                !eligibleApplicationsForCluster(cluster).length
+              "
               :title="clusterProvisioningHint(cluster)"
               @click="openProvisioning(cluster)"
             >
-              <KeyRound :size="15" /> Provision application database
+              <Plus :size="15" /> Buat database aplikasi
             </UiButton>
             <p
               v-if="
@@ -605,35 +640,37 @@ function statusTone(clusterStatus: ClusterStatus) {
             </p>
           </UiCard>
         </div>
-      </section>
+      </component>
 
-      <section class="mt-8">
-        <div class="mb-3 flex items-center justify-between gap-3">
+      <section class="min-w-0" :class="props.embedded ? 'order-1' : ''">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="text-sm font-semibold text-ink">Application databases</h2>
+            <h3 class="flex items-center gap-2 text-sm font-semibold text-ink">
+              <Database :size="16" class="text-brand" aria-hidden="true" /> Database terhubung
+            </h3>
             <p class="mt-1 text-xs text-muted">
-              Setiap aplikasi memakai database, role, dan credential terpisah; Service hanya
-              diperlukan untuk resource billable.
+              Database dan kredensial khusus aplikasi. Koneksi dipasang otomatis melalui
+              environment.
             </p>
           </div>
-          <UiBadge tone="neutral">{{ overview?.allocations.length ?? 0 }} allocation</UiBadge>
+          <UiBadge tone="neutral">{{ overview?.allocations.length ?? 0 }} database</UiBadge>
         </div>
 
         <UiCard v-if="!overview?.allocations.length" :padded="false">
           <UiEmptyState
             title="Belum ada database aplikasi"
-            description="Aktifkan cluster dan pilih Provision application database pada cluster yang siap."
+            description="Pilih Buat database aplikasi pada cluster yang siap di bagian Cluster PostgreSQL. Jika memakai database eksternal, atur koneksinya melalui tab Environment."
           />
         </UiCard>
-        <div v-else class="grid gap-4 lg:grid-cols-2">
+        <div v-else class="grid gap-4" :class="props.embedded ? '' : 'lg:grid-cols-2'">
           <UiCard v-for="allocation in overview.allocations" :key="allocation.id">
-            <div class="flex items-start justify-between gap-4">
+            <div class="flex flex-wrap items-start justify-between gap-4">
               <div class="min-w-0">
                 <p class="font-mono text-[11px] font-semibold text-brand">
                   {{ allocation.serviceNumber ?? 'INTERNAL' }} ·
                   {{ allocation.customerName ?? 'Non-billable' }}
                 </p>
-                <h3 class="mt-1 truncate text-sm font-semibold text-ink">
+                <h3 class="mt-1 break-words text-base font-semibold text-ink">
                   {{ allocation.serviceName ?? allocation.applicationName }}
                 </h3>
                 <p class="mt-1 text-xs text-muted">
@@ -644,21 +681,23 @@ function statusTone(clusterStatus: ClusterStatus) {
                 {{ allocation.status }}
               </UiBadge>
             </div>
-            <dl class="mt-4 grid grid-cols-2 gap-3 border-t pt-4 text-xs">
+            <dl
+              class="mt-4 grid gap-4 rounded-md border bg-surface-raised/50 p-4 text-xs sm:grid-cols-2"
+            >
               <div>
                 <dt class="text-muted">Database</dt>
-                <dd class="mt-1 truncate font-mono text-ink">{{ allocation.databaseName }}</dd>
+                <dd class="mt-1 break-all font-mono text-ink">{{ allocation.databaseName }}</dd>
               </div>
               <div>
                 <dt class="text-muted">Role</dt>
-                <dd class="mt-1 truncate font-mono text-ink">{{ allocation.roleName }}</dd>
+                <dd class="mt-1 break-all font-mono text-ink">{{ allocation.roleName }}</dd>
               </div>
               <div>
-                <dt class="text-muted">Application secret key</dt>
+                <dt class="text-muted">Variabel koneksi</dt>
                 <dd class="mt-1 font-mono text-ink">{{ allocation.environmentKey }}</dd>
               </div>
               <div>
-                <dt class="text-muted">Node</dt>
+                <dt class="text-muted">Server</dt>
                 <dd class="mt-1 text-ink">{{ allocation.nodeName }}</dd>
               </div>
             </dl>
@@ -672,41 +711,53 @@ function statusTone(clusterStatus: ClusterStatus) {
               <UiButton
                 v-if="allocation.status === 'failed'"
                 variant="secondary"
-                class="flex-1"
+                size="sm"
                 :disabled="busyAllocationIds.includes(allocation.id)"
                 @click="runAllocationAction(allocation, 'retry')"
               >
-                <RefreshCw :size="15" /> Retry
+                <RefreshCw :size="15" /> Coba lagi
               </UiButton>
               <template v-if="allocation.status === 'active'">
-                <UiButton variant="secondary" class="flex-1" @click="pendingReveal = allocation">
-                  <Eye :size="15" /> Reveal
-                </UiButton>
-                <UiButton variant="secondary" class="flex-1" @click="pendingRotation = allocation">
-                  <RotateCw :size="15" /> Rotate
+                <UiButton
+                  variant="secondary"
+                  size="sm"
+                  :disabled="busyAllocationIds.includes(allocation.id)"
+                  @click="pendingReveal = allocation"
+                >
+                  <Eye :size="15" /> Lihat kredensial
                 </UiButton>
                 <UiButton
                   variant="secondary"
-                  class="flex-1"
+                  size="sm"
+                  :disabled="busyAllocationIds.includes(allocation.id)"
+                  @click="pendingRotation = allocation"
+                >
+                  <RotateCw :size="15" /> Rotasi kredensial
+                </UiButton>
+                <UiButton
+                  variant="secondary"
+                  size="sm"
                   :disabled="busyAllocationIds.includes(allocation.id)"
                   @click="createBackup(allocation)"
                 >
-                  <Download :size="15" /> Backup
+                  <Download :size="15" /> Buat backup
                 </UiButton>
               </template>
             </div>
             <div v-if="backupsForAllocation(allocation.id).length" class="mt-4 border-t pt-4">
-              <p class="mb-2 text-xs font-semibold text-ink">Backup workload terbaru</p>
+              <h4 class="mb-3 flex items-center gap-2 text-sm font-semibold text-ink">
+                <ShieldCheck :size="16" class="text-brand" aria-hidden="true" /> Backup terbaru
+              </h4>
               <div class="space-y-2">
                 <div
                   v-for="backup in backupsForAllocation(allocation.id).slice(0, 3)"
                   :key="backup.id"
                   class="rounded border bg-canvas px-3 py-2 text-xs"
                 >
-                  <div class="flex items-center justify-between gap-2">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
                     <div class="min-w-0">
                       <p class="font-mono text-ink">
-                        {{ new Date(backup.createdAt).toLocaleString('id-ID') }} ·
+                        {{ format.dateTime(backup.createdAt) }} ·
                         {{ humanBytes(backup.sizeBytes) }}
                       </p>
                       <p v-if="backup.checksumSha256" class="mt-1 truncate font-mono text-muted">
@@ -743,20 +794,37 @@ function statusTone(clusterStatus: ClusterStatus) {
                 </div>
               </div>
             </div>
+            <p v-else class="mt-4 rounded-md border border-dashed p-4 text-xs leading-5 text-muted">
+              Belum ada backup untuk database ini. Gunakan Buat backup setelah database aktif.
+            </p>
           </UiCard>
         </div>
       </section>
 
-      <section class="mt-8">
-        <div class="mb-3 flex items-center justify-between gap-3">
+      <component
+        :is="props.embedded ? 'details' : 'section'"
+        v-if="!props.embedded || overview?.candidates.length"
+        class="min-w-0"
+        :class="props.embedded ? 'order-3 rounded-md border bg-surface p-4 sm:p-5' : ''"
+      >
+        <component
+          :is="props.embedded ? 'summary' : 'div'"
+          class="flex flex-wrap items-center justify-between gap-3 list-none [&::-webkit-details-marker]:hidden"
+          :class="props.embedded ? 'focus-ring cursor-pointer rounded' : 'mb-4'"
+        >
           <div>
-            <h2 class="text-sm font-semibold text-ink">Eligible PostgreSQL resources</h2>
+            <h3 class="flex items-center gap-2 text-sm font-semibold text-ink">
+              <Plus :size="16" class="text-brand" aria-hidden="true" /> Tambahkan cluster
+            </h3>
             <p class="mt-1 text-xs text-muted">
               Hanya PostgreSQL dari Template native; database Billing tidak ditampilkan.
             </p>
           </div>
-          <UiBadge tone="neutral">{{ overview?.candidates.length ?? 0 }} candidate</UiBadge>
-        </div>
+          <span class="flex items-center gap-2"
+            ><UiBadge tone="neutral">{{ overview?.candidates.length ?? 0 }} kandidat</UiBadge
+            ><ChevronDown v-if="props.embedded" :size="16" aria-hidden="true"
+          /></span>
+        </component>
 
         <UiCard v-if="!overview?.candidates.length" :padded="false">
           <UiEmptyState
@@ -764,7 +832,7 @@ function statusTone(clusterStatus: ClusterStatus) {
             description="Semua PostgreSQL sudah menjadi cluster atau belum ada resource PostgreSQL native."
           />
         </UiCard>
-        <div v-else class="grid gap-4 lg:grid-cols-2">
+        <div v-else class="grid gap-4" :class="props.embedded ? 'mt-4' : 'lg:grid-cols-2'">
           <UiCard v-for="candidate in overview.candidates" :key="candidate.id">
             <div class="flex items-start justify-between gap-4">
               <div class="flex min-w-0 items-start gap-3">
@@ -809,12 +877,20 @@ function statusTone(clusterStatus: ClusterStatus) {
               :disabled="!candidateReady(candidate)"
               @click="openActivation(candidate)"
             >
-              <ShieldCheck :size="15" /> Activate as standalone cluster
+              <ShieldCheck :size="15" /> Aktifkan sebagai cluster
             </UiButton>
           </UiCard>
         </div>
-      </section>
-    </template>
+      </component>
+      <NuxtLink
+        v-if="props.embedded"
+        to="/backups"
+        class="focus-ring order-4 flex items-center gap-3 rounded-md border bg-surface p-4 text-sm text-brand hover:bg-surface-raised"
+        ><ShieldCheck :size="18" aria-hidden="true" /><span
+          >Kelola jadwal & riwayat backup</span
+        ></NuxtLink
+      >
+    </div>
 
     <UiDialog
       v-if="showActivation"
@@ -837,20 +913,19 @@ function statusTone(clusterStatus: ClusterStatus) {
         </p>
         <label class="block md:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">PostgreSQL resource</span>
-          <select
+          <UiSelect
             v-model="form.resourceId"
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="" disabled>Pilih resource</option>
-            <option
-              v-for="candidate in overview?.candidates.filter(candidateReady)"
-              :key="candidate.id"
-              :value="candidate.id"
-            >
-              {{ candidate.name }} · {{ candidate.nodeName }}
-            </option>
-          </select>
+            class="w-full"
+            placeholder="Pilih resource"
+            :options="[
+              { value: '', label: 'Pilih resource', disabled: true },
+              ...(overview?.candidates.filter(candidateReady) ?? []).map((candidate) => ({
+                value: candidate.id,
+                label: candidate.name + ' · ' + candidate.nodeName,
+              })),
+            ]"
+          />
         </label>
         <UiInput v-model="form.name" label="Nama cluster" pattern="[a-z0-9][a-z0-9-]*" required />
         <label class="block">
@@ -911,36 +986,38 @@ function statusTone(clusterStatus: ClusterStatus) {
           <span class="mb-2 block text-xs font-semibold text-muted">
             Billing service (opsional)
           </span>
-          <select
+          <UiSelect
             v-model="provisionForm.serviceId"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="">Tanpa Service · internal/non-billable</option>
-            <option
-              v-for="service in overview?.eligibleServices"
-              :key="service.id"
-              :value="service.id"
-            >
-              {{ service.serviceNumber }} · {{ service.name }} · {{ service.customerName }}
-            </option>
-          </select>
+            class="w-full"
+            :options="[
+              { value: '', label: 'Tanpa Service · internal/non-billable' },
+              ...(overview?.eligibleServices ?? []).map((service) => ({
+                value: service.id,
+                label: service.serviceNumber + ' · ' + service.name + ' · ' + service.customerName,
+              })),
+            ]"
+          />
         </label>
         <label class="block md:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">Application resource</span>
-          <select
+          <UiSelect
             v-model="provisionForm.applicationResourceId"
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="" disabled>Pilih aplikasi pada node yang sama</option>
-            <option
-              v-for="application in eligibleProvisionApplications"
-              :key="application.id"
-              :value="application.id"
-            >
-              {{ application.name }} · {{ application.nodeName }} · {{ application.observedState }}
-            </option>
-          </select>
+            class="w-full"
+            placeholder="Pilih aplikasi pada node yang sama"
+            :options="[
+              { value: '', label: 'Pilih aplikasi pada node yang sama', disabled: true },
+              ...(eligibleProvisionApplications ?? []).map((application) => ({
+                value: application.id,
+                label:
+                  application.name +
+                  ' · ' +
+                  application.nodeName +
+                  ' · ' +
+                  application.observedState,
+              })),
+            ]"
+          />
         </label>
         <div
           v-if="selectedProvisionCluster && eligibleProvisionApplications.length === 0"

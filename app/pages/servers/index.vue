@@ -536,24 +536,26 @@ function closeEnrollment() {
         />
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Environment</span>
-          <select
+          <UiSelect
             v-model="form.environment"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="development">Development</option>
-            <option value="staging">Staging</option>
-          </select>
+            class="w-full"
+            :options="[
+              { value: 'development', label: 'Development' },
+              { value: 'staging', label: 'Staging' },
+            ]"
+          />
         </label>
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Role node</span>
-          <select
+          <UiSelect
             v-model="form.role"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="deployment">Deployment</option>
-            <option value="builder">Image builder</option>
-            <option value="hybrid">Hybrid</option>
-          </select>
+            class="w-full"
+            :options="[
+              { value: 'deployment', label: 'Deployment' },
+              { value: 'builder', label: 'Image builder' },
+              { value: 'hybrid', label: 'Hybrid' },
+            ]"
+          />
           <span class="mt-1.5 block text-xs text-muted">
             Builder sebaiknya memakai server terpisah; hybrid juga menerima workload deployment.
           </span>
@@ -644,16 +646,17 @@ function closeEnrollment() {
       :total="nodes.length"
       unit="server"
     >
-      <select
+      <UiSelect
         v-model="nodeFilter"
         aria-label="Filter status server"
-        class="focus-ring h-9 rounded-md border border-line-strong bg-surface px-3 text-sm text-ink"
-      >
-        <option value="all">Semua status</option>
-        <option value="online">Online</option>
-        <option value="attention">Perlu perhatian</option>
-        <option value="revoked">Akses dicabut</option>
-      </select>
+        size="md"
+        :options="[
+          { value: 'all', label: 'Semua status' },
+          { value: 'online', label: 'Online' },
+          { value: 'attention', label: 'Perlu perhatian' },
+          { value: 'revoked', label: 'Akses dicabut' },
+        ]"
+      />
     </InfrastructureToolbar>
 
     <div v-if="isInitialLoading" class="space-y-2">

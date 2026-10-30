@@ -404,16 +404,17 @@ async function forceStopOperation() {
         :total="deploymentGroups.length"
         unit="deployment"
       >
-        <select
+        <UiSelect
           v-model="filter"
           aria-label="Filter status deployment"
-          class="focus-ring h-9 rounded-md border border-line-strong bg-surface px-3 text-sm text-ink"
-        >
-          <option value="all">Semua status</option>
-          <option value="active">Berjalan ({{ activeCount }})</option>
-          <option value="failed">Gagal ({{ failedCount }})</option>
-          <option value="succeeded">Berhasil ({{ succeededCount }})</option>
-        </select>
+          size="md"
+          :options="[
+            { value: 'all', label: 'Semua status' },
+            { value: 'active', label: 'Berjalan (' + activeCount + ')' },
+            { value: 'failed', label: 'Gagal (' + failedCount + ')' },
+            { value: 'succeeded', label: 'Berhasil (' + succeededCount + ')' },
+          ]"
+        />
       </InfrastructureToolbar>
 
       <UiEmptyState

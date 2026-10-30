@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isTransientDatabaseError } from '../../database/connection-errors'
 import type {
   CreateBackupPolicyInput,
   CreateBackupTargetInput,
@@ -34,7 +35,8 @@ export class InfrastructureBackupService {
         secretKeyEncrypted: encryptInfrastructureCredential(input.secretKey),
       })
     } catch (error) {
-      if (isUniqueViolation(error)) throw DomainError.conflict('Nama backup target sudah digunakan.')
+      if (isUniqueViolation(error))
+        throw DomainError.conflict('Nama backup target sudah digunakan.')
       throw error
     }
   }
@@ -51,7 +53,8 @@ export class InfrastructureBackupService {
       }
       return policy
     } catch (error) {
-      if (isUniqueViolation(error)) throw DomainError.conflict('Nama backup policy sudah digunakan.')
+      if (isUniqueViolation(error))
+        throw DomainError.conflict('Nama backup policy sudah digunakan.')
       throw error
     }
   }
@@ -78,6 +81,9 @@ export class InfrastructureBackupService {
         )
         result.queued += 1
       } catch (error) {
+        // Leave the policy due during recovery; the idempotency key above lets
+        // the next scheduler pass safely resume the same scheduled backup.
+        if (isTransientDatabaseError(error)) throw error
         result.failed += 1
         console.error('[backup-scheduler]', policy.id, error)
         await this.deliverPolicyFailure(
@@ -88,13 +94,8 @@ export class InfrastructureBackupService {
           policy.databaseName,
           error,
         )
-      } finally {
-        await this.repository.advancePolicy(
-          policy.id,
-          policy.scheduledAt,
-          policy.intervalMinutes,
-        )
       }
+      await this.repository.advancePolicy(policy.id, policy.scheduledAt, policy.intervalMinutes)
     }
     await this.deliverAlerts()
     return result

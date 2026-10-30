@@ -89,7 +89,11 @@ export class InfrastructureReleaseService {
               isNull(infrastructureResources.deletedAt),
             ),
           )
-          .orderBy(asc(infrastructureResources.name)),
+          .orderBy(
+            asc(infrastructureResources.name),
+            asc(resourceRoutes.createdAt),
+            asc(resourceRoutes.id),
+          ),
         this.database
           .select({
             id: applicationBuilds.id,
@@ -148,33 +152,40 @@ export class InfrastructureReleaseService {
           .orderBy(asc(infrastructureNodes.name)),
       ])
 
+    const seenResources = new Set<string>()
     return {
       registries: registries.map(serializeDates),
       applications: applications.map(serializeDates),
       releases: releases.map(serializeDates),
-      resources: resources.map((resource) => ({
-        id: resource.id,
-        name: resource.name,
-        nodeId: resource.nodeId,
-        nodeName: resource.nodeName,
-        applicationId: resource.applicationId,
-        releaseId: resource.releaseId,
-        releasePolicy: resource.releasePolicy,
-        imageReference: resource.imageReference,
-        observedState: resource.observedState,
-        desiredRevision: resource.desiredRevision,
-        observedRevision: resource.observedRevision,
-        accessUrl: resourceAccessUrl(resource),
-        shellAvailable:
-          resource.nodeActive &&
-          !resource.nodeDraining &&
-          ['online', 'degraded'].includes(resource.nodeStatus) &&
-          Boolean(
-            resource.nodeLastHeartbeatAt &&
-            resource.nodeLastHeartbeatAt.getTime() >= Date.now() - 90_000,
-          ) &&
-          resource.nodeCapabilities.includes('container-exec'),
-      })),
+      resources: resources
+        .filter((resource) => {
+          if (seenResources.has(resource.id)) return false
+          seenResources.add(resource.id)
+          return true
+        })
+        .map((resource) => ({
+          id: resource.id,
+          name: resource.name,
+          nodeId: resource.nodeId,
+          nodeName: resource.nodeName,
+          applicationId: resource.applicationId,
+          releaseId: resource.releaseId,
+          releasePolicy: resource.releasePolicy,
+          imageReference: resource.imageReference,
+          observedState: resource.observedState,
+          desiredRevision: resource.desiredRevision,
+          observedRevision: resource.observedRevision,
+          accessUrl: resourceAccessUrl(resource),
+          shellAvailable:
+            resource.nodeActive &&
+            !resource.nodeDraining &&
+            ['online', 'degraded'].includes(resource.nodeStatus) &&
+            Boolean(
+              resource.nodeLastHeartbeatAt &&
+              resource.nodeLastHeartbeatAt.getTime() >= Date.now() - 90_000,
+            ) &&
+            resource.nodeCapabilities.includes('container-exec'),
+        })),
       builds: builds.map((build) => ({
         ...build,
         startedAt: build.startedAt?.toISOString() ?? null,

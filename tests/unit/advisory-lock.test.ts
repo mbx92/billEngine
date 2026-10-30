@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import type { Pool } from 'pg'
 import { withPostgresAdvisoryLock } from '../../server/database/advisory-lock'
 
 function setup(acquired: boolean) {
-  const client = {
+  const client = Object.assign(new EventEmitter(), {
     query: vi
       .fn()
       .mockResolvedValueOnce({ rows: [{ acquired }] })
       .mockResolvedValue({ rows: [{ pg_advisory_unlock: true }] }),
     release: vi.fn(),
-  }
+  })
   const pool = { connect: vi.fn().mockResolvedValue(client) } as unknown as Pick<Pool, 'connect'>
 
   return { client, pool }
@@ -62,5 +63,34 @@ describe('PostgreSQL advisory lock', () => {
       'unlock failed',
     )
     expect(client.release).toHaveBeenCalledWith(true)
+  })
+
+  it('handles a lost lock connection while work uses other connections', async () => {
+    const { client, pool } = setup(true)
+    const failure = Object.assign(new Error('the database system is in recovery mode'), {
+      code: '57P03',
+    })
+
+    await expect(
+      withPostgresAdvisoryLock(pool, 42, async () => {
+        client.emit('error', failure)
+        return 'done'
+      }),
+    ).rejects.toBe(failure)
+    expect(client.query).toHaveBeenCalledOnce()
+    expect(client.release).toHaveBeenCalledWith(true)
+    expect(client.listenerCount('error')).toBe(0)
+  })
+
+  it('destroys a connection that fails before acquiring the lock', async () => {
+    const { client, pool } = setup(true)
+    const failure = new Error('Connection terminated unexpectedly')
+    client.query.mockReset().mockRejectedValue(failure)
+    const work = vi.fn()
+
+    await expect(withPostgresAdvisoryLock(pool, 42, work)).rejects.toBe(failure)
+    expect(work).not.toHaveBeenCalled()
+    expect(client.release).toHaveBeenCalledWith(true)
+    expect(client.listenerCount('error')).toBe(0)
   })
 })

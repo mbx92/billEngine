@@ -532,26 +532,28 @@ function runTone(runStatus: BackupRun['status']) {
       >
         <UiInput v-model="policyForm.name" label="Policy name" required /><label class="block"
           ><span class="mb-2 block text-xs font-semibold text-muted">Database source</span
-          ><select
+          ><UiSelect
             v-model="policyForm.serviceDatabaseId"
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm"
-          >
-            <option v-for="source in overview?.sources" :key="source.id" :value="source.id">
-              {{ source.databaseName }} · {{ source.serviceNumber ?? 'INTERNAL' }}
-            </option>
-          </select></label
+            class="w-full"
+            :options="
+              (overview?.sources ?? []).map((source) => ({
+                value: source.id,
+                label: source.databaseName + ' · ' + (source.serviceNumber ?? 'INTERNAL'),
+              }))
+            " /></label
         ><label class="block"
           ><span class="mb-2 block text-xs font-semibold text-muted">Storage target</span
-          ><select
+          ><UiSelect
             v-model="policyForm.storageTargetId"
             required
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm"
-          >
-            <option v-for="target in overview?.targets" :key="target.id" :value="target.id">
-              {{ target.name }} · {{ target.bucket }}
-            </option>
-          </select></label
+            class="w-full"
+            :options="
+              (overview?.targets ?? []).map((target) => ({
+                value: target.id,
+                label: target.name + ' · ' + target.bucket,
+              }))
+            " /></label
         ><label class="block"
           ><span class="mb-2 block text-xs font-semibold text-muted">Interval (minutes)</span
           ><input

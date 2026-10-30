@@ -30,7 +30,7 @@ function focusableElements() {
     panel.value?.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
     ) ?? [],
-  )
+  ).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0)
 }
 
 function onKeydown(event: KeyboardEvent) {

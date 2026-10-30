@@ -115,6 +115,7 @@ try {
         .insert(plans)
         .values({
           ...plan,
+          inclusions: [...plan.inclusions],
           currency: 'IDR',
           billingCycle: 'monthly',
           databaseMode: 'none',

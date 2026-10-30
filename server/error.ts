@@ -12,9 +12,10 @@ import { toApiError } from '#server/utils/api-error'
  * Non-API routes are delegated to Nuxt so pages keep their normal error page
  * and dev overlay.
  */
-export default defineNitroErrorHandler(async (error, event, { defaultHandler }) => {
+export default defineNitroErrorHandler(async (error, event) => {
   if (!event.path?.startsWith('/api/')) {
-    return defaultHandler(error, event)
+    // Leave the response unhandled so Nuxt's following handler renders it.
+    return
   }
 
   const { statusCode, body } = toApiError(error)
