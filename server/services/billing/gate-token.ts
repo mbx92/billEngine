@@ -69,3 +69,18 @@ function isBillingGateToken(value: unknown): value is BillingGateToken {
     Number.isSafeInteger(token.expiresAt)
   )
 }
+
+/** Bind notices to the current invoice or service lifecycle restriction. */
+export function billingAccessFingerprint(
+  decision: {
+    invoice: { fingerprint: string } | null
+    service: { id: string } | null
+    state: string
+  },
+  secret: string,
+): string {
+  return (
+    decision.invoice?.fingerprint ??
+    invoiceFingerprint(`service:${decision.service?.id}:${decision.state}`, secret)
+  )
+}

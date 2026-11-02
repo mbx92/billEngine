@@ -1,4 +1,4 @@
-import { isDomainErrorLike, isZodErrorLike, type ApiErrorCode } from './errors'
+import { DomainError, isDomainErrorLike, isZodErrorLike, type ApiErrorCode } from './errors'
 
 /**
  * Maps a thrown error to the documented error envelope (docs §17) and the
@@ -33,6 +33,41 @@ export function toApiError(error: unknown) {
           message: 'Input tidak valid.',
           details: zod.issues,
         },
+      },
+    }
+  }
+
+  const schemaMismatch = findInCauseChain(
+    error,
+    (value): value is { code: string } =>
+      typeof value === 'object' &&
+      value !== null &&
+      'code' in value &&
+      (value.code === '42P01' || value.code === '42703'),
+  )
+  if (schemaMismatch) {
+    const schemaError = new DomainError('DATABASE_SCHEMA_MISMATCH', 503)
+    return {
+      statusCode: schemaError.statusCode,
+      body: { error: { code: schemaError.code, message: schemaError.message } },
+    }
+  }
+
+  // Removed API routes are reported by Nitro as HTTP errors, not domain errors.
+  // Preserve 404 without exposing the framework's path or stack in the response.
+  const notFound = findInCauseChain(
+    error,
+    (value): value is { statusCode: 404 } =>
+      typeof value === 'object' &&
+      value !== null &&
+      'statusCode' in value &&
+      value.statusCode === 404,
+  )
+  if (notFound) {
+    return {
+      statusCode: 404,
+      body: {
+        error: { code: 'NOT_FOUND' satisfies ApiErrorCode, message: 'Endpoint tidak ditemukan.' },
       },
     }
   }

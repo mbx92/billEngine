@@ -6,6 +6,7 @@ export type ApiErrorCode =
   | 'CONFLICT'
   | 'STATE_INVALID'
   | 'EXTERNAL_SERVICE_ERROR'
+  | 'DATABASE_SCHEMA_MISMATCH'
   | 'INTERNAL_ERROR'
 
 const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
@@ -16,6 +17,8 @@ const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
   CONFLICT: 'Data sudah ada.',
   STATE_INVALID: 'Aksi tidak diizinkan pada status saat ini.',
   EXTERNAL_SERVICE_ERROR: 'Layanan infrastructure tidak dapat menyelesaikan permintaan.',
+  DATABASE_SCHEMA_MISMATCH:
+    'Skema database tidak sesuai dengan branch aplikasi ini. Periksa DATABASE_URL/NUXT_DATABASE_URL dan gunakan database dengan migrasi yang sesuai.',
   INTERNAL_ERROR: 'Terjadi kesalahan internal.',
 }
 
@@ -71,6 +74,7 @@ const API_ERROR_CODES = new Set<string>([
   'CONFLICT',
   'STATE_INVALID',
   'EXTERNAL_SERVICE_ERROR',
+  'DATABASE_SCHEMA_MISMATCH',
   'INTERNAL_ERROR',
 ])
 

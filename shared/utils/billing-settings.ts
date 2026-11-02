@@ -1,8 +1,5 @@
 import type { ApiBillingSettings } from '../types/api'
-import {
-  updateBillingSettingsSchema,
-  type UpdateBillingSettingsInput,
-} from '../schemas/settings'
+import { updateBillingSettingsSchema, type UpdateBillingSettingsInput } from '../schemas/settings'
 
 type BillingSettingsFields = Omit<ApiBillingSettings, 'source' | 'updatedAt'>
 
@@ -13,16 +10,13 @@ export function overlayStoredBillingSettings(
 ): ApiBillingSettings {
   const parsed = updateBillingSettingsSchema.safeParse(stored)
   if (parsed.success) {
-    return withDatabaseSource(applyDeploymentOverrides(fallback, parsed.data), updatedAt)
+    return withDatabaseSource(parsed.data, updatedAt)
   }
 
   const overlay = pickValidBillingSettings(stored)
   if (Object.keys(overlay).length === 0) return fallback
 
-  return withDatabaseSource(
-    applyDeploymentOverrides(fallback, { ...fallback, ...overlay }),
-    updatedAt,
-  )
+  return withDatabaseSource({ ...fallback, ...overlay }, updatedAt)
 }
 
 export function pickValidBillingSettings(stored: unknown): Partial<UpdateBillingSettingsInput> {
@@ -42,18 +36,6 @@ export function pickValidBillingSettings(stored: unknown): Partial<UpdateBilling
   }
 
   return picked
-}
-
-function applyDeploymentOverrides(
-  fallback: BillingSettingsFields,
-  stored: BillingSettingsFields,
-): BillingSettingsFields {
-  return {
-    ...stored,
-    billingAutomationEnabled: fallback.billingAutomationEnabled || stored.billingAutomationEnabled,
-    billingAccessControlEnabled:
-      fallback.billingAccessControlEnabled || stored.billingAccessControlEnabled,
-  }
 }
 
 function withDatabaseSource(

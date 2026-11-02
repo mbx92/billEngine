@@ -13,6 +13,7 @@ const syncingServerId = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const form = reactive({ name: '', baseUrl: '', apiToken: '' })
+const gatewayNode = ref<{ id: string; name: string } | null>(null)
 
 const { data, status, error, refresh } = await useFetch<{ data: ApiResourceServer[] }>(
   '/api/resources/servers',
@@ -144,7 +145,12 @@ async function syncServer(server: ApiResourceServer) {
     <UiCard v-else-if="error" :padded="false">
       <UiEmptyState
         title="Gagal memuat servers"
-        description="Server tidak dapat membaca daftar Coolify server. Coba muat ulang halaman."
+        :description="
+          apiErrorMessage(
+            error,
+            'Server tidak dapat membaca daftar Coolify server. Coba muat ulang halaman.',
+          )
+        "
       >
         <UiButton variant="secondary" size="sm" @click="refresh()">Coba lagi</UiButton>
       </UiEmptyState>
@@ -217,6 +223,7 @@ async function syncServer(server: ApiResourceServer) {
           <div v-if="server.nodes.length" class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <div
               v-for="node in server.nodes"
+              :id="`node-${node.coolifyUuid}`"
               :key="node.id"
               class="rounded-md border bg-canvas/50 p-3"
             >
@@ -239,6 +246,14 @@ async function syncServer(server: ApiResourceServer) {
                 {{ format.count(node.resourceCount) }} aplikasi
                 <span v-if="node.isCoolifyHost"> · Coolify host</span>
               </p>
+              <UiButton
+                class="mt-3"
+                variant="secondary"
+                size="sm"
+                :disabled="server.credentialSource === 'missing'"
+                @click="gatewayNode = node"
+                >Gate proxy</UiButton
+              >
             </div>
           </div>
           <p v-else class="text-xs text-muted">
@@ -254,5 +269,12 @@ async function syncServer(server: ApiResourceServer) {
         </p>
       </UiCard>
     </div>
+    <ProxyGatewayDialog
+      v-if="gatewayNode"
+      :key="gatewayNode.id"
+      :node-id="gatewayNode.id"
+      :node-name="gatewayNode.name"
+      @close="gatewayNode = null"
+    />
   </div>
 </template>

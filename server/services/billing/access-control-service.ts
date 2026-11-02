@@ -6,7 +6,7 @@ import { invoiceFingerprint } from './gate-token'
 import { overdueAccessWindow } from './access-policy'
 
 export interface BillingAccessDecision {
-  state: 'normal' | 'grace' | 'blocked'
+  state: 'normal' | 'grace' | 'blocked' | 'suspended' | 'cancelled'
   service: {
     id: string
     name: string
@@ -48,6 +48,15 @@ export class BillingAccessControlService {
     const service = await this.repository.findServiceByHost(host)
     if (!service) return normal()
 
+    // Lifecycle restrictions take priority over invoices and grace acknowledgements.
+    if (service.status === 'suspended' || service.status === 'cancelled') {
+      return {
+        ...normal(),
+        state: service.status,
+        service: { id: service.id, name: service.name, serviceNumber: service.serviceNumber },
+      }
+    }
+
     const effectiveDate = asOf ?? todayIsoDate(settings.billingTimezone)
     const invoice = await this.repository.findOldestOpenOverdueInvoice(service.id, effectiveDate)
     if (!invoice) return normal()
@@ -80,6 +89,7 @@ function billingGateTestDecision(
   secret: string,
   asOf?: string,
 ): BillingAccessDecision | null {
+  if (process.env.NODE_ENV === 'production') return null
   const testHost = process.env.BILLING_GATE_TEST_HOST?.trim().toLowerCase()
   const testState = process.env.BILLING_GATE_TEST_STATE
   if (!testHost || host.toLowerCase() !== testHost) return null

@@ -24,6 +24,9 @@ import { ServiceCatalogService } from '../../server/services/services/service-ca
 import { UserService } from '../../server/services/users/user-service'
 import { PortalService } from '../../server/services/portal/portal-service'
 import { ReportService } from '../../server/services/reports/report-service'
+import { useBillingConfig } from '../../server/utils/billing-config'
+import { SettingsService } from '../../server/services/settings/settings-service'
+import { SettingsRepository } from '../../server/repositories/settings'
 import { InfrastructureReconciliationService } from '../../server/services/infrastructure/reconciliation-service'
 
 vi.mock('../../server/utils/billing-config', () => ({
@@ -59,7 +62,10 @@ describeWithDatabase('billing flow integration', () => {
   let reportService: ReportService
   let userService: UserService
 
-  beforeAll(() => {
+  let enabledConfig: Awaited<ReturnType<typeof useBillingConfig>>
+
+  beforeAll(async () => {
+    enabledConfig = await useBillingConfig()
     const databaseName = new URL(testDatabaseUrl!).pathname.slice(1).toLowerCase()
     if (!databaseName.includes('test')) {
       throw new Error('Integration tests require a database whose name contains "test".')
@@ -115,6 +121,8 @@ describeWithDatabase('billing flow integration', () => {
   })
 
   beforeEach(async () => {
+    vi.mocked(useBillingConfig).mockReset().mockResolvedValue(enabledConfig)
+    vi.unstubAllGlobals()
     await pool.query(`
       truncate table
         audit_logs,
@@ -153,7 +161,7 @@ describeWithDatabase('billing flow integration', () => {
     })
   })
 
-  async function createCustomerPlanAndService(billingStartDate = '2026-01-01') {
+  async function createCustomerPlanAndService(billingStartDate = '2026-01-01', suffix = '') {
     const customer = await customers.create({
       name: 'Integration Customer',
       companyName: 'Integration Company',
@@ -161,7 +169,7 @@ describeWithDatabase('billing flow integration', () => {
       countryCode: 'ID',
     })
     const plan = await plans.create({
-      name: 'Managed Cloud',
+      name: `Managed Cloud${suffix}`,
       description: 'Integration test plan',
       currency: 'IDR',
       priceAmount: 1_000_000n,
@@ -314,6 +322,162 @@ describeWithDatabase('billing flow integration', () => {
     expect(paymentCount?.total).toBe(1)
   })
 
+  function manualInput(customerId: string, serviceId?: string, dated = true) {
+    return {
+      customerId,
+      issueDate: '2026-01-01',
+      dueDate: '2026-01-31',
+      items: [
+        {
+          serviceId,
+          description: 'Manual January subscription',
+          quantity: '1',
+          unitPriceAmount: 1_000_000n,
+          ...(dated ? { servicePeriodStart: '2026-01-01', servicePeriodEnd: '2026-01-31' } : {}),
+        },
+      ],
+    }
+  }
+
+  it.each(['unpaid', 'paid', 'cancelled'] as const)(
+    'recognizes a pre-existing %s manual invoice and bills only the next period',
+    async (status) => {
+      const { customer, service } = await createCustomerPlanAndService()
+      const manual = await invoiceService.createManual(manualInput(customer.id, service.id), actor)
+      await database.update(invoices).set({ status }).where(eq(invoices.id, manual.id))
+      // Manual creation does not need a marker for legacy coverage to be recognized.
+      expect(await database.select().from(serviceBillingRuns)).toHaveLength(0)
+      const january = await invoiceService.generateRecurring(
+        { asOf: '2026-01-01', limit: 100 },
+        actor,
+      )
+      expect(january.created).toHaveLength(0)
+      expect(january.skipped[0]?.reason).toContain(manual.invoiceNumber)
+      expect(
+        (await database.select().from(schema.services).where(eq(schema.services.id, service.id)))[0]
+          ?.nextDueDate,
+      ).toBe('2026-02-01')
+      const february = await invoiceService.generateRecurring(
+        { asOf: '2026-02-01', limit: 100 },
+        actor,
+      )
+      expect(february.created).toHaveLength(1)
+    },
+  )
+
+  it('holds an undated service invoice without advancing or blocking unrelated services', async () => {
+    const { customer, service } = await createCustomerPlanAndService()
+    await invoiceService.createManual(manualInput(customer.id, service.id, false), actor)
+    const other = await createCustomerPlanAndService('2026-01-01', ' other')
+    const result = await invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor)
+    expect(result.created.map((row) => row.serviceId)).toEqual([other.service.id])
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        serviceId: service.id,
+        reason: expect.stringContaining('belum memiliki periode'),
+      }),
+    ])
+    expect(
+      (await database.select().from(schema.services).where(eq(schema.services.id, service.id)))[0]
+        ?.nextDueDate,
+    ).toBe('2026-01-01')
+  })
+
+  it('resumes safely when an undated manual invoice receives its service period', async () => {
+    const { customer, service } = await createCustomerPlanAndService()
+    const manual = await invoiceService.createManual(
+      manualInput(customer.id, service.id, false),
+      actor,
+    )
+    await invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor)
+    await invoiceService.update(manual.id, manualInput(customer.id, service.id), actor)
+    const result = await invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor)
+    expect(result.created).toHaveLength(0)
+    expect(
+      (await database.select().from(schema.services).where(eq(schema.services.id, service.id)))[0]
+        ?.nextDueDate,
+    ).toBe('2026-02-01')
+  })
+
+  it('does not let an unlinked custom invoice suppress a subscription', async () => {
+    const { customer } = await createCustomerPlanAndService()
+    await invoiceService.createManual(manualInput(customer.id), actor)
+    expect(
+      (await invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor)).created,
+    ).toHaveLength(1)
+  })
+
+  it('prevents overlapping manual and recurring invoices racing for a period', async () => {
+    const { customer, service } = await createCustomerPlanAndService()
+    await Promise.allSettled([
+      invoiceService.createManual(manualInput(customer.id, service.id), actor),
+      invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor),
+    ])
+    const rows = await database.select().from(invoices).where(eq(invoices.customerId, customer.id))
+    expect(rows).toHaveLength(1)
+  })
+
+  it('rejects recurring when disabled and rechecks a switch changed during the batch', async () => {
+    await createCustomerPlanAndService()
+    vi.mocked(useBillingConfig).mockResolvedValue({
+      ...enabledConfig,
+      billingAutomationEnabled: false,
+    })
+    await expect(
+      invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor),
+    ).rejects.toMatchObject({ code: 'STATE_INVALID' })
+    vi.mocked(useBillingConfig).mockResolvedValueOnce(enabledConfig)
+    const result = await invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor)
+    expect(result.created).toHaveLength(0)
+    expect(result.skipped[0]?.reason).toContain('nonaktif')
+    expect(await database.select().from(invoices)).toHaveLength(0)
+    expect(await database.select().from(serviceBillingRuns)).toHaveLength(0)
+  })
+
+  it('persists disabled Settings despite enabled environment defaults', async () => {
+    vi.stubGlobal('useRuntimeConfig', () => ({
+      billingAutomationEnabled: true,
+      billingAccessControlEnabled: true,
+    }))
+    const settings = new SettingsService(
+      database,
+      new SettingsRepository(database),
+      new AuditLogRepository(database),
+    )
+    const before = await settings.getBillingSettings()
+    expect(before.billingAutomationEnabled).toBe(true)
+    await settings.updateBillingSettings(
+      {
+        companyName: 'Test Company',
+        companyEmail: null,
+        companyAddress: null,
+        companyTaxId: null,
+        billingTimezone: 'Asia/Makassar',
+        billingCurrency: 'IDR',
+        defaultTaxRate: null,
+        billingAutomationEnabled: false,
+        billingAccessControlEnabled: false,
+        overdueGraceDays: 7,
+        graceNoticeIntervalHours: 24,
+      },
+      actor,
+    )
+    expect(await settings.getBillingSettings()).toMatchObject({
+      billingAutomationEnabled: false,
+      billingAccessControlEnabled: false,
+    })
+    await createCustomerPlanAndService()
+    vi.mocked(useBillingConfig).mockImplementation(async (transaction) => ({
+      ...enabledConfig,
+      billingAutomationEnabled: (await settings.getBillingSettings(transaction))
+        .billingAutomationEnabled,
+    }))
+    await expect(
+      invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor),
+    ).rejects.toMatchObject({ code: 'STATE_INVALID' })
+    expect(await database.select().from(invoices)).toHaveLength(0)
+  })
+
   it('creates at most one recurring invoice for the same service period', async () => {
     const { customer, service } = await createCustomerPlanAndService('2026-01-01')
 
@@ -364,7 +528,7 @@ describeWithDatabase('billing flow integration', () => {
     expect(storedService?.nextDueDate).toBe('2026-02-01')
   })
 
-  it('resolves a service through an active managed resource domain', async () => {
+  it('uses synced Coolify domains instead of legacy managed domain records', async () => {
     const { service } = await createCustomerPlanAndService('2026-01-01')
     const [server] = await database
       .insert(schema.coolifyServers)
@@ -377,7 +541,7 @@ describeWithDatabase('billing flow integration', () => {
         coolifyUuid: 'managed-domain-resource',
         resourceType: 'application',
         name: 'Managed domain resource',
-        fqdn: null,
+        fqdn: 'https://customer.ocnetworks.web.id',
       })
       .returning()
     await database.insert(schema.serviceResources).values({
@@ -386,7 +550,7 @@ describeWithDatabase('billing flow integration', () => {
     })
     await database.insert(schema.resourceDomains).values({
       resourceId: resource!.id,
-      hostname: 'customer.ocnetworks.web.id',
+      hostname: 'obsolete.ocnetworks.web.id',
       type: 'platform',
       status: 'active',
     })
@@ -394,6 +558,17 @@ describeWithDatabase('billing flow integration', () => {
     await expect(
       new BillingAccessRepository(database).findServiceByHost('customer.ocnetworks.web.id'),
     ).resolves.toMatchObject({ id: service.id, serviceNumber: service.serviceNumber })
+    await expect(
+      new BillingAccessRepository(database).findServiceByHost('obsolete.ocnetworks.web.id'),
+    ).resolves.toBeNull()
+    await services.transition(
+      service.id,
+      { status: 'cancelled', reason: 'Customer cancelled' },
+      actor,
+    )
+    await expect(
+      new BillingAccessRepository(database).findServiceByHost('customer.ocnetworks.web.id'),
+    ).resolves.toMatchObject({ id: service.id, status: 'cancelled' })
   })
 
   it('stops recurring billing while suspended and resumes without losing the schedule', async () => {

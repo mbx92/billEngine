@@ -4,7 +4,6 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Cpu,
   Pause,
   Pencil,
   Play,
@@ -15,8 +14,6 @@ import {
 import type {
   ApiService,
   ApiServiceOptions,
-  ApiInfrastructureReconciliationPreview,
-  ApiInfrastructureReconciliationResult,
   InfrastructureComplianceStatus,
   Paginated,
 } from '#shared/types/api'
@@ -42,13 +39,6 @@ const showEditForm = ref(false)
 const showTransitionForm = ref(false)
 const showDeleteConfirm = ref(false)
 const deleting = ref(false)
-const showInfrastructureDialog = ref(false)
-const infrastructureLoading = ref(false)
-const infrastructureApplying = ref(false)
-const infrastructureError = ref<string | null>(null)
-const infrastructurePreview = ref<ApiInfrastructureReconciliationPreview | null>(null)
-const infrastructureResult = ref<ApiInfrastructureReconciliationResult | null>(null)
-const restartRunning = ref(true)
 const transitionTarget = ref<'active' | 'suspended' | 'cancelled'>('suspended')
 const transitionReason = ref('')
 const editForm = reactive({
@@ -354,63 +344,6 @@ async function deleteService() {
     deleting.value = false
   }
 }
-
-async function openInfrastructure(service: ApiService) {
-  selectedService.value = service
-  showInfrastructureDialog.value = true
-  infrastructureLoading.value = true
-  infrastructureError.value = null
-  infrastructurePreview.value = null
-  infrastructureResult.value = null
-  restartRunning.value = true
-
-  try {
-    const response = await $fetch<{ data: ApiInfrastructureReconciliationPreview }>(
-      `/api/services/${service.id}/infrastructure`,
-    )
-    infrastructurePreview.value = response.data
-  } catch (caught) {
-    infrastructureError.value = apiErrorMessage(caught, 'Preview infrastructure gagal dimuat.')
-  } finally {
-    infrastructureLoading.value = false
-  }
-}
-
-function closeInfrastructure() {
-  if (infrastructureApplying.value) return
-  showInfrastructureDialog.value = false
-}
-
-async function applyInfrastructure() {
-  if (!selectedService.value || !infrastructurePreview.value?.canApply) return
-  infrastructureApplying.value = true
-  infrastructureError.value = null
-  infrastructureResult.value = null
-
-  try {
-    const response = await $fetch<{ data: ApiInfrastructureReconciliationResult }>(
-      `/api/services/${selectedService.value.id}/infrastructure`,
-      {
-        method: 'POST',
-        body: {
-          fingerprint: infrastructurePreview.value.fingerprint,
-          restartRunning: restartRunning.value,
-        },
-      },
-    )
-    infrastructureResult.value = response.data
-    infrastructurePreview.value = response.data.preview
-    actionMessage.value =
-      response.data.status === 'completed'
-        ? `${response.data.updatedCount} resource berhasil disesuaikan dengan plan.`
-        : `Rekonsiliasi selesai sebagian: ${response.data.updatedCount} berhasil, ${response.data.failedCount} gagal.`
-    await Promise.all([refresh(), refreshOptions()])
-  } catch (caught) {
-    infrastructureError.value = apiErrorMessage(caught, 'Resource gagal disesuaikan dengan plan.')
-  } finally {
-    infrastructureApplying.value = false
-  }
-}
 </script>
 
 <template>
@@ -503,16 +436,17 @@ async function applyInfrastructure() {
         <div v-if="wizardStep === 1" class="grid gap-4 md:grid-cols-2">
           <label class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Customer</span>
-            <select
+            <UiSelect
               v-model="form.customerId"
               autofocus
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="" disabled>Pilih customer aktif</option>
-              <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-                {{ customer.companyName || customer.name }} · {{ customer.customerNumber }}
-              </option>
-            </select>
+              :options="[
+                { value: '', label: 'Pilih customer aktif', disabled: true },
+                ...customers.map((customer) => ({
+                  value: customer.id,
+                  label: `${customer.companyName || customer.name} · ${customer.customerNumber}`,
+                })),
+              ]"
+            />
             <span v-if="customers.length === 0" class="mt-1.5 block text-xs text-warning">
               Belum ada customer aktif.
               <NuxtLink class="font-semibold underline" to="/customers">Tambah customer</NuxtLink>
@@ -521,15 +455,16 @@ async function applyInfrastructure() {
           </label>
           <label class="block">
             <span class="mb-2 block text-xs font-semibold text-muted">Plan</span>
-            <select
+            <UiSelect
               v-model="form.planId"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="" disabled>Pilih plan aktif</option>
-              <option v-for="plan in plans" :key="plan.id" :value="plan.id">
-                {{ plan.name }} · {{ format.money(plan.priceAmount, plan.currency) }}
-              </option>
-            </select>
+              :options="[
+                { value: '', label: 'Pilih plan aktif', disabled: true },
+                ...plans.map((plan) => ({
+                  value: plan.id,
+                  label: `${plan.name} · ${format.money(plan.priceAmount, plan.currency)}`,
+                })),
+              ]"
+            />
             <span v-if="plans.length === 0" class="mt-1.5 block text-xs text-warning">
               Belum ada plan aktif.
               <NuxtLink class="font-semibold underline" to="/plans">Buat plan</NuxtLink>
@@ -572,12 +507,9 @@ async function applyInfrastructure() {
             </ul>
           </div>
           <p class="text-xs leading-5 text-muted md:col-span-2">
-            Service adalah langganan milik customer dan dapat dibuat sebelum aplikasinya ada. Untuk
-            aplikasi baru, buat service ini tanpa resource lalu lanjutkan dari halaman
-            <NuxtLink class="font-semibold text-brand underline" to="/provisioning">
-              Provisioning
-            </NuxtLink>
-            .
+            Deploy aplikasi dan atur domain di Coolify, lalu sinkronkan Resources dan hubungkan
+            resource ke service ini untuk billing dan gateway. Service tanpa resource dapat disimpan
+            terlebih dahulu; gateway berlaku setelah resource dihubungkan.
           </p>
         </div>
 
@@ -636,8 +568,8 @@ async function applyInfrastructure() {
           <div class="mb-4 rounded-md border border-info/30 bg-info/10 px-4 py-3">
             <p class="text-sm font-semibold text-ink">Langkah ini khusus aplikasi yang sudah ada</p>
             <p class="mt-1 text-xs leading-5 text-muted">
-              Kosongkan pilihan jika aplikasi akan dibuat oleh Provisioning. Resource Coolify yang
-              baru akan dihubungkan ke service ini secara otomatis setelah dibuat.
+              Kosongkan pilihan jika aplikasi belum dibuat di Coolify. Resource Coolify yang baru
+              akan dihubungkan ke service ini secara otomatis setelah dibuat.
             </p>
           </div>
           <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -776,7 +708,8 @@ async function applyInfrastructure() {
               </UiBadge>
             </div>
             <p v-else class="text-xs text-muted">
-              Belum ada aplikasi yang dihubungkan. Service siap dipilih sebagai target Provisioning.
+              Belum ada aplikasi yang dihubungkan. Deploy di Coolify, lalu sinkronkan dan hubungkan
+              resource.
             </p>
           </div>
         </div>
@@ -814,163 +747,6 @@ async function applyInfrastructure() {
     </UiDialog>
 
     <UiDialog
-      v-if="showInfrastructureDialog && selectedService"
-      title="Terapkan plan ke infrastructure"
-      :description="`${selectedService.serviceNumber} · ${selectedService.name}`"
-      size="xl"
-      :close-disabled="infrastructureApplying"
-      @close="closeInfrastructure"
-    >
-      <div v-if="infrastructureLoading" class="space-y-3">
-        <UiSkeleton v-for="row in 3" :key="row" height="3.5rem" />
-      </div>
-
-      <template v-else>
-        <p
-          v-if="infrastructureError"
-          class="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
-          role="alert"
-        >
-          {{ infrastructureError }}
-        </p>
-
-        <template v-if="infrastructurePreview">
-          <div class="mb-4 grid gap-3 sm:grid-cols-3">
-            <div class="rounded-md border bg-canvas/60 p-3">
-              <p class="text-[10px] font-semibold tracking-wide text-muted uppercase">Plan</p>
-              <p class="mt-1 text-sm font-medium text-ink">
-                {{ infrastructurePreview.planName || 'Legacy' }}
-              </p>
-            </div>
-            <div class="rounded-md border bg-canvas/60 p-3">
-              <p class="text-[10px] font-semibold tracking-wide text-muted uppercase">Resource</p>
-              <p class="mt-1 font-mono text-sm text-ink">
-                {{ infrastructurePreview.actualResourceCount }} /
-                {{ infrastructurePreview.expectedResourceCount ?? '—' }}
-              </p>
-            </div>
-            <div class="rounded-md border bg-canvas/60 p-3">
-              <p class="text-[10px] font-semibold tracking-wide text-muted uppercase">Perubahan</p>
-              <p class="mt-1 font-mono text-sm text-ink">
-                {{ infrastructurePreview.resources.filter((resource) => resource.changed).length }}
-                resource
-              </p>
-            </div>
-          </div>
-
-          <p
-            v-if="infrastructurePreview.blockingReason"
-            class="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
-          >
-            {{ infrastructurePreview.blockingReason }}
-          </p>
-
-          <div class="overflow-x-auto rounded-md border">
-            <table class="w-full min-w-[680px] text-left text-xs">
-              <thead class="border-b bg-canvas/60 text-[10px] tracking-wide text-muted uppercase">
-                <tr>
-                  <th class="px-3 py-2 font-semibold">Resource</th>
-                  <th class="px-3 py-2 font-semibold">CPU sekarang → plan</th>
-                  <th class="px-3 py-2 font-semibold">RAM sekarang → plan</th>
-                  <th class="px-3 py-2 font-semibold">Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="resource in infrastructurePreview.resources"
-                  :key="resource.id"
-                  class="border-b last:border-0"
-                >
-                  <td class="px-3 py-3">
-                    <span class="block font-medium text-ink">{{ resource.name }}</span>
-                    <span class="text-[10px] text-muted">{{ resource.serverName }}</span>
-                  </td>
-                  <td class="px-3 py-3 font-mono text-muted">
-                    {{ format.cpu(resource.currentCpuCores) }} →
-                    {{ format.cpu(resource.desiredCpuCores) }}
-                  </td>
-                  <td class="px-3 py-3 font-mono text-muted">
-                    {{ format.bytes(resource.currentMemoryBytes) }} →
-                    {{ format.bytes(resource.desiredMemoryBytes) }}
-                  </td>
-                  <td class="px-3 py-3">
-                    <UiBadge :tone="resource.changed ? 'warning' : 'success'">
-                      {{ resource.changed ? 'Akan diubah' : 'Sesuai' }}
-                    </UiBadge>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <label
-            v-if="infrastructurePreview.restartRequired"
-            class="mt-4 flex items-start gap-3 rounded-md border border-warning/30 bg-warning/5 p-3 text-sm"
-          >
-            <input v-model="restartRunning" type="checkbox" class="mt-0.5 size-4 accent-brand" />
-            <span>
-              <span class="block font-medium text-ink"
-                >Restart application yang sedang berjalan</span
-              >
-              <span class="mt-1 block text-xs leading-5 text-muted">
-                Coolify memerlukan restart atau redeploy agar limit baru aktif pada container.
-                Restart dapat menyebabkan interupsi singkat.
-              </span>
-            </span>
-          </label>
-
-          <div
-            v-if="infrastructureResult"
-            class="mt-4 rounded-md border border-brand/30 bg-brand/5 p-3"
-          >
-            <p class="text-sm font-semibold text-ink">
-              {{
-                infrastructureResult.status === 'completed'
-                  ? 'Rekonsiliasi berhasil'
-                  : infrastructureResult.status === 'partial'
-                    ? 'Rekonsiliasi selesai sebagian'
-                    : 'Rekonsiliasi gagal'
-              }}
-            </p>
-            <p class="mt-1 text-xs text-muted">
-              {{ infrastructureResult.updatedCount }} diperbarui ·
-              {{ infrastructureResult.restartedCount }} restart dijadwalkan ·
-              {{ infrastructureResult.failedCount }} gagal
-            </p>
-            <p v-if="infrastructureResult.verificationFailed" class="mt-2 text-xs text-warning">
-              Sinkronisasi verifikasi gagal. Jalankan Sync Coolify sebelum mencoba kembali.
-            </p>
-            <ul class="mt-3 space-y-1 text-xs text-muted">
-              <li v-for="resource in infrastructureResult.resources" :key="resource.id">
-                {{ resource.name }} · {{ resource.message || resource.status }}
-              </li>
-            </ul>
-          </div>
-        </template>
-      </template>
-
-      <template #footer>
-        <div class="flex justify-end gap-2">
-          <UiButton
-            variant="secondary"
-            :disabled="infrastructureApplying"
-            @click="closeInfrastructure"
-          >
-            Tutup
-          </UiButton>
-          <UiButton
-            :disabled="
-              infrastructureApplying || infrastructureLoading || !infrastructurePreview?.canApply
-            "
-            @click="applyInfrastructure"
-          >
-            {{ infrastructureApplying ? 'Menerapkan…' : 'Terapkan ke Coolify' }}
-          </UiButton>
-        </div>
-      </template>
-    </UiDialog>
-
-    <UiDialog
       v-if="showEditForm && selectedService"
       title="Edit service"
       :description="`${selectedService.serviceNumber} · perubahan plan berlaku untuk invoice berikutnya.`"
@@ -986,14 +762,15 @@ async function applyInfrastructure() {
         <UiInput v-model="editForm.name" label="Nama service" required />
         <label>
           <span class="mb-2 block text-xs font-semibold text-muted">Plan</span>
-          <select
+          <UiSelect
             v-model="editForm.planId"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option v-for="plan in plans" :key="plan.id" :value="plan.id">
-              {{ plan.name }} · {{ format.money(plan.priceAmount, plan.currency) }}
-            </option>
-          </select>
+            :options="[
+              ...plans.map((plan) => ({
+                value: plan.id,
+                label: `${plan.name} · ${format.money(plan.priceAmount, plan.currency)}`,
+              })),
+            ]"
+          />
         </label>
         <UiInput v-model="editForm.nextDueDate" label="Invoice berikutnya" type="date" />
         <UiInput v-model="editForm.taxRate" label="Tax rate" placeholder="0.11" />
@@ -1067,17 +844,16 @@ async function applyInfrastructure() {
         </label>
         <p class="mt-3 text-xs text-muted">
           <template v-if="transitionTarget === 'suspended'">
-            Semua Coolify application yang terhubung akan dihentikan tanpa Docker cleanup. Service
-            juga berhenti menghasilkan recurring invoice baru.
+            Gateway akan membatasi akses layanan dan recurring invoice baru dihentikan. Aktifkan
+            gateway di Settings dan pasang middleware pada aplikasi di Coolify.
           </template>
           <template v-else-if="transitionTarget === 'active'">
-            Semua Coolify application yang terhubung akan dijalankan kembali dan recurring billing
-            akan aktif.
+            Recurring billing aktif kembali. Gateway membuka akses jika tidak ada invoice yang
+            melewati grace period.
           </template>
           <template v-else>
-            Service tidak akan menghasilkan recurring invoice baru. Cancellation bersifat permanen
-            dan aplikasi Coolify akan dihentikan tanpa menghapus resource. Database masuk masa
-            retensi 30 hari dan tidak langsung dihapus.
+            Service tidak akan menghasilkan recurring invoice baru dan gateway membatasi akses.
+            Cancellation bersifat permanen. Pengelolaan aplikasi dan database dilakukan di Coolify.
           </template>
         </p>
       </form>
@@ -1107,8 +883,8 @@ async function applyInfrastructure() {
         class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
       >
         Hanya service berstatus cancelled yang dapat dihapus, dan hanya jika belum pernah
-        ditagihkan. Aplikasi Coolify dan database PostgreSQL tidak dihapus. Tindakan ini tidak
-        dapat dibatalkan.
+        ditagihkan. Aplikasi Coolify dan database PostgreSQL tidak dihapus. Tindakan ini tidak dapat
+        dibatalkan.
       </div>
       <template #footer>
         <div class="flex justify-end gap-2">
@@ -1188,16 +964,6 @@ async function applyInfrastructure() {
                   <span class="mt-1 block text-xs text-brand">{{
                     service.planName || 'Legacy'
                   }}</span>
-                  <span
-                    v-if="service.database"
-                    class="mt-1 block max-w-52 truncate font-mono text-[10px] text-muted"
-                  >
-                    {{ service.database.clusterName }} · {{ service.database.databaseName }} ·
-                    {{ service.database.status }}
-                  </span>
-                  <UiBadge v-else-if="service.planDatabaseMode === 'shared'" tone="warning">
-                    Database belum diprovision
-                  </UiBadge>
                 </td>
                 <td class="px-4 py-3">
                   <span class="block text-ink">{{ service.customerName }}</span>
@@ -1258,14 +1024,6 @@ async function applyInfrastructure() {
                 </td>
                 <td class="px-4 py-3">
                   <div class="flex justify-end gap-1">
-                    <UiButton
-                      v-if="service.status !== 'cancelled'"
-                      variant="ghost"
-                      size="sm"
-                      title="Terapkan plan ke Coolify"
-                      @click="openInfrastructure(service)"
-                      ><Cpu :size="14"
-                    /></UiButton>
                     <UiButton
                       v-if="service.status !== 'cancelled'"
                       variant="ghost"

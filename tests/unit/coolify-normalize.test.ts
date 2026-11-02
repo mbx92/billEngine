@@ -7,6 +7,20 @@ import {
 } from '../../server/integrations/coolify/normalize'
 
 describe('Coolify normalization', () => {
+  it.each([
+    { app: { domain: 'https://app.example.test,https://api.example.test' } },
+    [{ name: 'app', domain: 'https://app.example.test,https://api.example.test' }],
+    JSON.stringify({ app: { domain: 'https://app.example.test,https://api.example.test' } }),
+  ])('syncs Compose domains for gateway ownership', (docker_compose_domains) => {
+    const resource = normalizeCoolifyApplication({
+      uuid: 'compose',
+      name: 'Compose app',
+      fqdn: 'https://app.example.test',
+      docker_compose_domains,
+    })
+    expect(resource.fqdn).toBe('https://app.example.test,https://api.example.test')
+  })
+
   it('normalizes provider status variants', () => {
     expect(normalizeCoolifyStatus('running:healthy')).toBe('running')
     expect(normalizeCoolifyStatus('running:unhealthy')).toBe('degraded')

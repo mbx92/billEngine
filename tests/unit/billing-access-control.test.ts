@@ -83,4 +83,58 @@ describe('billing access control service', () => {
       service.evaluate('app.example.test', 'secret', '2026-09-18'),
     ).resolves.toMatchObject({ state: 'blocked', daysPastDue: 8 })
   })
+
+  it.each(['suspended', 'cancelled'])(
+    'blocks %s services even without an invoice',
+    async (status) => {
+      const repository = {
+        findServiceByHost: vi
+          .fn()
+          .mockResolvedValue({ id: 's1', name: 'App', serviceNumber: 'SVC-1', status }),
+        findOldestOpenOverdueInvoice: vi.fn(),
+      }
+      const settingsService = { getBillingSettings: vi.fn().mockResolvedValue(settings) }
+      const gate = new BillingAccessControlService(repository as never, settingsService as never)
+
+      await expect(gate.evaluate('app.example.test', 'secret')).resolves.toMatchObject({
+        state: status,
+        invoice: null,
+      })
+      expect(repository.findOldestOpenOverdueInvoice).not.toHaveBeenCalled()
+    },
+  )
+
+  it('opens access after payment without contacting Coolify', async () => {
+    const repository = {
+      findServiceByHost: vi.fn().mockResolvedValue({ id: 's1', status: 'active' }),
+      findOldestOpenOverdueInvoice: vi.fn().mockResolvedValue(null),
+    }
+    const gate = new BillingAccessControlService(
+      repository as never,
+      {
+        getBillingSettings: vi.fn().mockResolvedValue(settings),
+      } as never,
+    )
+    await expect(gate.evaluate('app.example.test', 'secret')).resolves.toMatchObject({
+      state: 'normal',
+    })
+  })
+
+  it('ignores test overrides in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BILLING_GATE_TEST_HOST', 'app.example.test')
+    vi.stubEnv('BILLING_GATE_TEST_STATE', 'paid')
+    const repository = {
+      findServiceByHost: vi.fn().mockResolvedValue({ id: 's1', status: 'suspended' }),
+    }
+    const gate = new BillingAccessControlService(
+      repository as never,
+      {
+        getBillingSettings: vi.fn().mockResolvedValue(settings),
+      } as never,
+    )
+    await expect(gate.evaluate('app.example.test', 'secret')).resolves.toMatchObject({
+      state: 'suspended',
+    })
+  })
 })

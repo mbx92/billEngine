@@ -87,6 +87,22 @@ export class CoolifyClient {
     return this.baseUrl
   }
 
+  async getServerProxy(uuid: string) {
+    return this.request<{ proxy_type?: string; configuration?: string | null }>(
+      `/api/v1/servers/${encodeURIComponent(uuid)}/proxy`,
+    )
+  }
+
+  async saveServerProxyConfiguration(uuid: string, configuration: string) {
+    return this.request<unknown>(
+      `/api/v1/servers/${encodeURIComponent(uuid)}/proxy/configuration`,
+      {
+        method: 'PUT',
+        body: { configuration: Buffer.from(configuration, 'utf8').toString('base64') },
+      },
+    )
+  }
+
   async testConnection(): Promise<boolean> {
     await this.request<unknown>('/api/v1/version')
     return true
@@ -324,6 +340,14 @@ export class CoolifyClient {
     })
   }
 
+  async saveApplicationGatewayLabels(uuid: string, customLabels: string) {
+    await this.updateApplication(uuid, {
+      custom_labels: Buffer.from(customLabels, 'utf8').toString('base64'),
+      is_container_label_readonly_enabled: false,
+      instant_deploy: false,
+    })
+  }
+
   async updateApplicationComposeRaw(uuid: string, dockerComposeRaw: string) {
     await this.updateApplication(uuid, {
       docker_compose_raw: dockerComposeRaw,
@@ -428,10 +452,10 @@ export class CoolifyClient {
 
   private async request<T>(
     path: string,
-    options: { method?: 'GET' | 'POST' | 'PATCH'; body?: Record<string, unknown> } = {},
+    options: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT'; body?: Record<string, unknown> } = {},
   ): Promise<T> {
     const url = new URL(path, this.baseUrl.endsWith('/') ? this.baseUrl : `${this.baseUrl}/`)
-    const maxAttempts = options.method === 'POST' ? 1 : 2
+    const maxAttempts = options.method === 'POST' || options.method === 'PUT' ? 1 : 2
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
@@ -488,9 +512,7 @@ function coolifyHttpErrorMessage(status: number, body: string) {
   if (status === 403) return 'Coolify API menolak permintaan (HTTP 403).'
   if (status === 404) {
     const notFound = extractCoolifyMessage(body)
-    return notFound
-      ? `Coolify: ${notFound}`
-      : 'Endpoint Coolify API tidak ditemukan (HTTP 404).'
+    return notFound ? `Coolify: ${notFound}` : 'Endpoint Coolify API tidak ditemukan (HTTP 404).'
   }
   if (status >= 500) return `Coolify API sedang error (HTTP ${status}).`
 
@@ -541,7 +563,10 @@ function extractCoolifyValidationSummary(body: string): string | null {
 }
 
 function sanitizeCoolifyDetail(value: string) {
-  return value.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 180)
+  return value
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(0, 180)
 }
 
 function coolifyNetworkErrorMessage(baseUrl: string) {

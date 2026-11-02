@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test'
 
-test('shows the administrator login boundary', async ({ page }) => {
+test('shows the login boundary', async ({ page }) => {
   await page.goto('/login')
-  await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Masuk', exact: true })).toBeVisible()
   await expect(page.getByLabel('Email')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Masuk', exact: true })).toBeVisible()
 })
 
 test('switches and persists the color theme', async ({ page }) => {
@@ -26,7 +26,7 @@ test('uses compact card spacing on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/login')
 
-  const card = page.getByRole('heading', { name: 'Administrator sign in' }).locator('..')
+  const card = page.getByRole('heading', { name: 'Masuk', exact: true }).locator('..')
   const padding = await card.evaluate((element) => getComputedStyle(element).padding)
   expect(padding).toBe('16px')
 })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Globe2, LoaderCircle, RefreshCw, Search, Tags, X } from '@lucide/vue'
+import { LoaderCircle, RefreshCw, Search, Tags, X } from '@lucide/vue'
 import type {
   ApiCoolifySyncResult,
   ApiResourceListItem,
@@ -33,6 +33,7 @@ const selectedIds = ref<string[]>([])
 const bulkClassification = ref<ResourceClassification>('billable')
 const bulkSaving = ref(false)
 const rowSavingIds = ref<string[]>([])
+const gatewayResource = ref<ApiResourceListItem | null>(null)
 
 const resourceQuery = computed(() => ({
   page: page.value,
@@ -152,9 +153,10 @@ function applyClassificationLocally(
   }
 }
 
-async function updateClassification(resource: ApiResourceListItem, event: Event) {
-  const select = event.target as HTMLSelectElement
-  const classification = select.value as ResourceClassification
+async function updateClassification(
+  resource: ApiResourceListItem,
+  classification: ResourceClassification,
+) {
   if (classification === resource.classification) return
 
   rowSavingIds.value = [...rowSavingIds.value, resource.id]
@@ -172,7 +174,6 @@ async function updateClassification(resource: ApiResourceListItem, event: Event)
     applyClassificationLocally([resource.id], classification, response.summary)
   } catch (caught) {
     actionError.value = apiErrorMessage(caught, 'Gagal mengubah klasifikasi resource.')
-    select.value = resource.classification
   } finally {
     rowSavingIds.value = rowSavingIds.value.filter((id) => id !== resource.id)
   }
@@ -380,41 +381,41 @@ function getSyncErrorMessage(error: unknown) {
         </label>
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Status</span>
-          <select
+          <UiSelect
             v-model="statusFilter"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="all">Semua status</option>
-            <option value="running">Running</option>
-            <option value="stopped">Stopped</option>
-            <option value="restarting">Restarting</option>
-            <option value="degraded">Degraded</option>
-            <option value="unknown">Unknown</option>
-          </select>
+            :options="[
+              { value: 'all', label: 'Semua status' },
+              { value: 'running', label: 'Running' },
+              { value: 'stopped', label: 'Stopped' },
+              { value: 'restarting', label: 'Restarting' },
+              { value: 'degraded', label: 'Degraded' },
+              { value: 'unknown', label: 'Unknown' },
+            ]"
+          />
         </label>
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Classification</span>
-          <select
+          <UiSelect
             v-model="classificationFilter"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="all">Semua classification</option>
-            <option value="billable">Billable</option>
-            <option value="internal">Internal</option>
-            <option value="ignored">Ignored</option>
-          </select>
+            :options="[
+              { value: 'all', label: 'Semua classification' },
+              { value: 'billable', label: 'Billable' },
+              { value: 'internal', label: 'Internal' },
+              { value: 'ignored', label: 'Ignored' },
+            ]"
+          />
         </label>
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Assignment</span>
-          <select
+          <UiSelect
             v-model="assignmentFilter"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="all">Semua assignment</option>
-            <option value="assigned">Assigned</option>
-            <option value="unassigned">Unassigned</option>
-            <option value="not_billed">Not billed</option>
-          </select>
+            :options="[
+              { value: 'all', label: 'Semua assignment' },
+              { value: 'assigned', label: 'Assigned' },
+              { value: 'unassigned', label: 'Unassigned' },
+              { value: 'not_billed', label: 'Not billed' },
+            ]"
+          />
         </label>
         <div class="flex items-end gap-2">
           <UiButton type="submit">Terapkan</UiButton>
@@ -433,14 +434,16 @@ function getSyncErrorMessage(error: unknown) {
         </div>
         <div v-if="selectedIds.length" class="flex flex-wrap items-center gap-2">
           <span class="text-xs text-muted">{{ selectedIds.length }} dipilih</span>
-          <select
+          <UiSelect
             v-model="bulkClassification"
-            class="focus-ring h-8 rounded-md border border-line-strong bg-canvas px-2 text-xs text-ink"
-          >
-            <option value="billable">Billable</option>
-            <option value="internal">Internal</option>
-            <option value="ignored">Ignored</option>
-          </select>
+            aria-label="Classification untuk resource terpilih"
+            size="sm"
+            :options="[
+              { value: 'billable', label: 'Billable' },
+              { value: 'internal', label: 'Internal' },
+              { value: 'ignored', label: 'Ignored' },
+            ]"
+          />
           <UiButton size="sm" :disabled="bulkSaving" @click="updateBulkClassification">
             <Tags :size="14" aria-hidden="true" />
             {{ bulkSaving ? 'Menyimpan…' : 'Ubah classification' }}
@@ -492,7 +495,6 @@ function getSyncErrorMessage(error: unknown) {
                 <th class="px-4 py-3 text-right font-semibold">CPU limit / usage</th>
                 <th class="px-4 py-3 text-right font-semibold">RAM limit / usage</th>
                 <th class="px-4 py-3 font-semibold">Last seen</th>
-                <th class="px-4 py-3 text-right font-semibold">Domain</th>
               </tr>
             </thead>
             <tbody>
@@ -513,6 +515,14 @@ function getSyncErrorMessage(error: unknown) {
                 <td class="px-4 py-3">
                   <span class="block font-medium text-ink">{{ resource.name }}</span>
                   <span class="block font-mono text-xs text-muted">{{ resource.coolifyUuid }}</span>
+                  <UiButton
+                    v-if="resource.resourceType === 'application'"
+                    size="sm"
+                    variant="ghost"
+                    class="mt-2"
+                    @click="gatewayResource = resource"
+                    >Konfigurasi gate</UiButton
+                  >
                   <span
                     v-if="resource.projectName || resource.environmentName"
                     class="mt-1 block text-[11px] text-muted"
@@ -527,17 +537,18 @@ function getSyncErrorMessage(error: unknown) {
                 </td>
                 <td class="px-4 py-3">
                   <div class="flex items-center gap-2">
-                    <select
-                      :value="resource.classification"
-                      class="focus-ring h-8 rounded-md border border-line-strong bg-canvas px-2 text-xs font-semibold text-ink disabled:opacity-50"
+                    <UiSelect
+                      :model-value="resource.classification"
                       :disabled="isRowSaving(resource.id)"
                       :aria-label="`Classification ${resource.name}`"
+                      size="sm"
+                      :options="[
+                        { value: 'billable', label: 'Billable' },
+                        { value: 'internal', label: 'Internal' },
+                        { value: 'ignored', label: 'Ignored' },
+                      ]"
                       @change="updateClassification(resource, $event)"
-                    >
-                      <option value="billable">Billable</option>
-                      <option value="internal">Internal</option>
-                      <option value="ignored">Ignored</option>
-                    </select>
+                    />
                     <span
                       v-if="isRowSaving(resource.id)"
                       class="inline-flex items-center gap-1 text-[11px] text-muted"
@@ -581,15 +592,6 @@ function getSyncErrorMessage(error: unknown) {
                 <td class="px-4 py-3 text-xs text-muted">
                   {{ format.dateTime(resource.lastSeenAt) }}
                 </td>
-                <td class="px-4 py-3 text-right">
-                  <NuxtLink
-                    :to="`/resources/${resource.id}/domains`"
-                    class="focus-ring inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong bg-canvas px-2.5 text-xs font-semibold text-ink hover:bg-surface-raised"
-                  >
-                    <Globe2 :size="14" aria-hidden="true" />
-                    Kelola
-                  </NuxtLink>
-                </td>
               </tr>
             </tbody>
           </table>
@@ -605,5 +607,11 @@ function getSyncErrorMessage(error: unknown) {
         />
       </template>
     </UiCard>
+    <ResourceGatewayDialog
+      v-if="gatewayResource"
+      :key="gatewayResource.id"
+      :resource="gatewayResource"
+      @close="gatewayResource = null"
+    />
   </div>
 </template>

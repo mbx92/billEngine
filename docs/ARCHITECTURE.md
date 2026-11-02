@@ -1,5 +1,23 @@
 # ARCHITECTURE --- Coolify Billing Platform
 
+## Current responsibility boundary
+
+Coolify owns all deployment and infrastructure changes. BillEngine reads Coolify
+resources for billing ownership and handles invoices, payments, and access through
+its gateway. Service lifecycle changes never start/stop containers or schedule
+database deletion. Plan limits are reference values, not infrastructure commands.
+Explicit gateway configuration actions can merge middleware references into
+application labels or the server proxy's entrypoint flags through the Coolify API.
+The entrypoint mode supports Docker Compose without changing application definitions.
+Dynamic middleware YAML installation, proxy restart and application redeployment
+remain manual Coolify operations; synchronization stays read-only.
+Operational provisioning pages, APIs, and the background worker are retired;
+legacy tables remain for migration compatibility and history. See the
+[current workflow](../README.md#operating-workflow) and [gateway](BILLING-GATE.md).
+
+The original architecture below is retained as design history; the current
+responsibility boundary above takes precedence.
+
 **Version:** 0.1\
 **Status:** Initial Architecture / MVP\
 **Related:** `PRD.md`, `DATABASE-SCHEMA.md`

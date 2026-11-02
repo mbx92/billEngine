@@ -99,6 +99,22 @@ describe('billing settings overlay', () => {
     updatedAt: null,
   }
 
+  it.each([false, true])('preserves saved false even with stale fields: %s', (stale) => {
+    const resolved = overlayStoredBillingSettings(
+      { ...fallback, billingAutomationEnabled: true, billingAccessControlEnabled: true },
+      {
+        ...validSettings,
+        billingAutomationEnabled: false,
+        billingAccessControlEnabled: false,
+        ...(stale ? { billingTimezone: 'invalid' } : {}),
+      },
+      null,
+    )
+    expect(resolved.billingAutomationEnabled).toBe(false)
+    expect(resolved.billingAccessControlEnabled).toBe(false)
+    expect(resolved.source).toBe('database')
+  })
+
   it('uses the stored company name instead of the environment fallback', () => {
     const resolved = overlayStoredBillingSettings(
       fallback,

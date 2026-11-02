@@ -88,7 +88,7 @@ export function normalizeCoolifyApplication(
     resourceType: 'application',
     name: application.name,
     status: normalizeCoolifyStatus(application.status),
-    fqdn: application.fqdn ?? application.domains ?? null,
+    fqdn: applicationDomains(application),
     projectName: application.project?.name ?? null,
     environmentName: application.environment?.name ?? null,
     coolifyNodeUuid: application.destination?.server?.uuid ?? null,
@@ -119,4 +119,38 @@ export function normalizeCoolifyServer(server: CoolifyServer): NormalizedCoolify
     isCoolifyHost: server.is_coolify_host ?? false,
     rawMetadata: sanitizeMetadata(server) as Record<string, unknown>,
   }
+}
+
+// Domains are configured in Coolify. Include Compose hosts so gateway ownership
+// does not depend on the retired local domain-provisioning records.
+function applicationDomains(application: CoolifyApplication): string | null {
+  const values = [application.fqdn, application.domains]
+  let compose: unknown = application.docker_compose_domains
+  if (typeof compose === 'string') {
+    try {
+      compose = JSON.parse(compose)
+    } catch {
+      compose = null
+    }
+  }
+  if (compose && typeof compose === 'object') {
+    for (const entry of Object.values(compose)) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        'domain' in entry &&
+        typeof entry.domain === 'string'
+      ) {
+        values.push(entry.domain)
+      }
+    }
+  }
+  const domains = values.flatMap(
+    (value) =>
+      value
+        ?.split(',')
+        .map((domain) => domain.trim())
+        .filter(Boolean) ?? [],
+  )
+  return [...new Set(domains)].join(',') || null
 }

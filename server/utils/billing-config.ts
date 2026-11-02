@@ -1,3 +1,4 @@
+import type { Database, Transaction } from '../database/client'
 import { SettingsService } from '../services/settings/settings-service'
 
 export interface BillingSeller {
@@ -21,8 +22,8 @@ export interface BillingConfig {
  * Company identity and billing defaults come from server-side configuration,
  * not from hardcoded constants (docs §17: tax must be configurable).
  */
-export async function useBillingConfig(): Promise<BillingConfig> {
-  const settings = await new SettingsService().getBillingSettings()
+export async function useBillingConfig(database?: Database | Transaction): Promise<BillingConfig> {
+  const settings = await new SettingsService().getBillingSettings(database)
 
   return {
     timezone: settings.billingTimezone,

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import type { InvoiceStatus } from '../../../shared/constants/domain'
 import type {
   CreateInvoiceInput,
@@ -18,6 +18,7 @@ import { AuditLogRepository } from '../../repositories/audit'
 import { CustomerRepository } from '../../repositories/customers'
 import { allocateDocumentNumber } from '../../repositories/document-sequences'
 import { InvoiceRepository, type NewInvoiceItem } from '../../repositories/invoices'
+import { BILLING_SETTINGS_KEY } from '../../repositories/settings'
 import { ServiceRepository } from '../../repositories/services'
 import { useBillingConfig } from '../../utils/billing-config'
 import { todayIsoDate } from '../../utils/clock'
@@ -44,8 +45,6 @@ export interface InvoiceListFilters {
   customerId?: string
   query?: string
 }
-
-type DueService = Awaited<ReturnType<InvoiceRepository['listDueServices']>>[number]
 
 export class InvoiceService {
   constructor(
@@ -108,6 +107,8 @@ export class InvoiceService {
     }
 
     return this.database.transaction(async (transaction) => {
+      await this.lockManualServices(transaction, input.items)
+      await this.assertManualCoverageAvailable(transaction, input.items)
       const year = periodKeyOf(input.issueDate)
       const sequence = await allocateDocumentNumber(transaction, 'invoice', year)
       const invoiceNumber = formatInvoiceNumber(year, sequence)
@@ -207,11 +208,7 @@ export class InvoiceService {
 
     const today = todayIsoDate(config.timezone)
     const nextStatus =
-      existing.status === 'draft'
-        ? 'draft'
-        : input.dueDate < today
-          ? 'overdue'
-          : 'unpaid'
+      existing.status === 'draft' ? 'draft' : input.dueDate < today ? 'overdue' : 'unpaid'
 
     return this.database.transaction(async (transaction) => {
       const locked = await this.invoices.findByIdForUpdate(id, transaction)
@@ -236,6 +233,8 @@ export class InvoiceService {
         throw DomainError.invalidState('Invoice dengan credit note tidak dapat diubah.')
       }
 
+      await this.lockManualServices(transaction, input.items)
+      await this.assertManualCoverageAvailable(transaction, input.items, id)
       const items = mapManualInvoiceItems(input, totals)
       await this.invoices.replaceItems(transaction, id, items)
       const updated = await this.invoices.updateEditable(transaction, id, {
@@ -299,88 +298,106 @@ export class InvoiceService {
 
     const result: RecurringRunResult = { asOf, created: [], skipped: [], processed: 0 }
 
-    for (const service of dueServices.slice(0, input.limit)) {
-      const billingDate = service.hasBillingRun ? service.nextDueDate : service.billingStartDate
-
-      if (!billingDate) {
-        result.skipped.push({ serviceId: service.id, reason: 'jadwal invoice kosong' })
-        result.processed += 1
-        continue
-      }
-
-      const period = billingPeriod(billingDate, service.billingCycle)
-      if (!period) {
-        result.skipped.push({ serviceId: service.id, reason: 'periode billing tidak valid' })
-        result.processed += 1
-        continue
-      }
-
-      if (await this.invoices.findBillingRun(service.id, period.start, period.end)) {
-        // Older/imported data can contain a completed billing run while the
-        // service schedule still points at that same period. Repair the
-        // cursor so every hourly pass does not keep selecting and skipping it.
-        const advanced = nextBillingDate(billingDate, service.billingCycle)
-        await this.invoices.advanceNextDueDate(this.database, service.id, advanced)
-        result.skipped.push({
-          serviceId: service.id,
-          reason: 'invoice periode ini sudah ada; jadwal billing diperbaiki',
-        })
-        result.processed += 1
-        continue
-      }
-      const totals = computeInvoiceTotals([
-        { quantity: '1', unitPriceAmount: service.priceAmount, taxRate: service.taxRate },
-      ])
-
+    for (const candidate of dueServices.slice(0, input.limit)) {
       try {
-        const created = await this.createRecurringInvoice(
-          service,
-          period,
-          totals,
-          asOf,
-          billingDate,
-          actor,
-        )
-        result.created.push({
-          serviceId: service.id,
-          invoiceId: created.id,
-          invoiceNumber: created.invoiceNumber,
-        })
+        const outcome = await this.processRecurringService(candidate.id, asOf, actor)
+        if (outcome.created) {
+          result.created.push({
+            serviceId: candidate.id,
+            invoiceId: outcome.created.id,
+            invoiceNumber: outcome.created.invoiceNumber,
+          })
+        } else {
+          result.skipped.push({ serviceId: candidate.id, reason: outcome.reason! })
+        }
+        result.processed += 1
+        if (outcome.disabled) break
       } catch (error) {
         result.skipped.push({
-          serviceId: service.id,
+          serviceId: candidate.id,
           reason: error instanceof Error ? error.message : 'gagal membuat invoice',
         })
+        result.processed += 1
       }
-
-      result.processed += 1
     }
-
     return result
   }
 
-  private async createRecurringInvoice(
-    service: DueService,
-    period: { start: string; end: string },
-    totals: ComputedInvoiceTotals,
-    issueDate: string,
-    billingDate: string,
-    actor: ActorContext,
+  private async lockManualServices(transaction: Transaction, items: CreateInvoiceInput['items']) {
+    const ids = [
+      ...new Set(items.flatMap((item) => (item.serviceId ? [item.serviceId] : []))),
+    ].sort()
+    for (const id of ids) await this.invoices.lockServiceBilling(transaction, id)
+  }
+
+  private async assertManualCoverageAvailable(
+    transaction: Transaction,
+    items: CreateInvoiceInput['items'],
+    invoiceId?: string,
   ) {
-    const customer = await this.customers.findById(service.customerId)
-    if (!customer) throw new Error('Customer tidak ditemukan.')
+    for (const item of items) {
+      if (!item.serviceId || !item.servicePeriodStart || !item.servicePeriodEnd) continue
+      const covered = await this.invoices.findInvoiceCoverage(
+        transaction,
+        item.serviceId,
+        { start: item.servicePeriodStart, end: item.servicePeriodEnd },
+        invoiceId,
+        false,
+      )
+      if (covered)
+        throw DomainError.conflict(
+          `Service sudah ditagihkan pada ${covered.invoiceNumber}. Periksa periode invoice tersebut.`,
+        )
+    }
+  }
 
-    const config = await useBillingConfig()
-    const dueDate = addDays(issueDate, service.paymentDueDays)
-    const advanced = nextBillingDate(billingDate, service.billingCycle)
-
+  private async processRecurringService(serviceId: string, issueDate: string, actor: ActorContext) {
     return this.database.transaction(async (transaction) => {
-      // Re-check inside the transaction so a concurrent run cannot allocate the
-      // same period twice.
+      // Settings updates take the exclusive counterpart, so after disabling has
+      // committed no in-flight batch can commit another recurring invoice.
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock_shared(hashtext(${BILLING_SETTINGS_KEY}))`,
+      )
+      const config = await useBillingConfig(transaction)
+      if (!config.billingAutomationEnabled)
+        return { reason: 'billing automation nonaktif', disabled: true }
+      const service = await this.invoices.lockServiceBilling(transaction, serviceId)
+      if (!service || service.status !== 'active') return { reason: 'service tidak aktif' }
+      const billingDate = service.hasBillingRun ? service.nextDueDate : service.billingStartDate
+      if (!billingDate) return { reason: 'jadwal invoice kosong' }
+      if (addDays(billingDate, -service.invoiceLeadDays) > issueDate)
+        return { reason: 'jadwal invoice belum tiba' }
+      const period = billingPeriod(billingDate, service.billingCycle)
+      if (!period) return { reason: 'periode billing tidak valid' }
+      const advanced = nextBillingDate(billingDate, service.billingCycle)
       if (await this.invoices.findBillingRun(service.id, period.start, period.end, transaction)) {
-        throw new Error('invoice periode ini sudah ada')
+        await this.invoices.advanceNextDueDate(transaction, service.id, advanced)
+        return { reason: 'invoice periode ini sudah ada; jadwal billing diperbaiki' }
       }
-
+      const covered = await this.invoices.findInvoiceCoverage(transaction, service.id, period)
+      if (covered) {
+        if (!covered.periodStart || !covered.periodEnd) {
+          return {
+            reason: `Invoice ${covered.invoiceNumber} belum memiliki periode layanan; lengkapi periode sebelum recurring dilanjutkan.`,
+          }
+        }
+        await this.invoices.claimBillingPeriod(transaction, {
+          serviceId: service.id,
+          periodStart: period.start,
+          periodEnd: period.end,
+          invoiceId: covered.invoiceId,
+        })
+        await this.invoices.advanceNextDueDate(transaction, service.id, advanced)
+        return {
+          reason: `Periode sudah tercakup invoice ${covered.invoiceNumber}; jadwal billing diperbarui.`,
+        }
+      }
+      const customer = await this.customers.findById(service.customerId)
+      if (!customer || customer.status !== 'active') return { reason: 'customer tidak aktif' }
+      const totals = computeInvoiceTotals([
+        { quantity: '1', unitPriceAmount: service.priceAmount, taxRate: service.taxRate },
+      ])
+      const dueDate = addDays(issueDate, service.paymentDueDays)
       const year = periodKeyOf(issueDate)
       const sequence = await allocateDocumentNumber(transaction, 'invoice', year)
 
@@ -445,7 +462,7 @@ export class InvoiceService {
         userAgent: actor.userAgent,
       })
 
-      return created
+      return { created }
     })
   }
 
@@ -557,7 +574,10 @@ export class InvoiceService {
         .from(invoiceItems)
         .where(eq(invoiceItems.invoiceId, id))
 
-      const periods = new Map<string, { serviceId: string; periodStart: string; periodEnd: string }>()
+      const periods = new Map<
+        string,
+        { serviceId: string; periodStart: string; periodEnd: string }
+      >()
       if (billingRun) {
         periods.set(`${billingRun.serviceId}:${billingRun.periodStart}:${billingRun.periodEnd}`, {
           serviceId: billingRun.serviceId,
@@ -629,11 +649,7 @@ export class InvoiceService {
    * Moves the service cursor past a voided period so automation cannot bill it
    * again. Never moves the cursor backwards.
    */
-  private async skipBilledPeriod(
-    transaction: Transaction,
-    serviceId: string,
-    periodStart: string,
-  ) {
+  private async skipBilledPeriod(transaction: Transaction, serviceId: string, periodStart: string) {
     const service = await this.invoices.findServiceSchedule(serviceId, transaction)
     if (!service) return null
 

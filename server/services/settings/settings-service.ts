@@ -1,7 +1,8 @@
+import { sql } from 'drizzle-orm'
 import type { ApiBillingSettings } from '../../../shared/types/api'
 import type { UpdateBillingSettingsInput } from '../../../shared/schemas/settings'
 import { overlayStoredBillingSettings } from '../../../shared/utils/billing-settings'
-import { useDatabase, type Database } from '../../database/client'
+import { useDatabase, type Database, type Transaction } from '../../database/client'
 import { AuditLogRepository } from '../../repositories/audit'
 import { BILLING_SETTINGS_KEY, SettingsRepository } from '../../repositories/settings'
 
@@ -18,9 +19,9 @@ export class SettingsService {
     private readonly audit = new AuditLogRepository(database),
   ) {}
 
-  async getBillingSettings(): Promise<ApiBillingSettings> {
+  async getBillingSettings(database?: Database | Transaction): Promise<ApiBillingSettings> {
     const fallback = environmentSettings()
-    const row = await this.settings.findByKey(BILLING_SETTINGS_KEY)
+    const row = await this.settings.findByKey(BILLING_SETTINGS_KEY, database)
     if (!row) return fallback
 
     // Keep valid database fields even when one stored value is stale. A single
@@ -33,6 +34,10 @@ export class SettingsService {
     const before = await this.getBillingSettings()
 
     return this.database.transaction(async (transaction) => {
+      // Wait for any invoice transaction already in progress before saving the switch.
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${BILLING_SETTINGS_KEY}))`,
+      )
       const row = await this.settings.upsert(transaction, BILLING_SETTINGS_KEY, input)
       const after: ApiBillingSettings = {
         ...input,

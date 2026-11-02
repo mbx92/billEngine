@@ -7,11 +7,11 @@ useHead({ title: 'Status layanan · Billing Infra' })
 type NoticeData =
   | { state: 'normal'; returnUrl: string }
   | {
-      state: 'grace' | 'blocked'
+      state: 'grace' | 'blocked' | 'suspended' | 'cancelled'
       serviceName: string | null
       serviceNumber: string | null
-      invoiceNumber: string
-      dueDate: string
+      invoiceNumber: string | null
+      dueDate: string | null
       daysPastDue: number
       graceEndsAt: string | null
       continueUrl: string | null
@@ -84,6 +84,10 @@ function leaveFor(url: string) {
           Layanan masih dapat digunakan selama grace period. Selesaikan pembayaran sebelum batas
           waktu agar akses tidak dibatasi.
         </template>
+        <template v-else-if="notice.state === 'suspended' || notice.state === 'cancelled'">
+          Layanan ini {{ notice.state === 'suspended' ? 'sedang disuspend' : 'telah dibatalkan' }}.
+          Hubungi pengelola layanan melalui informasi kontak pada customer portal.
+        </template>
         <template v-else>
           Grace period telah berakhir. Selesaikan invoice melalui customer portal untuk memulihkan
           akses.
@@ -95,11 +99,11 @@ function leaveFor(url: string) {
           <dt class="text-muted">Layanan</dt>
           <dd class="text-right font-medium">{{ notice.serviceName || notice.serviceNumber }}</dd>
         </div>
-        <div class="flex justify-between gap-4 py-3">
+        <div v-if="notice.invoiceNumber" class="flex justify-between gap-4 py-3">
           <dt class="text-muted">Invoice</dt>
           <dd class="font-mono text-right">{{ notice.invoiceNumber }}</dd>
         </div>
-        <div class="flex justify-between gap-4 py-3">
+        <div v-if="notice.dueDate" class="flex justify-between gap-4 py-3">
           <dt class="text-muted">Jatuh tempo</dt>
           <dd class="text-right">{{ format.date(notice.dueDate) }}</dd>
         </div>

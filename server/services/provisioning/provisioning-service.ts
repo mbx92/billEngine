@@ -8,7 +8,7 @@ import type { ProvisioningStatus } from '../../../shared/types/api'
 import { withPostgresAdvisoryLock } from '../../database/advisory-lock'
 import { useDatabase, type Database } from '../../database/client'
 import { clientForCoolifyConnection } from '../../integrations/coolify/connection'
-import { CoolifyClient, CoolifyClientError } from '../../integrations/coolify/client'
+import { type CoolifyClient, CoolifyClientError } from '../../integrations/coolify/client'
 import { normalizeCoolifyApplication } from '../../integrations/coolify/normalize'
 import {
   buildDatabaseUrl,

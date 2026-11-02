@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Pool } from 'pg'
+import migrationJournal from '../../drizzle/migrations/meta/_journal.json'
 import { checkDatabaseReadiness } from '../../server/database/readiness'
 
 function poolWithResponses(...responses: Array<{ rows: unknown[] }>) {
@@ -10,11 +11,20 @@ function poolWithResponses(...responses: Array<{ rows: unknown[] }>) {
 
 describe('database readiness', () => {
   it('is ready when the database, core tables, and latest migration exist', async () => {
-    const relations = Array.from({ length: 16 }, () => ({ relation_name: 'present' }))
+    const relations = Array.from({ length: 24 }, () => ({ relation_name: 'present' }))
     const pool = poolWithResponses(
       { rows: [{ '?column?': 1 }] },
       { rows: relations },
-      { rows: [{ migration_count: '9', latest_migration: '1790859227315' }] },
+      {
+        rows: [
+          {
+            migration_count: String(migrationJournal.entries.length),
+            latest_migration: String(
+              Math.max(...migrationJournal.entries.map((entry) => entry.when)),
+            ),
+          },
+        ],
+      },
     )
 
     await expect(checkDatabaseReadiness(pool)).resolves.toEqual({
@@ -33,6 +43,22 @@ describe('database readiness', () => {
       ready: false,
       checks: { database: 'ok', migrations: 'pending' },
     })
+  })
+
+  it('does not report ready when the Coolify tables were removed by another branch', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ '?column?': 1 }] })
+      .mockImplementationOnce((_sql, parameters: string[][]) => ({
+        rows: parameters[0]!.map((name) => ({
+          relation_name: name.startsWith('public.coolify_') ? null : name,
+        })),
+      }))
+    await expect(checkDatabaseReadiness({ query } as never)).resolves.toMatchObject({
+      ready: false,
+      checks: { database: 'ok', migrations: 'pending' },
+    })
+    expect(query.mock.calls[1]?.[1]?.[0]).toContain('public.coolify_servers')
   })
 
   it('distinguishes a database connection failure', async () => {

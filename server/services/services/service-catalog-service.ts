@@ -1,4 +1,4 @@
-import { and, eq, notInArray, sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import type {
   CreateServiceInput,
   TransitionServiceInput,
@@ -22,7 +22,6 @@ import { ServiceRepository } from '../../repositories/services'
 import { PlanRepository } from '../../repositories/plans'
 import { formatDocumentNumber } from '../../utils/document-number'
 import { DomainError } from '../../utils/errors'
-import { InfrastructureLifecycleService } from '../infrastructure/lifecycle-service'
 
 interface ActorContext {
   userId: string | null
@@ -36,7 +35,6 @@ export class ServiceCatalogService {
     private readonly repository = new ServiceRepository(database),
     private readonly audit = new AuditLogRepository(database),
     private readonly plans = new PlanRepository(database),
-    private readonly infrastructureLifecycle = new InfrastructureLifecycleService(database),
   ) {}
 
   list(page: number, perPage: number) {
@@ -186,56 +184,30 @@ export class ServiceCatalogService {
       if (!existing) throw DomainError.notFound('Service tidak ditemukan.')
       validateTransition(existing.status, input.status)
 
-      const infrastructureTarget = input.status === 'cancelled' ? 'suspended' : input.status
-      const infrastructureOperation = await this.infrastructureLifecycle.apply(
-        id,
-        infrastructureTarget,
-      )
+      return await this.database.transaction(async (transaction) => {
+        const current = await this.repository.findById(transaction, id)
+        if (!current) throw DomainError.notFound('Service tidak ditemukan.')
+        validateTransition(current.status, input.status)
 
-      try {
-        return await this.database.transaction(async (transaction) => {
-          const current = await this.repository.findById(transaction, id)
-          if (!current) throw DomainError.notFound('Service tidak ditemukan.')
-          validateTransition(current.status, input.status)
-
-          const updated = await this.repository.transition(
-            transaction,
-            id,
-            input.status,
-            input.reason,
-          )
-          if (input.status === 'cancelled') {
-            const retentionUntil = new Date()
-            retentionUntil.setUTCDate(retentionUntil.getUTCDate() + 30)
-            await transaction
-              .update(serviceDatabases)
-              .set({ status: 'pending_deletion', retentionUntil, updatedAt: new Date() })
-              .where(eq(serviceDatabases.serviceId, id))
-          }
-          await this.audit.record(transaction, {
-            actorUserId: actor.userId,
-            action: `service.${input.status}`,
-            entityType: 'service',
-            entityId: id,
-            beforeData: { status: current.status },
-            afterData: { status: updated.status, reason: input.reason },
-            metadata: {
-              controlledResourceCount: infrastructureOperation?.affectedCount ?? 0,
-            },
-            ipAddress: actor.ipAddress,
-            userAgent: actor.userAgent,
-          })
-
-          return updated
+        const updated = await this.repository.transition(
+          transaction,
+          id,
+          input.status,
+          input.reason,
+        )
+        await this.audit.record(transaction, {
+          actorUserId: actor.userId,
+          action: `service.${input.status}`,
+          entityType: 'service',
+          entityId: id,
+          beforeData: { status: current.status },
+          afterData: { status: updated.status, reason: input.reason },
+          metadata: { accessControl: 'billing-gateway', controlledResourceCount: 0 },
+          ipAddress: actor.ipAddress,
+          userAgent: actor.userAgent,
         })
-      } catch (error) {
-        if (infrastructureOperation && !(await infrastructureOperation.rollback())) {
-          throw DomainError.external(
-            'Status billing gagal disimpan dan rollback Coolify tidak lengkap. Periksa resource secara manual.',
-          )
-        }
-        throw error
-      }
+        return updated
+      })
     } finally {
       if (lockAcquired) {
         await lockConnection
@@ -271,22 +243,6 @@ export class ServiceCatalogService {
         .limit(1)
       if (invoiceItem) {
         throw DomainError.invalidState('Service yang sudah memiliki invoice tidak dapat dihapus.')
-      }
-
-      const [runningJob] = await transaction
-        .select({ id: provisioningJobs.id })
-        .from(provisioningJobs)
-        .where(
-          and(
-            eq(provisioningJobs.serviceId, id),
-            notInArray(provisioningJobs.status, ['active', 'failed']),
-          ),
-        )
-        .limit(1)
-      if (runningJob) {
-        throw DomainError.invalidState(
-          'Provisioning masih berjalan. Tunggu job selesai atau gagal sebelum menghapus service.',
-        )
       }
 
       await transaction.delete(serviceResources).where(eq(serviceResources.serviceId, id))

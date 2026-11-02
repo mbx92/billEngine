@@ -5,6 +5,44 @@ import type { CoolifyClientError } from '../../server/integrations/coolify/clien
 describe('Coolify client', () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it('saves proxy configuration using PUT and base64 without a restart request', async () => {
+    const request = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', request)
+    await new CoolifyClient('https://coolify.example.test', 'token').saveServerProxyConfiguration(
+      'node',
+      'services:\n  traefik: {}\n',
+    )
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith(
+      new URL('https://coolify.example.test/api/v1/servers/node/proxy/configuration'),
+      expect.objectContaining({ method: 'PUT' }),
+    )
+    expect(
+      Buffer.from(JSON.parse(request.mock.calls[0]![1].body).configuration, 'base64').toString(
+        'utf8',
+      ),
+    ).toBe('services:\n  traefik: {}\n')
+  })
+
+  it('saves gateway labels with manual management and never triggers deployment', async () => {
+    const request = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', request)
+    await new CoolifyClient('https://coolify.example.test', 'token').saveApplicationGatewayLabels(
+      'app',
+      'existing=kept',
+    )
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith(
+      new URL('https://coolify.example.test/api/v1/applications/app'),
+      expect.objectContaining({ method: 'PATCH' }),
+    )
+    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({
+      custom_labels: Buffer.from('existing=kept').toString('base64'),
+      is_container_label_readonly_enabled: false,
+      instant_deploy: false,
+    })
+  })
+
   it('reads applications from the configured Coolify API', async () => {
     const request = vi.fn().mockResolvedValue(
       new Response(JSON.stringify([{ uuid: 'app-1', name: 'Website' }]), {
@@ -143,22 +181,29 @@ describe('Coolify client', () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ uuid: 'app-1', docker_compose_raw: 'services:\n  app: {}\n' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({ uuid: 'app-1', docker_compose_raw: 'services:\n  app: {}\n' }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
       )
-      .mockResolvedValue(
-        new Response(JSON.stringify({ uuid: 'app-1' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+      .mockImplementation(
+        () =>
+          new Response(JSON.stringify({ uuid: 'app-1' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
       )
     vi.stubGlobal('fetch', request)
 
     const client = new CoolifyClient('https://coolify.example.test', 'secret')
     await expect(client.getApplicationComposeRaw('app-1')).resolves.toContain('services:')
-    await client.updateApplicationCustomLabels('app-1', 'coolify.traefik.middlewares=billing-gate@file')
+    await client.updateApplicationCustomLabels(
+      'app-1',
+      'coolify.traefik.middlewares=billing-gate@file',
+    )
     await client.updateApplicationComposeRaw('app-1', 'services:\n  app:\n    image: x\n')
 
     expect(request.mock.calls[1]![1]).toEqual(
@@ -248,10 +293,7 @@ describe('Coolify client', () => {
       ),
     )
 
-    const request = new CoolifyClient(
-      'https://coolify.example.test',
-      'secret',
-    ).listApplications()
+    const request = new CoolifyClient('https://coolify.example.test', 'secret').listApplications()
 
     await expect(request).rejects.toMatchObject({
       name: 'CoolifyClientError',

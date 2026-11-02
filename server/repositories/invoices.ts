@@ -5,6 +5,8 @@ import {
   desc,
   eq,
   exists,
+  gte,
+  ne,
   ilike,
   inArray,
   isNotNull,
@@ -300,15 +302,9 @@ export class InvoiceRepository {
     return created
   }
 
-  async replaceItems(
-    transaction: Transaction,
-    invoiceId: string,
-    items: NewInvoiceItem[],
-  ) {
+  async replaceItems(transaction: Transaction, invoiceId: string, items: NewInvoiceItem[]) {
     await transaction.delete(invoiceItems).where(eq(invoiceItems.invoiceId, invoiceId))
-    await transaction
-      .insert(invoiceItems)
-      .values(items.map((item) => ({ ...item, invoiceId })))
+    await transaction.insert(invoiceItems).values(items.map((item) => ({ ...item, invoiceId })))
   }
 
   async updateEditable(
@@ -411,6 +407,82 @@ export class InvoiceRepository {
       .groupBy(invoices.currency)
   }
 
+  /** Serialize manual and recurring writes for the same service. */
+  async lockServiceBilling(transaction: Transaction, serviceId: string) {
+    const runs = transaction
+      .select({ id: serviceBillingRuns.id })
+      .from(serviceBillingRuns)
+      .where(eq(serviceBillingRuns.serviceId, services.id))
+    const [service] = await transaction
+      .select({
+        id: services.id,
+        customerId: services.customerId,
+        name: services.name,
+        status: services.status,
+        currency: services.currency,
+        priceAmount: services.priceAmount,
+        billingCycle: services.billingCycle,
+        billingStartDate: services.billingStartDate,
+        nextDueDate: services.nextDueDate,
+        hasBillingRun: exists(runs),
+        invoiceLeadDays: services.invoiceLeadDays,
+        paymentDueDays: services.paymentDueDays,
+        taxRate: services.taxRate,
+      })
+      .from(services)
+      .where(eq(services.id, serviceId))
+      .for('update')
+    return service ?? null
+  }
+
+  /** Also sees pre-existing manual invoices that never created a billing-run marker. */
+  async findInvoiceCoverage(
+    transaction: Transaction,
+    serviceId: string,
+    period: { start: string; end: string },
+    excludeInvoiceId?: string,
+    includeCancelled = true,
+  ) {
+    const [covered] = await transaction
+      .select({
+        invoiceId: invoices.id,
+        invoiceNumber: invoices.invoiceNumber,
+        periodStart: invoiceItems.servicePeriodStart,
+        periodEnd: invoiceItems.servicePeriodEnd,
+      })
+      .from(invoiceItems)
+      .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+      .where(
+        and(
+          eq(invoiceItems.serviceId, serviceId),
+          inArray(
+            invoices.status,
+            includeCancelled
+              ? ['unpaid', 'overdue', 'paid', 'cancelled']
+              : ['unpaid', 'overdue', 'paid'],
+          ),
+          excludeInvoiceId ? ne(invoices.id, excludeInvoiceId) : undefined,
+          or(
+            and(
+              ne(invoices.status, 'cancelled'),
+              or(isNull(invoiceItems.servicePeriodStart), isNull(invoiceItems.servicePeriodEnd)),
+            ),
+            and(
+              lte(invoiceItems.servicePeriodStart, period.end),
+              gte(invoiceItems.servicePeriodEnd, period.start),
+            ),
+          ),
+        ),
+      )
+      // Undated invoices must block progress even when another invoice has dated coverage.
+      .orderBy(
+        sql`case when ${invoiceItems.servicePeriodStart} is null or ${invoiceItems.servicePeriodEnd} is null then 0 else 1 end`,
+        asc(invoices.createdAt),
+      )
+      .limit(1)
+    return covered ?? null
+  }
+
   /** Active services whose invoice schedule has arrived on/before `today`. */
   async listDueServices(today: string) {
     const billingRun = this.database
@@ -476,10 +548,7 @@ export class InvoiceRepository {
       .where(eq(services.id, serviceId))
   }
 
-  async findServiceSchedule(
-    serviceId: string,
-    database: Transaction | Database = this.database,
-  ) {
+  async findServiceSchedule(serviceId: string, database: Transaction | Database = this.database) {
     const [service] = await database
       .select({
         id: services.id,

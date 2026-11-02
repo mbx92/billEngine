@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { CoolifyClientError } from '../../../../integrations/coolify/client'
 import { CoolifyResourceService } from '../../../../services/coolify/resource-service'
+import { DomainError } from '../../../../utils/errors'
 
 export default defineEventHandler(async (event) => {
   const session = await requireAdmin(event)
@@ -11,15 +12,15 @@ export default defineEventHandler(async (event) => {
     return { data: result }
   } catch (error) {
     if (error instanceof Error && error.message === 'COOLIFY_SERVER_NOT_FOUND') {
-      throw createError({ statusCode: 404, statusMessage: 'Koneksi Coolify tidak ditemukan.' })
+      throw DomainError.notFound('Koneksi Coolify tidak ditemukan.')
     }
     if (error instanceof Error && error.message === 'COOLIFY_CREDENTIALS_MISSING') {
-      throw createError({ statusCode: 409, statusMessage: 'Token koneksi Coolify belum tersedia.' })
+      throw DomainError.invalidState('Token koneksi Coolify belum tersedia.')
     }
 
     if (error instanceof CoolifyClientError) {
-      throw createError({ statusCode: 502, statusMessage: error.message.slice(0, 300) })
+      throw DomainError.external(error.message.slice(0, 300))
     }
-    throw createError({ statusCode: 502, statusMessage: 'Sinkronisasi Coolify gagal.' })
+    throw error
   }
 })

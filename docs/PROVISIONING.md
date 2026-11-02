@@ -1,5 +1,9 @@
 # Deployment provisioning
 
+> Historical design: these operational pages, APIs, and workers are retired.
+> Manage infrastructure in Coolify and the relevant provider console.
+> See [the current workflow](../README.md#operating-workflow).
+
 BillEngine can create a Coolify application from a reusable deployment blueprint and process the
 deployment outside the browser request. Open **Infrastructure → Blueprints** to manage deployment
 recipes. Use **Infrastructure → Provisioning** only to queue an application, inspect its event log,

@@ -39,9 +39,10 @@ const form = reactive({
   dueDate: props.invoice?.invoice.dueDate ?? addIsoDays(today, 7),
   notes: props.invoice?.invoice.notes ?? '',
   discountType: initialDiscountType(props.invoice),
-  discountAmount: props.invoice && props.invoice.invoice.discountAmount !== '0'
-    ? props.invoice.invoice.discountAmount
-    : '',
+  discountAmount:
+    props.invoice && props.invoice.invoice.discountAmount !== '0'
+      ? props.invoice.invoice.discountAmount
+      : '',
   discountPercent: fractionToUiPercent(props.invoice?.invoice.discountPercent),
   items: (props.invoice?.items.map(toLineForm) ?? [newLine()]) as InvoiceLineForm[],
 })
@@ -190,7 +191,8 @@ async function submitInvoice() {
     try {
       uiPercentToFraction(form.discountPercent)
     } catch (caught) {
-      actionError.value = caught instanceof Error ? caught.message : 'Persentase diskon tidak valid.'
+      actionError.value =
+        caught instanceof Error ? caught.message : 'Persentase diskon tidak valid.'
       return
     }
   }
@@ -284,19 +286,20 @@ function addIsoDays(value: string, days: number) {
       <div class="grid gap-4 sm:grid-cols-3">
         <label class="block sm:col-span-3">
           <span class="mb-2 block text-xs font-semibold text-muted">Customer</span>
-          <select
+          <UiSelect
             v-model="form.customerId"
             autofocus
             required
             :disabled="isEdit"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-60"
+            :options="[
+              { value: '', label: 'Pilih customer', disabled: true },
+              ...options.customers.map((customer) => ({
+                value: customer.id,
+                label: `${customer.customerNumber} · ${customer.companyName || customer.name}`,
+              })),
+            ]"
             @change="changeCustomer"
-          >
-            <option value="" disabled>Pilih customer</option>
-            <option v-for="customer in options.customers" :key="customer.id" :value="customer.id">
-              {{ customer.customerNumber }} · {{ customer.companyName || customer.name }}
-            </option>
-          </select>
+          />
         </label>
         <UiInput v-model="form.issueDate" label="Issue date" type="date" required />
         <UiInput v-model="form.dueDate" label="Due date" type="date" required />
@@ -341,17 +344,17 @@ function addIsoDays(value: string, days: number) {
           <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <label class="block sm:col-span-2">
               <span class="mb-2 block text-xs font-semibold text-muted">Service opsional</span>
-              <select
+              <UiSelect
                 v-model="item.serviceId"
-                class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
+                :options="[
+                  { value: '', label: 'Custom item' },
+                  ...customerServices.map((service) => ({
+                    value: service.id,
+                    label: `${service.serviceNumber} · ${service.name} · ${format.money(service.priceAmount, service.currency)}`,
+                  })),
+                ]"
                 @change="selectService(item)"
-              >
-                <option value="">Custom item</option>
-                <option v-for="service in customerServices" :key="service.id" :value="service.id">
-                  {{ service.serviceNumber }} · {{ service.name }} ·
-                  {{ format.money(service.priceAmount, service.currency) }}
-                </option>
-              </select>
+              />
             </label>
             <UiInput
               v-model="item.quantity"
@@ -385,6 +388,10 @@ function addIsoDays(value: string, days: number) {
             <div class="grid grid-cols-2 gap-2">
               <UiInput v-model="item.servicePeriodStart" label="Periode mulai" type="date" />
               <UiInput v-model="item.servicePeriodEnd" label="Periode akhir" type="date" />
+              <p v-if="item.serviceId" class="col-span-2 text-xs leading-5 text-muted">
+                Isi periode agar recurring melewati tagihan ini. Tanpa periode lengkap, recurring
+                untuk service ini ditahan. Custom item tanpa service tidak memengaruhi recurring.
+              </p>
             </div>
           </div>
         </div>
@@ -393,14 +400,14 @@ function addIsoDays(value: string, days: number) {
       <div class="grid gap-4 sm:grid-cols-3">
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Diskon</span>
-          <select
+          <UiSelect
             v-model="form.discountType"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option value="none">Tanpa diskon</option>
-            <option value="amount">Nominal</option>
-            <option value="percent">Persen</option>
-          </select>
+            :options="[
+              { value: 'none', label: 'Tanpa diskon' },
+              { value: 'amount', label: 'Nominal' },
+              { value: 'percent', label: 'Persen' },
+            ]"
+          />
         </label>
         <UiMoneyInput
           v-if="form.discountType === 'amount'"

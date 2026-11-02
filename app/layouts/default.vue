@@ -4,16 +4,12 @@ import {
   BarChart3,
   Boxes,
   CreditCard,
-  Database,
-  FileCode2,
   FileText,
   GalleryVerticalEnd,
   Layers3,
   LayoutDashboard,
   LogOut,
   Menu as MenuIcon,
-  Network,
-  Rocket,
   Server as ServerIcon,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -48,10 +44,6 @@ const primaryNavigation = [
 ] as const
 const infrastructureNavigation = [
   { label: 'Resources', to: '/resources', icon: Boxes },
-  { label: 'Blueprints', to: '/blueprints', icon: FileCode2 },
-  { label: 'Provisioning', to: '/provisioning', icon: Rocket },
-  { label: 'Database Clusters', to: '/database-clusters', icon: Database },
-  { label: 'Tunnels', to: '/tunnels', icon: Network },
   { label: 'Servers', to: '/servers', icon: ServerIcon },
   { label: 'Activity', to: '/activity', icon: ActivityIcon },
 ] as const
@@ -105,7 +97,7 @@ async function signOut() {
               appSettings.companyName
             }}</strong>
             <span class="font-mono text-[10px] tracking-wider text-muted uppercase">{{
-              isCustomer ? 'customer portal' : 'control plane'
+              isCustomer ? 'customer portal' : 'billing & gateway'
             }}</span>
           </span>
         </NuxtLink>
@@ -140,7 +132,7 @@ async function signOut() {
           v-if="!isCustomer"
           class="px-3 pb-2 pt-6 text-[10px] font-bold tracking-[0.14em] text-muted uppercase"
         >
-          Infrastructure
+          Coolify sync
         </p>
         <NuxtLink
           v-for="item in isCustomer ? [] : infrastructureNavigation"

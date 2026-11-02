@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { X } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, useId, useTemplateRef } from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -30,6 +31,8 @@ function focusableElements() {
     panel.value?.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
     ) ?? [],
+  ).filter(
+    (element) => !element.closest('[aria-hidden="true"]') && element.getClientRects().length > 0,
   )
 }
 
@@ -86,10 +89,7 @@ onBeforeUnmount(() => {
         :aria-describedby="description ? descriptionId : undefined"
         tabindex="-1"
         class="flex max-h-[calc(100dvh-1rem)] w-full flex-col rounded-t-xl border border-line-strong bg-surface shadow-2xl shadow-black/40 outline-none sm:max-h-[calc(100dvh-2rem)] sm:rounded-xl"
-        :class="[
-          sizeClass,
-          fixedHeight ? 'h-[calc(100dvh-1rem)] sm:h-[46rem]' : undefined,
-        ]"
+        :class="[sizeClass, fixedHeight ? 'h-[calc(100dvh-1rem)] sm:h-[46rem]' : undefined]"
       >
         <header class="flex shrink-0 items-start justify-between gap-4 border-b px-5 py-4">
           <div>

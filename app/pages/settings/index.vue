@@ -163,14 +163,15 @@ async function reloadSettings() {
         <div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
           <div>
             <div class="flex items-center gap-2">
-              <h2 class="text-sm font-semibold text-ink">Overdue access gate</h2>
+              <h2 class="text-sm font-semibold text-ink">Billing access gateway</h2>
               <UiBadge :tone="form.billingAccessControlEnabled ? 'warning' : 'neutral'">
                 {{ form.billingAccessControlEnabled ? 'Enabled' : 'Disabled' }}
               </UiBadge>
             </div>
             <p class="mt-1 max-w-2xl text-xs leading-5 text-muted">
-              Menampilkan interstitial selama grace period dan memblokir trafik web setelah grace
-              berakhir. Resource Coolify tetap berjalan; middleware Traefik harus dipasang terpisah.
+              Membatasi akses service suspended/cancelled, menampilkan interstitial selama grace
+              period, dan memblokir trafik web setelah grace berakhir. Resource Coolify tetap
+              berjalan; middleware Traefik harus dipasang terpisah.
             </p>
           </div>
           <label class="inline-flex cursor-pointer items-center gap-3 self-start">
@@ -286,5 +287,6 @@ async function reloadSettings() {
         </UiButton>
       </div>
     </form>
+    <GatewaySettingsCard />
   </div>
 </template>

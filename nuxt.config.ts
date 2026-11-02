@@ -36,6 +36,9 @@ const themeBootstrap = `
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-29',
+  // Hookable's browser debugger leaves console timers open (timeLog without
+  // timeEnd). Disable hook timing explicitly, including when DEBUG is inherited.
+  debug: { hooks: false },
   devtools: { enabled: true },
   modules: ['@nuxt/eslint'],
   css: ['~/assets/css/main.css'],

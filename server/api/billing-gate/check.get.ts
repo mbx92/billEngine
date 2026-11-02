@@ -10,8 +10,10 @@ import {
   setResponseStatus,
 } from 'h3'
 import { BillingAccessControlService } from '../../services/billing/access-control-service'
+import { gateProbeSignature } from '../../services/billing/gateway-probe'
 import { normalizeRequestHost, safeReturnPath } from '../../services/billing/access-policy'
 import {
+  billingAccessFingerprint,
   signBillingGateToken,
   verifyBillingGateToken,
   type BillingGateToken,
@@ -46,6 +48,27 @@ export default defineEventHandler(async (event) => {
   )
   if (!host) return allow(event)
 
+  // A non-success auth response proves the deployed proxy reached this gate;
+  // Traefik forwards it to the verifier instead of sending a probe to the app.
+  const probe = getHeader(event, 'x-billing-gate-probe')
+  if (probe && /^[a-f0-9]{64}$/.test(probe)) {
+    setResponseStatus(event, 418)
+    setResponseHeader(
+      event,
+      'x-billing-gate-proof',
+      gateProbeSignature(probe, host, runtime.secret),
+    )
+    return { probe: true }
+  }
+
+  // A global entrypoint also sees BillEngine's public pages. Never apply billing
+  // restrictions to them, even if someone accidentally links that hostname.
+  try {
+    if (host === normalizeRequestHost(new URL(runtime.appUrl).hostname)) return allow(event)
+  } catch {
+    /* Invalid public URL is handled by configuration validation. */
+  }
+
   const forwardedUri = safeReturnPath(getHeader(event, 'x-forwarded-uri'))
   const forwardedUrl = new URL(forwardedUri, 'http://billing-gate.internal')
   const scheme = forwardedScheme(event)
@@ -62,7 +85,7 @@ export default defineEventHandler(async (event) => {
     )
   }
 
-  if (decision.state === 'normal' || !decision.invoice) {
+  if (decision.state === 'normal') {
     deleteCookie(event, BILLING_GATE_COOKIE, { path: '/' })
     return allow(event)
   }
@@ -75,7 +98,7 @@ export default defineEventHandler(async (event) => {
     decision.state === 'grace' &&
     acknowledgement?.kind === 'ack' &&
     acknowledgement.host === host &&
-    acknowledgement.invoiceFingerprint === decision.invoice.fingerprint
+    acknowledgement.invoiceFingerprint === decision.invoice?.fingerprint
   ) {
     return allow(event)
   }
@@ -83,10 +106,13 @@ export default defineEventHandler(async (event) => {
   if (decision.state === 'grace' && !isBrowserNavigation(event)) return allow(event)
 
   if (!isBrowserNavigation(event)) {
-    setResponseStatus(event, 402)
+    const lifecycleBlocked = decision.state === 'suspended' || decision.state === 'cancelled'
+    setResponseStatus(event, lifecycleBlocked ? 403 : 402)
     return {
-      error: 'PAYMENT_REQUIRED',
-      message: 'Layanan dibatasi karena invoice telah melewati grace period.',
+      error: lifecycleBlocked ? 'SERVICE_UNAVAILABLE' : 'PAYMENT_REQUIRED',
+      message: lifecycleBlocked
+        ? 'Akses layanan dinonaktifkan. Hubungi pengelola layanan.'
+        : 'Layanan dibatasi karena invoice telah melewati grace period.',
     }
   }
 
@@ -95,7 +121,7 @@ export default defineEventHandler(async (event) => {
     host,
     scheme,
     returnTo: forwardedUri,
-    invoiceFingerprint: decision.invoice.fingerprint,
+    invoiceFingerprint: billingAccessFingerprint(decision, runtime.secret),
   })
 })
 
@@ -155,13 +181,12 @@ async function handleContinue(
     return sendRedirect(event, notice.returnTo, 302)
   }
 
-  if (!decision.invoice) return sendRedirect(event, notice.returnTo, 302)
   return redirectToNotice(event, {
     runtime,
     host,
     scheme,
     returnTo: notice.returnTo,
-    invoiceFingerprint: decision.invoice.fingerprint,
+    invoiceFingerprint: billingAccessFingerprint(decision, runtime.secret),
   })
 }
 

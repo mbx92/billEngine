@@ -1,6 +1,6 @@
 # Coolify Billing Platform
 
-Nuxt 4 billing control plane layered on top of Coolify. Coolify remains the infrastructure source of truth; this application owns customers, services, invoices, payments, and audit history.
+Nuxt 4 billing engine and access gateway for applications managed in Coolify. Coolify owns deployment and infrastructure operations; BillEngine owns customers, service subscriptions, invoices, payments, access decisions, and audit history.
 
 ## Local development
 
@@ -39,20 +39,47 @@ npm run db:backup
 npm run test:e2e
 ```
 
-## Application provisioning
+## Operating workflow
 
-The **Infrastructure → Provisioning** page creates Coolify applications from reusable deployment
-blueprints and tracks create, environment, domain, deploy, health, and SSL stages in a retryable
-background job. See [docs/PROVISIONING.md](docs/PROVISIONING.md) for prerequisites and supported
-source types.
+1. Create and deploy applications in Coolify. Configure environment variables,
+   domains, databases, resource limits, and proxy routing there.
+2. Connect Coolify under **Servers**, then synchronize **Resources**. This reads
+   provider state; it does not deploy or change running applications. Prefer a
+   Coolify API token with read-only access for synchronization. Saving gateway
+   labels also needs write access and permission to read existing labels.
+   The per-server proxy editor needs read:sensitive, write, and deploy with a
+   team admin/owner token. Scope the token to the intended Coolify team.
+3. Mark chargeable resources as **billable**. Create a customer and plan, then
+   link the synced resources to a service. A service can be created before its
+   resources exist and linked after deployment and synchronization.
+4. Generate invoices and record payments in BillEngine. Configure recurring
+   billing and reminders in Settings.
+5. Save the gateway check URL in Settings and install `billing-gate.yaml` manually
+   in Coolify. On supported Traefik applications, use **Resources → Konfigurasi
+   gate → Simpan ke Coolify** to attach the middleware reference. Redeploy in
+   Coolify, then select **Periksa gate** and enable **Billing access gateway**.
+   For Compose or a shared server-wide gate, use **Servers → node → Gate proxy**
+   instead: configure a direct internal check URL, save the entrypoint settings,
+   and restart the proxy manually in Coolify. No application Compose edits are
+   needed. All applications on selected entrypoints depend on BillEngine availability.
+   See [the gateway setup](docs/BILLING-GATE.md).
 
-## Cloudflare Tunnel management
+Suspend/cancel updates billing and gateway access only. Reactivation resumes
+billing and reevaluates unpaid invoices. Deployment, start/stop/restart,
+CPU/RAM changes, domain/SSL configuration, database provisioning, and tunnel
+operations are performed outside BillEngine through Coolify and the relevant
+infrastructure provider. The billing application's own deployment also stays
+in Coolify.
 
-The **Infrastructure → Tunnels** page shows tunnel health and manages public-hostname ingress rules
-for remotely managed Cloudflare Tunnels. See
-[docs/CLOUDFLARE-TUNNELS.md](docs/CLOUDFLARE-TUNNELS.md) for token permissions and routing safety.
+The former provisioning, blueprint, database-cluster, tunnel, domain-management,
+and apply-plan API routes and pages have been removed. The provisioning worker
+no longer starts, so queued legacy jobs will not execute or retry. Existing
+schema and migration history are retained; no database reset is needed. Review
+unfinished legacy jobs and any previously stopped applications in Coolify when
+rolling out this revision. Old operational documentation is marked historical.
 
-Do not use a production database for local development. Coolify tokens, auth secrets, and database credentials must remain in server-side environment variables.
+Do not use a production database for local development. Coolify tokens, auth
+secrets, and database credentials must remain in server-side environment variables.
 
 ## Production deployment
 
@@ -83,6 +110,25 @@ service, then lint, type checking, unit/integration tests, and a production
 build. Set production values through the deployment platform; never copy CI
 credentials to a deployed environment.
 
+## Recurring and manual invoices
+
+Saved Settings take precedence over environment defaults, including explicit
+`false` for billing automation and the access gateway. Disabling automation
+waits for an invoice transaction already in progress, then prevents subsequent
+recurring invoices from the worker or the generation API.
+
+Recurring checks both billing-run history and existing invoice items. Link manual
+invoice items to the correct service and fill both service-period dates. A period
+overlapping an existing issued invoice (including paid or cancelled dated invoices)
+is skipped; the schedule advances without creating another invoice. This also
+recognizes manual invoices recorded before this fix. An issued service-linked
+invoice without complete dates pauses recurring for that service without advancing
+its schedule. Unlinked custom items cannot identify a subscription and do not block
+its recurring invoices. Other services and later uncovered periods bill normally.
+
+Existing duplicate invoices are not automatically cancelled or deleted by this
+change; review them through the normal invoice workflow.
+
 ## Email delivery
 
 Invoice delivery and due/overdue reminders use the Resend HTTP API. Configure a
@@ -112,21 +158,9 @@ the service is created or its plan is saved again. The Services page compares
 that contract with the latest Coolify resource limits and marks it as matched,
 under-allocated, over-allocated, mixed, unknown, or not configured.
 
-The **Apply plan to infrastructure** action previews the exact changes, divides
-the aggregate CPU/RAM quota deterministically across linked applications, and
-then updates the applications through the Coolify API. Applying is blocked when
-the linked resource count differs from the plan or an unsupported resource type
-is present. Running applications can be restarted after the update so Coolify
-recreates their containers with the new limits; stopped applications use the
-new limits on their next start.
-
-Every apply uses a preview fingerprint to reject stale changes, synchronizes
-the affected Coolify server for verification, and writes both an audit entry
-and a job result. Partial failures remain visible per resource. Automatic apply
-during a normal sync is intentionally disabled: sync refreshes actual state,
-while changing production limits always requires an explicit admin confirmation.
-The current write path supports Coolify applications; database and compose
-service resource writes remain unsupported.
+Resource targets are commercial reference values only. Adjust actual limits
+in Coolify, then synchronize to refresh compliance. Changing a plan or service
+never changes CPU/RAM or restarts an application.
 
 ## Monitoring and backups
 

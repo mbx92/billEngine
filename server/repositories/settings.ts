@@ -7,8 +7,8 @@ export const BILLING_SETTINGS_KEY = 'billing.configuration'
 export class SettingsRepository {
   constructor(private readonly database: Database = useDatabase()) {}
 
-  async findByKey(key: string) {
-    const [row] = await this.database.select().from(settings).where(eq(settings.key, key)).limit(1)
+  async findByKey(key: string, database: Database | Transaction = this.database) {
+    const [row] = await database.select().from(settings).where(eq(settings.key, key)).limit(1)
     return row ?? null
   }
 

@@ -228,14 +228,12 @@ async function toggleStatus(plan: ApiPlan) {
         <UiInput v-model="form.name" label="Nama plan" placeholder="Starter Hosting" required />
         <label class="block">
           <span class="mb-2 block text-xs font-semibold text-muted">Siklus billing</span>
-          <select
+          <UiSelect
             v-model="form.billingCycle"
-            class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-          >
-            <option v-for="cycle in billingCycles" :key="cycle.value" :value="cycle.value">
-              {{ cycle.label }}
-            </option>
-          </select>
+            :options="[
+              ...billingCycles.map((cycle) => ({ value: cycle.value, label: `${cycle.label}` })),
+            ]"
+          />
         </label>
         <UiMoneyInput
           v-model="form.priceAmount"
@@ -276,17 +274,10 @@ async function toggleStatus(plan: ApiPlan) {
               placeholder="2048"
             />
           </div>
-          <label class="mt-4 block">
-            <span class="mb-2 block text-xs font-semibold text-muted">Mode database</span>
-            <select
-              v-model="form.databaseMode"
-              class="focus-ring h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink"
-            >
-              <option value="none">Tanpa database</option>
-              <option value="shared">PostgreSQL shared</option>
-              <option value="dedicated" disabled>PostgreSQL dedicated (fase lanjutan)</option>
-            </select>
-          </label>
+          <p class="mt-4 text-xs text-muted">
+            Kuota plan adalah referensi billing. Konfigurasi resource dan database dilakukan di
+            Coolify.
+          </p>
         </div>
         <label class="block md:col-span-2">
           <span class="mb-2 block text-xs font-semibold text-muted">Deskripsi</span>
@@ -412,9 +403,6 @@ async function toggleStatus(plan: ApiPlan) {
                     </UiBadge>
                     <UiBadge v-if="plan.includedMemoryBytes">
                       {{ format.bytes(plan.includedMemoryBytes) }}
-                    </UiBadge>
-                    <UiBadge :tone="plan.databaseMode === 'shared' ? 'info' : 'neutral'">
-                      DB {{ plan.databaseMode }}
                     </UiBadge>
                     <UiBadge
                       v-if="

@@ -1,5 +1,9 @@
 # Cloudflare Tunnel management
 
+> Historical design: these operational pages, APIs, and workers are retired.
+> Manage infrastructure in Coolify and the relevant provider console.
+> See [the current workflow](../README.md#operating-workflow).
+
 The **Infrastructure → Tunnels** page lists account-scoped Cloudflare Tunnels and manages ingress
 routes for remotely managed tunnels.
 

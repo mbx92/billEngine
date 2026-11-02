@@ -3,7 +3,7 @@ import { RefreshCw } from '@lucide/vue'
 import type { ApiDashboard } from '#shared/types/api'
 
 definePageMeta({ middleware: 'auth' })
-useHead({ title: 'Infrastructure Overview · Billing Infra' })
+useHead({ title: 'Billing Overview · Billing Infra' })
 
 const format = useFormat()
 const appSettings = useAppSettings()
@@ -48,7 +48,7 @@ const stats = computed(() => {
         <p class="mb-2 font-mono text-[11px] font-semibold tracking-wider text-brand uppercase">
           Control plane / overview
         </p>
-        <h1 class="text-2xl font-semibold tracking-tight">Infrastructure Overview</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">Billing Overview</h1>
         <p class="mt-2 text-sm text-muted">Commercial health and the last known Coolify state.</p>
       </div>
       <UiButton variant="secondary" :disabled="status === 'pending'" @click="refresh()">

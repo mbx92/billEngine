@@ -1,5 +1,9 @@
 # Shared Database Provisioning Plan
 
+> Historical design: these operational pages, APIs, and workers are retired.
+> Manage infrastructure in Coolify and the relevant provider console.
+> See [the current workflow](../README.md#operating-workflow).
+
 ## Tujuan
 
 Menyediakan database PostgreSQL otomatis untuk service customer paket murah dengan model berikut:

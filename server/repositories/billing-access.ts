@@ -1,17 +1,13 @@
-import { and, asc, eq, gt, inArray, lt, ne } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, lt } from 'drizzle-orm'
 import { useDatabase, type Database } from '../database/client'
 import {
   coolifyResources,
   invoiceItems,
   invoices,
-  resourceDomains,
   serviceResources,
   services,
 } from '../database/schema'
-import {
-  hostsFromCoolifyFqdn,
-  normalizeRequestHost,
-} from '../services/billing/access-policy'
+import { hostsFromCoolifyFqdn } from '../services/billing/access-policy'
 
 export class BillingAccessRepository {
   constructor(private readonly database: Database = useDatabase()) {}
@@ -24,25 +20,24 @@ export class BillingAccessRepository {
         serviceNumber: services.serviceNumber,
         status: services.status,
         fqdn: coolifyResources.fqdn,
-        managedHostname: resourceDomains.hostname,
-        managedDomainStatus: resourceDomains.status,
       })
       .from(serviceResources)
       .innerJoin(services, eq(services.id, serviceResources.serviceId))
       .innerJoin(coolifyResources, eq(coolifyResources.id, serviceResources.resourceId))
-      .leftJoin(resourceDomains, eq(resourceDomains.resourceId, coolifyResources.id))
       .where(
-        and(ne(services.status, 'cancelled'), eq(coolifyResources.resourceType, 'application')),
+        and(
+          eq(coolifyResources.resourceType, 'application'),
+          eq(coolifyResources.classification, 'billable'),
+        ),
       )
 
-    const matches = candidates.filter((candidate) => {
-      if (hostsFromCoolifyFqdn(candidate.fqdn).includes(host)) return true
-
-      return (
-        candidate.managedDomainStatus === 'active' &&
-        normalizeRequestHost(candidate.managedHostname) === host
-      )
-    })
+    const hostMatches = candidates.filter((candidate) =>
+      hostsFromCoolifyFqdn(candidate.fqdn).includes(host),
+    )
+    // A resource may be reassigned after cancellation. The new contract owns access;
+    // a cancelled contract still blocks until it is unlinked or replaced.
+    const currentMatches = hostMatches.filter((candidate) => candidate.status !== 'cancelled')
+    const matches = currentMatches.length > 0 ? currentMatches : hostMatches
     const serviceIds = new Set(matches.map((match) => match.id))
 
     // Ambiguous host ownership must fail open instead of blocking the wrong customer.

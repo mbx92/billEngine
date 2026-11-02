@@ -17,6 +17,14 @@ const REQUIRED_TABLES = [
   'provisioning_job_events',
   'database_clusters',
   'service_databases',
+  'coolify_servers',
+  'coolify_nodes',
+  'coolify_resources',
+  'service_resources',
+  'service_billing_runs',
+  'invoice_items',
+  'settings',
+  'job_runs',
 ] as const
 
 const EXPECTED_MIGRATION_COUNT = migrationJournal.entries.length
