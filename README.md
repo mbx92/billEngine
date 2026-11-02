@@ -83,6 +83,36 @@ secrets, and database credentials must remain in server-side environment variabl
 
 ## Production deployment
 
+For this Coolify branch, use **Docker Compose** with `/compose.coolify.yaml`.
+Copy the contents of the local, Git-ignored `.env.coolify` into Coolify's runtime
+Environment Variables. `.env.coolify.example` is the shareable template and has
+no credentials. These variables are not build arguments. Set the domain of the
+`app` service to the same HTTPS domain used by `NUXT_PUBLIC_APP_URL` and
+`NUXT_BETTER_AUTH_URL`; its container port is **3000**.
+
+The Compose deployment uses the existing `bill_engine_coolify` database via
+`NUXT_DATABASE_URL`. It does not create PostgreSQL, seed data, or reset users.
+The server must be able to reach that database. The one-shot `migrate` service
+runs before `app`; existing data and login accounts are retained. Keep the old
+auth/encryption and gate secrets when using that database. Coolify connections
+and company/billing settings already stored in the database do not need to be
+duplicated in environment variables. Saved Settings take precedence over env
+defaults, including switches set to `false`.
+
+`APP_PORT=8010` publishes container port 3000 on the Coolify host, allowing that
+host's proxy to use `http://host.docker.internal:8010/api/billing-gate/check`.
+Keep that address consistent with the saved Gate proxy setting and the manual
+`billing-gate.yaml`. This address applies only when BillEngine and the proxy
+run on the same host. Application tunnels must route through Traefik. Follow
+[the gate setup](docs/BILLING-GATE.md) and verify after deployment. No Cloudflare
+provisioning or infrastructure credentials are needed in this billing-only env.
+
+Validate the deployment configuration locally without starting containers:
+
+```bash
+docker compose --env-file .env.coolify -f compose.coolify.yaml config --quiet
+```
+
 Database migrations are a separate release step and must complete before the
 new application container receives traffic. With the included multi-stage
 Dockerfile, a deployment can use the same immutable source revision for both

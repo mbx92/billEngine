@@ -1,20 +1,4 @@
 services:
-  billengine-postgres:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: billing
-      POSTGRES_USER: billing
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
-      POSTGRES_HOST_AUTH_METHOD: trust
-    volumes:
-      - billengine_test_postgres_v3:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U billing -d billing']
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   migrate:
     build:
       context: .
@@ -22,10 +6,7 @@ services:
       target: migrator
     restart: 'no'
     environment:
-      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@billengine-postgres:5432/billing
-    depends_on:
-      billengine-postgres:
-        condition: service_healthy
+      NUXT_DATABASE_URL: ${NUXT_DATABASE_URL:?}
 
   app:
     build:
@@ -34,23 +15,24 @@ services:
       target: runner
     restart: unless-stopped
     environment:
-      NUXT_DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:?}@billengine-postgres:5432/billing
-      NUXT_BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
-      NUXT_BETTER_AUTH_URL: https://billengine.ocnetworks.web.id
-      NUXT_PUBLIC_APP_URL: https://billengine.ocnetworks.web.id
-      NUXT_PUBLIC_COMPANY_NAME: OC Networks Billing Test
-      NUXT_PUBLIC_BILLING_TIMEZONE: Asia/Makassar
+      NUXT_DATABASE_URL: ${NUXT_DATABASE_URL:?}
+      NUXT_BETTER_AUTH_SECRET: ${NUXT_BETTER_AUTH_SECRET:?}
+      NUXT_BETTER_AUTH_URL: ${NUXT_BETTER_AUTH_URL:?}
+      NUXT_PUBLIC_APP_URL: ${NUXT_PUBLIC_APP_URL:?}
+      NUXT_PUBLIC_COMPANY_NAME: ${NUXT_PUBLIC_COMPANY_NAME:-OC Networks Billing}
+      NUXT_PUBLIC_BILLING_TIMEZONE: ${NUXT_BILLING_TIMEZONE:-Asia/Makassar}
       NUXT_PUBLIC_APP_REVISION: ${SOURCE_COMMIT:-}
-      NUXT_COMPANY_NAME: OC Networks Billing Test
-      NUXT_BILLING_TIMEZONE: Asia/Makassar
-      NUXT_BILLING_CURRENCY: IDR
-      NUXT_COOLIFY_API_URL: ${COOLIFY_API_URL:?}
-      NUXT_COOLIFY_API_TOKEN: ${COOLIFY_API_TOKEN:?}
-      NUXT_BILLING_ACCESS_CONTROL_ENABLED: 'true'
-      NUXT_OVERDUE_GRACE_DAYS: '7'
-      NUXT_GRACE_NOTICE_INTERVAL_HOURS: '24'
-      NUXT_BILLING_GATE_SECRET: ${BILLING_GATE_SECRET:?}
-      NUXT_BILLING_GATE_SHARED_KEY: ${BILLING_GATE_SHARED_KEY:?}
+      NUXT_COOLIFY_CREDENTIALS_KEY: ${NUXT_COOLIFY_CREDENTIALS_KEY:?}
+      NUXT_METRICS_TOKEN: ${NUXT_METRICS_TOKEN:?}
+      NUXT_BILLING_TIMEZONE: ${NUXT_BILLING_TIMEZONE:-Asia/Makassar}
+      NUXT_BILLING_CURRENCY: ${NUXT_BILLING_CURRENCY:-IDR}
+      NUXT_BILLING_AUTOMATION_ENABLED: ${NUXT_BILLING_AUTOMATION_ENABLED:-false}
+      NUXT_BILLING_ACCESS_CONTROL_ENABLED: ${NUXT_BILLING_ACCESS_CONTROL_ENABLED:-false}
+      NUXT_OVERDUE_GRACE_DAYS: ${NUXT_OVERDUE_GRACE_DAYS:-7}
+      NUXT_GRACE_NOTICE_INTERVAL_HOURS: ${NUXT_GRACE_NOTICE_INTERVAL_HOURS:-24}
+      NUXT_BILLING_GATE_SECRET: ${NUXT_BILLING_GATE_SECRET:?}
+      NUXT_BILLING_GATE_SHARED_KEY: ${NUXT_BILLING_GATE_SHARED_KEY:?}
+      NUXT_BILLING_GATE_INTERNAL_URL: ${NUXT_BILLING_GATE_INTERNAL_URL:?}
     ports:
       - '${APP_PORT:-8010}:3000'
     networks:
@@ -67,13 +49,8 @@ services:
       retries: 10
       start_period: 30s
     depends_on:
-      billengine-postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
-
-volumes:
-  billengine_test_postgres_v3:
 
 networks:
   coolify:
