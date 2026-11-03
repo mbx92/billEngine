@@ -204,6 +204,33 @@ export class CoolifyResourceService {
     return this.repository.replaceServerToken(serverId, encryptCredential(apiToken), actorUserId)
   }
 
+  async deleteServer(serverId: string, actorUserId: string | null) {
+    const connection = await this.repository.findServerConnection(serverId)
+    if (!connection) throw DomainError.notFound('Koneksi Coolify tidak ditemukan.')
+    const config = useRuntimeConfig()
+    if (
+      config.coolifyApiUrl &&
+      config.coolifyApiToken &&
+      normalizeBaseUrl(String(config.coolifyApiUrl)) === normalizeBaseUrl(connection.baseUrl)
+    )
+      throw DomainError.conflict(
+        'Koneksi ini dibuat otomatis dari env. Hapus COOLIFY_API_URL/COOLIFY_API_TOKEN (atau NUXT_*), lalu restart deployment sebelum menghapus koneksi agar tidak dibuat kembali saat sync.',
+      )
+    try {
+      return await this.repository.deleteServerConnection(serverId, actorUserId)
+    } catch (error) {
+      let cause: unknown = error
+      for (let depth = 0; cause && typeof cause === 'object' && depth < 8; depth++) {
+        if ('code' in cause && cause.code === '23503')
+          throw DomainError.conflict(
+            'Server atau resource masih dipakai data lain, termasuk riwayat provisioning. Hapus koneksi dibatalkan agar hubungan data tetap utuh.',
+          )
+        cause = 'cause' in cause ? cause.cause : undefined
+      }
+      throw error
+    }
+  }
+
   private async syncWithClient(
     serverId: string,
     client: CoolifyClient,

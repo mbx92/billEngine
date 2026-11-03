@@ -83,6 +83,13 @@ secrets, and database credentials must remain in server-side environment variabl
 
 ## Production deployment
 
+Use **Servers → Hapus server** to remove a Coolify connection, its stored token,
+and synced inventory from BillEngine. Confirm the target connection in the dialog.
+Deletion is refused while resources are linked to billing services or other
+dependent records. Coolify infrastructure and proxy configuration are unchanged.
+For an environment-configured connection, remove its Coolify URL/token environment
+variables and restart BillEngine first, so synchronization cannot recreate it.
+
 If sync returns **Token koneksi Coolify ditolak (HTTP 401)**, use **Servers →
 Perbarui token** on that exact connection. Generate the replacement in the
 corresponding Coolify instance and paste only the token, without `Bearer`.

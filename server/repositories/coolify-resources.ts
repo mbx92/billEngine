@@ -11,6 +11,7 @@ import type {
   NormalizedCoolifyResource,
 } from '../integrations/coolify/normalize'
 import { useDatabase, type Database, type Transaction } from '../database/client'
+import { DomainError } from '../utils/errors'
 import {
   auditLogs,
   coolifyNodes,
@@ -495,6 +496,49 @@ export class CoolifyResourceRepository {
     const job = inserted[0]
     if (!job) throw new Error('Failed to start the Coolify sync job.')
     return job.id
+  }
+
+  async deleteServerConnection(id: string, actorUserId: string | null) {
+    return this.database.transaction(async (transaction) => {
+      const [server] = await transaction
+        .select({ id: coolifyServers.id, name: coolifyServers.name })
+        .from(coolifyServers)
+        .where(eq(coolifyServers.id, id))
+        .for('update')
+      if (!server) throw DomainError.notFound('Koneksi Coolify tidak ditemukan.')
+      // Lock inventory rows so concurrent billing links cannot slip past the check.
+      const resources = await transaction
+        .select({ id: coolifyResources.id })
+        .from(coolifyResources)
+        .where(eq(coolifyResources.coolifyServerId, id))
+        .for('update')
+      if (resources.length) {
+        const [linked] = await transaction
+          .select({ id: serviceResources.id })
+          .from(serviceResources)
+          .where(
+            inArray(
+              serviceResources.resourceId,
+              resources.map((resource) => resource.id),
+            ),
+          )
+          .limit(1)
+        if (linked)
+          throw DomainError.conflict(
+            'Server masih memiliki resource yang terhubung ke layanan billing. Lepaskan hubungan resource tersebut terlebih dahulu.',
+          )
+      }
+      await transaction.delete(coolifyResources).where(eq(coolifyResources.coolifyServerId, id))
+      await transaction.delete(coolifyServers).where(eq(coolifyServers.id, id))
+      await transaction.insert(auditLogs).values({
+        actorUserId,
+        action: 'coolify.connection.deleted',
+        entityType: 'coolify_server',
+        entityId: id,
+        metadata: { name: server.name, removedResourceCount: resources.length },
+      })
+      return { id }
+    })
   }
 
   async completeSync(

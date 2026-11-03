@@ -15,6 +15,15 @@ const actionMessage = ref<string | null>(null)
 const form = reactive({ name: '', baseUrl: '', apiToken: '' })
 const gatewayNode = ref<{ id: string; name: string } | null>(null)
 const tokenServer = ref<ApiResourceServer | null>(null)
+const deleteServer = ref<ApiResourceServer | null>(null)
+
+async function serverDeleted() {
+  deleteServer.value = null
+  actionError.value = null
+  actionMessage.value =
+    'Koneksi server dihapus dari BillEngine. Infrastruktur di Coolify tetap berjalan.'
+  await refresh()
+}
 
 async function tokenSaved() {
   tokenServer.value = null
@@ -178,7 +187,14 @@ async function syncServer(server: ApiResourceServer) {
             <h2 class="truncate text-sm font-semibold text-ink">{{ server.name }}</h2>
             <p class="mt-1 truncate font-mono text-[11px] text-muted">{{ server.baseUrl }}</p>
           </div>
-          <div class="flex shrink-0 items-center gap-2">
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <UiButton
+              variant="danger"
+              size="sm"
+              :disabled="syncingServerId === server.id"
+              @click="deleteServer = server"
+              >Hapus server</UiButton
+            >
             <UiButton
               variant="secondary"
               size="sm"
@@ -299,6 +315,16 @@ async function syncServer(server: ApiResourceServer) {
       :base-url="tokenServer.baseUrl"
       @close="tokenServer = null"
       @saved="tokenSaved"
+    />
+    <DeleteCoolifyServerDialog
+      v-if="deleteServer"
+      :key="deleteServer.id"
+      :server-id="deleteServer.id"
+      :server-name="deleteServer.name"
+      :base-url="deleteServer.baseUrl"
+      :resource-count="deleteServer.resourceCount"
+      @close="deleteServer = null"
+      @deleted="serverDeleted"
     />
   </div>
 </template>
