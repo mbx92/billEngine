@@ -243,7 +243,7 @@ export interface ApiResourceServer {
   lastSyncStatus: string | null
   lastSyncError: string | null
   resourceCount: number
-  credentialSource: 'stored' | 'environment' | 'missing'
+  credentialSource: 'stored' | 'missing'
   nodes: ApiCoolifyNode[]
 }
 

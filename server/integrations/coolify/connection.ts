@@ -1,6 +1,6 @@
 import { CoolifyClient } from './client'
-import { normalizeBaseUrl } from '../../repositories/coolify-resources'
 import { decryptCredential } from '../../utils/credentials'
+import { DomainError } from '../../utils/errors'
 
 export interface CoolifyConnection {
   baseUrl: string
@@ -12,14 +12,7 @@ export function clientForCoolifyConnection(connection: CoolifyConnection) {
     return new CoolifyClient(connection.baseUrl, decryptCredential(connection.tokenEncrypted))
   }
 
-  const config = useRuntimeConfig()
-  if (
-    config.coolifyApiUrl &&
-    config.coolifyApiToken &&
-    normalizeBaseUrl(String(config.coolifyApiUrl)) === normalizeBaseUrl(connection.baseUrl)
-  ) {
-    return new CoolifyClient(connection.baseUrl, String(config.coolifyApiToken))
-  }
-
-  throw new Error('COOLIFY_CREDENTIALS_MISSING')
+  throw DomainError.invalidState(
+    'Token koneksi Coolify belum tersimpan. Gunakan Servers → Perbarui token pada koneksi ini.',
+  )
 }

@@ -79,8 +79,6 @@ export default defineNuxtConfig({
     databaseUrl: developmentEnv.DATABASE_URL || '',
     betterAuthSecret: developmentEnv.BETTER_AUTH_SECRET || '',
     betterAuthUrl: developmentEnv.BETTER_AUTH_URL || '',
-    coolifyApiUrl: developmentEnv.COOLIFY_API_URL || '',
-    coolifyApiToken: developmentEnv.COOLIFY_API_TOKEN || '',
     coolifyCredentialsKey: developmentEnv.COOLIFY_CREDENTIALS_KEY || '',
     infraCredentialsKey: developmentEnv.INFRA_CREDENTIALS_KEY || '',
     cloudflareApiToken: developmentEnv.CLOUDFLARE_API_TOKEN || '',

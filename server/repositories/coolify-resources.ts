@@ -309,7 +309,7 @@ export class CoolifyResourceRepository {
       lastSyncStatus: row.lastSyncStatus,
       lastSyncError: row.lastSyncError,
       resourceCount: Number(row.resourceCount),
-      credentialSource: row.tokenEncrypted ? 'stored' : 'missing',
+      credentialSource: row.tokenEncrypted ? ('stored' as const) : ('missing' as const),
       nodes: nodeRows
         .filter((node) => node.coolifyServerId === row.id)
         .map((node) => ({

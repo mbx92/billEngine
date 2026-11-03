@@ -87,8 +87,8 @@ Use **Servers → Hapus server** to remove a Coolify connection, its stored toke
 and synced inventory from BillEngine. Confirm the target connection in the dialog.
 Deletion is refused while resources are linked to billing services or other
 dependent records. Coolify infrastructure and proxy configuration are unchanged.
-For an environment-configured connection, remove its Coolify URL/token environment
-variables and restart BillEngine first, so synchronization cannot recreate it.
+Coolify URLs and API tokens are managed only through **Servers** and stored in
+the database. Connections are never recreated from environment variables.
 
 If sync returns **Token koneksi Coolify ditolak (HTTP 401)**, use **Servers →
 Perbarui token** on that exact connection. Generate the replacement in the
@@ -96,9 +96,19 @@ corresponding Coolify instance and paste only the token, without `Bearer`.
 BillEngine checks application/server read access before encrypting and saving it;
 an invalid replacement does not overwrite the previous credential. Existing
 resource IDs and billing assignments are preserved. Then run **Sync**.
-Stored connection tokens take precedence over `NUXT_COOLIFY_API_TOKEN`; changing
-env alone does not replace a stored token. The upstream 401 is surfaced as a
+Existing connections that previously used an environment token need **Perbarui
+token** once to save their token in the database, preserving their resource IDs
+and billing assignments. Keep the existing credential encryption key (or auth
+secret used as its fallback). The upstream 401 is surfaced as a
 BillEngine HTTP 502 external-service error, not as an expired BillEngine login.
+
+Deployments using `compose.production.yaml` can keep that file and their existing
+database volume. It no longer requires or passes Coolify API URL/token variables.
+Remove `COOLIFY_API_URL`, `COOLIFY_API_TOKEN`, `NUXT_COOLIFY_API_URL`, and
+`NUXT_COOLIFY_API_TOKEN` from Coolify's deployment environment, including build-time
+variables. Keep `COOLIFY_CREDENTIALS_KEY` and the other auth/gate secrets unchanged.
+The connection-test API (`POST /api/coolify/test-connection`) now requires a JSON
+body with the stored connection's `serverId`.
 
 For this Coolify branch, use **Docker Compose** with `/compose.coolify.yaml`.
 Copy the contents of the local, Git-ignored `.env.coolify` into Coolify's runtime

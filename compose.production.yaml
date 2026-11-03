@@ -144,10 +144,7 @@ services:
       NUXT_COMPANY_NAME: ${COMPANY_NAME:-OC Networks Billing}
       NUXT_BILLING_TIMEZONE: ${BILLING_TIMEZONE:-Asia/Makassar}
       NUXT_BILLING_CURRENCY: ${BILLING_CURRENCY:-IDR}
-      # Prefer an internal Coolify URL on the same host (e.g. http://host.docker.internal:8000)
-      # so outbound API calls do not hairpin through Cloudflare.
-      NUXT_COOLIFY_API_URL: ${COOLIFY_API_URL:?COOLIFY_API_URL is required}
-      NUXT_COOLIFY_API_TOKEN: ${COOLIFY_API_TOKEN:?COOLIFY_API_TOKEN is required}
+      # Coolify URLs and encrypted API tokens are managed through Servers in the database.
       NUXT_COOLIFY_CREDENTIALS_KEY: ${COOLIFY_CREDENTIALS_KEY:-}
       NUXT_INFRA_CREDENTIALS_KEY: ${INFRA_CREDENTIALS_KEY:-}
       NUXT_PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-ocnetworks.web.id}

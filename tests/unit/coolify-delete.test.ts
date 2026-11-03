@@ -42,15 +42,13 @@ describe('Coolify connection deletion', () => {
     expect(repository.deleteServerConnection).not.toHaveBeenCalled()
   })
 
-  it('prevents an environment connection from being recreated immediately after deletion', async () => {
+  it('allows deletion even when obsolete environment credentials are still set', async () => {
     const { service, repository } = setup({
       coolifyApiUrl: 'https://coolify.example.test/',
       coolifyApiToken: 'secret',
     })
-    await expect(service.deleteServer('server', 'admin')).rejects.toMatchObject({
-      code: 'CONFLICT',
-    })
-    expect(repository.deleteServerConnection).not.toHaveBeenCalled()
+    await expect(service.deleteServer('server', 'admin')).resolves.toEqual({ id: 'server' })
+    expect(repository.deleteServerConnection).toHaveBeenCalledWith('server', 'admin')
   })
 
   it('allows deleting a different connection when environment credentials exist', async () => {

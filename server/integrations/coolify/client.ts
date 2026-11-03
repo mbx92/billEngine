@@ -501,7 +501,7 @@ export class CoolifyClient {
 function coolifyHttpErrorMessage(status: number, body: string) {
   const snippet = body.slice(0, 300).toLowerCase()
   if (status === 401)
-    return 'Token koneksi Coolify ditolak (HTTP 401). Perbarui token pada Servers untuk instance Coolify yang sesuai. Token tersimpan mengalahkan NUXT_COOLIFY_API_TOKEN dari env.'
+    return 'Token koneksi Coolify ditolak (HTTP 401). Perbarui token pada Servers untuk instance Coolify yang sesuai.'
   if (
     status === 403 &&
     (snippet.includes('error-1010') ||
@@ -578,7 +578,7 @@ function coolifyNetworkErrorMessage(baseUrl: string) {
       return baseUrl
     }
   })()
-  return `Coolify API tidak dapat dijangkau (${host}). Jika BillEngine berjalan di host Coolify yang sama, set NUXT_COOLIFY_API_URL ke http://host.docker.internal:8000.`
+  return `Coolify API tidak dapat dijangkau (${host}). Periksa URL koneksi pada Servers dan konektivitas dari BillEngine ke instance Coolify tersebut.`
 }
 
 function parseDeployment(payload: Record<string, unknown>): CoolifyDeployment {
@@ -690,14 +690,4 @@ function emptyUsage(status: Exclude<ResourceMetricsStatus, 'available'>): Coolif
 
 function metricTimeToDate(value: number): Date {
   return new Date(value < 1_000_000_000_000 ? value * 1_000 : value)
-}
-
-export function useCoolifyClient() {
-  const config = useRuntimeConfig()
-
-  if (!config.coolifyApiUrl || !config.coolifyApiToken) {
-    throw new Error('COOLIFY_API_URL and COOLIFY_API_TOKEN must be configured.')
-  }
-
-  return new CoolifyClient(config.coolifyApiUrl, config.coolifyApiToken)
 }

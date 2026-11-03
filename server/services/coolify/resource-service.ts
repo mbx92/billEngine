@@ -133,22 +133,14 @@ export class CoolifyResourceService {
     )
   }
 
-  async listServers() {
-    const servers = await this.repository.listServers()
-    const config = useRuntimeConfig()
-    const environmentUrl = config.coolifyApiUrl
-      ? normalizeBaseUrl(String(config.coolifyApiUrl))
-      : null
+  listServers() {
+    return this.repository.listServers()
+  }
 
-    return servers.map((server) => ({
-      ...server,
-      credentialSource:
-        server.credentialSource === 'stored'
-          ? ('stored' as const)
-          : environmentUrl && normalizeBaseUrl(server.baseUrl) === environmentUrl
-            ? ('environment' as const)
-            : ('missing' as const),
-    }))
+  async testConnection(serverId: string) {
+    const connection = await this.repository.findServerConnection(serverId)
+    if (!connection?.isActive) throw DomainError.notFound('Koneksi Coolify tidak ditemukan.')
+    return this.clientForConnection(connection).testConnection()
   }
 
   async sync(actorUserId: string | null) {
@@ -157,9 +149,11 @@ export class CoolifyResourceService {
       return this.syncWithClient(serverId, this.client, actorUserId)
     }
 
-    await this.ensureEnvironmentConnection()
     const connections = await this.repository.listActiveServerConnections()
-    if (connections.length === 0) throw new Error('No active Coolify connections are configured.')
+    if (connections.length === 0)
+      throw DomainError.invalidState(
+        'Belum ada koneksi Coolify. Tambahkan koneksi melalui halaman Servers.',
+      )
 
     const results = []
     for (const connection of connections) {
@@ -207,15 +201,6 @@ export class CoolifyResourceService {
   async deleteServer(serverId: string, actorUserId: string | null) {
     const connection = await this.repository.findServerConnection(serverId)
     if (!connection) throw DomainError.notFound('Koneksi Coolify tidak ditemukan.')
-    const config = useRuntimeConfig()
-    if (
-      config.coolifyApiUrl &&
-      config.coolifyApiToken &&
-      normalizeBaseUrl(String(config.coolifyApiUrl)) === normalizeBaseUrl(connection.baseUrl)
-    )
-      throw DomainError.conflict(
-        'Koneksi ini dibuat otomatis dari env. Hapus COOLIFY_API_URL/COOLIFY_API_TOKEN (atau NUXT_*), lalu restart deployment sebelum menghapus koneksi agar tidak dibuat kembali saat sync.',
-      )
     try {
       return await this.repository.deleteServerConnection(serverId, actorUserId)
     } catch (error) {
@@ -259,13 +244,6 @@ export class CoolifyResourceService {
       const message = syncErrorMessage(error)
       await this.repository.failSync(serverId, jobId, message, new Date()).catch(() => undefined)
       throw error
-    }
-  }
-
-  private async ensureEnvironmentConnection() {
-    const config = useRuntimeConfig()
-    if (config.coolifyApiUrl && config.coolifyApiToken) {
-      await this.repository.findOrCreateServer(String(config.coolifyApiUrl))
     }
   }
 

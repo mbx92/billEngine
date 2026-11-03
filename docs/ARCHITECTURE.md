@@ -412,12 +412,8 @@ CoolifyClient
 Coolify REST API
 ```
 
-Credential:
-
-```text
-COOLIFY_API_URL
-COOLIFY_API_TOKEN
-```
+URL dan API token Coolify dikelola per koneksi melalui halaman Servers.
+URL disimpan di database; token dienkripsi menggunakan kunci server-side.
 
 Tidak boleh menggunakan public runtime variable untuk token.
 
@@ -561,7 +557,7 @@ Tidak masuk Git:
 ```text
 DATABASE_URL
 BETTER_AUTH_SECRET
-COOLIFY_API_TOKEN
+NUXT_COOLIFY_CREDENTIALS_KEY
 ```
 
 Production secret disimpan melalui environment/secret management

@@ -632,12 +632,8 @@ Coolify API token hanya tersedia server-side.
 Tidak boleh menggunakan variable public seperti
 `NUXT_PUBLIC_COOLIFY_TOKEN`.
 
-Secret server-side:
-
-```text
-COOLIFY_API_URL
-COOLIFY_API_TOKEN
-```
+URL dan API token Coolify dikelola melalui Servers dan disimpan di database.
+Token dienkripsi dengan NUXT_COOLIFY_CREDENTIALS_KEY (fallback ke secret auth).
 
 Alur:
 
@@ -787,8 +783,7 @@ BETTER_AUTH_URL=
 
 APP_URL=
 
-COOLIFY_API_URL=
-COOLIFY_API_TOKEN=
+NUXT_COOLIFY_CREDENTIALS_KEY=
 
 COMPANY_NAME=
 COMPANY_EMAIL=
