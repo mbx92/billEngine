@@ -2,6 +2,8 @@
 .nuxt
 .output
 node_modules
+.cache
+backups
 .env*
 !.env.example
 coverage
