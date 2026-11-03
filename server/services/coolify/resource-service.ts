@@ -195,6 +195,15 @@ export class CoolifyResourceService {
     return this.syncWithClient(serverId, client, actorUserId)
   }
 
+  async replaceServerToken(serverId: string, apiToken: string, actorUserId: string | null) {
+    const connection = await this.repository.findServerConnection(serverId)
+    if (!connection?.isActive) throw DomainError.notFound('Koneksi Coolify tidak ditemukan.')
+    const client = new CoolifyClient(connection.baseUrl, apiToken)
+    // Validate inventory permissions, not just access to the version endpoint.
+    await Promise.all([client.listApplications(), client.listServers()])
+    return this.repository.replaceServerToken(serverId, encryptCredential(apiToken), actorUserId)
+  }
+
   private async syncWithClient(
     serverId: string,
     client: CoolifyClient,

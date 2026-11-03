@@ -436,6 +436,25 @@ export class CoolifyResourceRepository {
     return server.id
   }
 
+  async replaceServerToken(id: string, tokenEncrypted: string, actorUserId: string | null) {
+    return this.database.transaction(async (transaction) => {
+      const [updated] = await transaction
+        .update(coolifyServers)
+        .set({ tokenEncrypted, status: 'unknown', lastSyncError: null, updatedAt: new Date() })
+        .where(and(eq(coolifyServers.id, id), eq(coolifyServers.isActive, true)))
+        .returning({ id: coolifyServers.id })
+      if (!updated) throw new Error('COOLIFY_SERVER_NOT_FOUND')
+      await transaction.insert(auditLogs).values({
+        actorUserId,
+        action: 'coolify.connection.token_updated',
+        entityType: 'coolify_server',
+        entityId: id,
+        metadata: { credentialSource: 'stored' },
+      })
+      return updated
+    })
+  }
+
   async findOrCreateServer(baseUrl: string) {
     const servers = await this.database
       .select({ id: coolifyServers.id, baseUrl: coolifyServers.baseUrl })

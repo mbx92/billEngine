@@ -106,7 +106,7 @@ describe('Coolify client', () => {
     await expect(request).rejects.toMatchObject<Partial<CoolifyClientError>>({
       name: 'CoolifyClientError',
       statusCode: 401,
-      message: expect.stringContaining('token ditolak'),
+      message: expect.stringMatching(/HTTP 401.*Servers/),
     })
   })
 

@@ -83,6 +83,16 @@ secrets, and database credentials must remain in server-side environment variabl
 
 ## Production deployment
 
+If sync returns **Token koneksi Coolify ditolak (HTTP 401)**, use **Servers →
+Perbarui token** on that exact connection. Generate the replacement in the
+corresponding Coolify instance and paste only the token, without `Bearer`.
+BillEngine checks application/server read access before encrypting and saving it;
+an invalid replacement does not overwrite the previous credential. Existing
+resource IDs and billing assignments are preserved. Then run **Sync**.
+Stored connection tokens take precedence over `NUXT_COOLIFY_API_TOKEN`; changing
+env alone does not replace a stored token. The upstream 401 is surfaced as a
+BillEngine HTTP 502 external-service error, not as an expired BillEngine login.
+
 For this Coolify branch, use **Docker Compose** with `/compose.coolify.yaml`.
 Copy the contents of the local, Git-ignored `.env.coolify` into Coolify's runtime
 Environment Variables. `.env.coolify.example` is the shareable template and has

@@ -500,7 +500,8 @@ export class CoolifyClient {
 
 function coolifyHttpErrorMessage(status: number, body: string) {
   const snippet = body.slice(0, 300).toLowerCase()
-  if (status === 401) return 'Coolify API token ditolak. Periksa NUXT_COOLIFY_API_TOKEN.'
+  if (status === 401)
+    return 'Token koneksi Coolify ditolak (HTTP 401). Perbarui token pada Servers untuk instance Coolify yang sesuai. Token tersimpan mengalahkan NUXT_COOLIFY_API_TOKEN dari env.'
   if (
     status === 403 &&
     (snippet.includes('error-1010') ||

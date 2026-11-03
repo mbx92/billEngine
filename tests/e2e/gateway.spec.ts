@@ -51,6 +51,8 @@ test('configures gate per node and verifies a Compose resource through the proxy
           },
         ],
       }
+    else if (path === '/api/resources/servers/connection/token')
+      body = { data: { id: 'connection' } }
     else if (path === `/api/resources/nodes/${nodeId}/gateway`) {
       if (request.method() === 'POST') {
         saved = true
@@ -173,6 +175,15 @@ test('configures gate per node and verifies a Compose resource through the proxy
   await page.getByLabel('Email').fill('fixture@example.test')
   await page.getByLabel('Password', { exact: true }).fill('fixture-password')
   await page.getByRole('button', { name: 'Masuk', exact: true }).click()
+  await page.getByRole('button', { name: 'Perbarui token', exact: true }).click()
+  await page.getByLabel('API token baru').fill('fixture-new-token')
+  await page.getByRole('button', { name: 'Uji & simpan token', exact: true }).click()
+  await expect(
+    page.getByText('Token berhasil diuji dan diperbarui.', { exact: false }),
+  ).toBeVisible()
+  expect(
+    writes.find((item) => item.path === '/api/resources/servers/connection/token')?.body,
+  ).toEqual({ apiToken: 'fixture-new-token' })
   await page.getByRole('button', { name: 'Gate proxy', exact: true }).click()
   const dialog = page.getByRole('dialog')
   const save = dialog.getByRole('button', { name: 'Simpan konfigurasi proxy' })

@@ -14,6 +14,14 @@ const actionError = ref<string | null>(null)
 const actionMessage = ref<string | null>(null)
 const form = reactive({ name: '', baseUrl: '', apiToken: '' })
 const gatewayNode = ref<{ id: string; name: string } | null>(null)
+const tokenServer = ref<ApiResourceServer | null>(null)
+
+async function tokenSaved() {
+  tokenServer.value = null
+  actionError.value = null
+  actionMessage.value = 'Token berhasil diuji dan diperbarui. Jalankan Sync pada koneksi tersebut.'
+  await refresh()
+}
 
 const { data, status, error, refresh } = await useFetch<{ data: ApiResourceServer[] }>(
   '/api/resources/servers',
@@ -171,6 +179,13 @@ async function syncServer(server: ApiResourceServer) {
             <p class="mt-1 truncate font-mono text-[11px] text-muted">{{ server.baseUrl }}</p>
           </div>
           <div class="flex shrink-0 items-center gap-2">
+            <UiButton
+              variant="secondary"
+              size="sm"
+              :disabled="syncingServerId === server.id"
+              @click="tokenServer = server"
+              >Perbarui token</UiButton
+            >
             <UiBadge
               :tone="
                 server.status === 'connected'
@@ -275,6 +290,15 @@ async function syncServer(server: ApiResourceServer) {
       :node-id="gatewayNode.id"
       :node-name="gatewayNode.name"
       @close="gatewayNode = null"
+    />
+    <CoolifyTokenDialog
+      v-if="tokenServer"
+      :key="tokenServer.id"
+      :server-id="tokenServer.id"
+      :server-name="tokenServer.name"
+      :base-url="tokenServer.baseUrl"
+      @close="tokenServer = null"
+      @saved="tokenSaved"
     />
   </div>
 </template>
