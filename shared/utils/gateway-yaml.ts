@@ -1,10 +1,10 @@
-export function gatewayMiddlewareYaml(checkUrl: string) {
+export function gatewayMiddlewareYaml(checkUrl: string, sharedKey: string) {
   return `http:
   middlewares:
     billing-gate-key:
       headers:
         customRequestHeaders:
-          X-Billing-Gate-Key: '<NUXT_BILLING_GATE_SHARED_KEY>'
+          X-Billing-Gate-Key: ${JSON.stringify(sharedKey)}
     billing-gate-forward:
       forwardAuth:
         address: ${JSON.stringify(checkUrl)}

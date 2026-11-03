@@ -24,6 +24,7 @@ describe('gateway management admin boundary', () => {
     const handlers = [
       (await import('../../server/api/settings/gateway.get')).default,
       (await import('../../server/api/settings/gateway.put')).default,
+      (await import('../../server/api/settings/gateway-yaml.post')).default,
       (await import('../../server/api/resources/[id]/gateway.get')).default,
       (await import('../../server/api/resources/[id]/gateway.post')).default,
       (await import('../../server/api/resources/[id]/gateway-verify.post')).default,

@@ -73,10 +73,20 @@ legacy BillEngine-managed domain records are no longer routing authority.
 ## Configure from BillEngine
 
 1. In **Settings → Koneksi proxy billing gateway**, save the check URL reachable
-   from the Coolify proxy. Expand **Konfigurasi manual billing-gate.yaml**, copy
-   the YAML, replace its shared-key placeholder, and install it manually on each
+   from the Coolify proxy. Expand **Konfigurasi manual billing-gate.yaml**, select
+   **Generate YAML dari env** and **Salin YAML**, then install it manually on each
    server under **Proxy → Dynamic Configurations**. Saving this URL only updates
-   the template; existing proxy files must be updated manually too.
+   the template; existing proxy files must be updated manually too. Generation is
+   admin-only and fetches the real shared key from server runtime environment on
+   demand; the result is marked `no-store`, never saved in audit metadata, and is
+   not included in ordinary settings responses or initial page HTML. The signing
+   secret is never returned. Use **Sembunyikan** to clear the generated YAML.
+   The default URL uses saved gateway settings first, then
+   `NUXT_BILLING_GATE_INTERNAL_URL`, then `NUXT_PUBLIC_APP_URL` with
+   `/api/billing-gate/check`. An explicit per-node URL is used for generation in
+   the node dialog. A domain-derived URL does not prove proxy reachability and
+   must not route through a gated entrypoint. Public URL support for automatic
+   entrypoint changes remains subject to the validation described below.
 2. Sync **Resources**, classify the application as **Billable**, and link it to a
    service. Every application domain must have an unambiguous billing owner.
 3. Open **Resources → Konfigurasi gate**. Review the middleware changes, confirm
@@ -99,7 +109,8 @@ Docker Compose uses the per-server flow below and can be verified directly from
 its resource dialog. Caddy, absent/duplicate labels, and routers for hosts outside
 the application's domain list are rejected by the application label editor. The
 BillEngine hostname itself is never accepted as a target. All management APIs
-require admin access; credential values are not returned by these APIs. Only
+require admin access; Coolify API credentials and the gate signing secret are
+never returned. Only the on-demand YAML endpoint returns the gate shared key. Only
 router middleware changes are shown in the preview, not the full label set.
 
 Gateway configuration and verification metadata use the existing settings table;
@@ -126,8 +137,9 @@ TCP/UDP routers and traffic that bypasses this proxy are not protected.
    as `http://host.docker.internal:8010/api/billing-gate/check` or
    `http://billengine:3000/api/billing-gate/check`. The network/DNS/port must be
    reachable from the proxy container. `localhost` refers to that container.
-4. Expand the YAML template in the dialog. Install `billing-gate.yaml` manually
-   on that node with exactly that URL and the shared key from BillEngine. The
+4. Expand the YAML template in the dialog and select **Generate YAML dari env**.
+   Install the generated `billing-gate.yaml` manually on that node; the URL and
+   actual shared key are already filled in. The
    dialog does not write or inspect the dynamic middleware file.
 5. Select application entrypoints, normally `http` and `https`, then **Pratinjau**.
    Existing middleware is retained. Review the scope, confirm the file and direct

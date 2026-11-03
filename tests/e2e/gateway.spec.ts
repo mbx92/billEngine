@@ -257,7 +257,13 @@ test('previews, saves and verifies gateway configuration with isolated API fixtu
       body = { user, session: { id, userId: id, expiresAt: '2099-01-01T00:00:00Z' } }
     else if (path === '/api/me') body = { data: user }
     else if (path === '/api/settings') body = { data: settings }
-    else if (path === '/api/settings/gateway') {
+    else if (path === '/api/settings/gateway-yaml') {
+      body = {
+        data: {
+          yaml: `http:\n  middlewares:\n    billing-gate-forward:\n      forwardAuth:\n        address: ${request.postDataJSON().checkUrl}\n    billing-gate-key:\n      headers:\n        customRequestHeaders:\n          X-Billing-Gate-Key: fixture-shared-key`,
+        },
+      }
+    } else if (path === '/api/settings/gateway') {
       if (request.method() === 'PUT') checkUrl = request.postDataJSON().checkUrl
       body = { data: { checkUrl, secretsConfigured: true } }
     } else if (path === '/api/resources')
@@ -340,8 +346,13 @@ test('previews, saves and verifies gateway configuration with isolated API fixtu
   await page.getByRole('button', { name: 'Simpan URL gateway' }).click()
   await expect(page.getByText('URL tersimpan.', { exact: false })).toBeVisible()
   await page.getByText('Konfigurasi manual billing-gate.yaml', { exact: true }).click()
+  await expect(page.locator('details pre')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Generate YAML dari env' }).click()
   await expect(page.locator('details pre')).toContainText(
     'https://new-billing.example.test/api/billing-gate/check',
   )
+  await expect(page.locator('details pre')).toContainText('fixture-shared-key')
+  await page.getByRole('button', { name: 'Sembunyikan', exact: true }).click()
+  await expect(page.locator('details pre')).toHaveCount(0)
   expect(writes.some((write) => /deploy|restart/.test(write.path))).toBe(false)
 })

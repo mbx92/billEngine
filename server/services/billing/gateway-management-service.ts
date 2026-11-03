@@ -15,6 +15,7 @@ import { planGatewayLabels, gatewayRevision, decodeLabels } from './gateway-labe
 import { inspectGateway } from './gateway-probe'
 import { BillingAccessControlService } from './access-control-service'
 import { normalizeCoolifyApplication } from '../../integrations/coolify/normalize'
+import { gatewayMiddlewareYaml } from '../../../shared/utils/gateway-yaml'
 
 const settingsKey = 'gateway.configuration'
 const resourceKey = (id: string) => `gateway.resource.${id}`
@@ -31,12 +32,31 @@ export class GatewayManagementService {
   async getSettings(): Promise<ApiGatewaySettings> {
     const stored = gatewaySettingsSchema.safeParse(await this.repository.read(settingsKey))
     const runtime = billingGateRuntime()
+    const internalUrl = String(useRuntimeConfig().billingGateInternalUrl || '').trim()
+    let defaultUrl = internalUrl
+    if (!defaultUrl) {
+      try {
+        defaultUrl = new URL('/api/billing-gate/check', runtime.appUrl).href
+      } catch {
+        defaultUrl = ''
+      }
+    }
     return {
-      checkUrl: stored.success
-        ? stored.data.checkUrl
-        : String(useRuntimeConfig().billingGateInternalUrl || ''),
+      checkUrl: stored.success ? stored.data.checkUrl : defaultUrl,
       secretsConfigured: Boolean(runtime.secret && runtime.sharedKey),
     }
+  }
+
+  async generateYaml(input: { checkUrl?: string } = {}) {
+    const runtime = billingGateRuntime()
+    if (!runtime.secret || !runtime.sharedKey)
+      throw DomainError.invalidState(
+        'Atur NUXT_BILLING_GATE_SECRET dan NUXT_BILLING_GATE_SHARED_KEY pada server BillEngine terlebih dahulu.',
+      )
+    const { checkUrl } = gatewaySettingsSchema.parse({
+      checkUrl: input.checkUrl ?? (await this.getSettings()).checkUrl,
+    })
+    return { checkUrl, yaml: gatewayMiddlewareYaml(checkUrl, runtime.sharedKey) }
   }
 
   async saveSettings(input: { checkUrl: string }, actor: SettingsActorContext) {

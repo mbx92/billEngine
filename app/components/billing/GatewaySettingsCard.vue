@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { gatewayMiddlewareYaml } from '#shared/utils/gateway-yaml'
 import type { ApiGatewaySettings } from '#shared/schemas/gateway'
 import { apiErrorMessage } from '~/lib/api-error'
 
@@ -15,7 +14,6 @@ watch(
   },
   { immediate: true },
 )
-const yaml = computed(() => gatewayMiddlewareYaml(data.value?.data.checkUrl || ''))
 
 async function save() {
   saving.value = true
@@ -72,11 +70,10 @@ async function save() {
       </summary>
       <p class="my-3 text-xs leading-5 text-muted">
         Di Coolify: Servers → server aplikasi → Proxy → Dynamic Configurations. Buat
-        billing-gate.yaml dengan isi berikut. Ganti placeholder shared key dengan nilai environment
-        yang sama pada BillEngine. Simpan perubahan URL di atas sebelum menyalin YAML. Jangan pasang
-        gate pada aplikasi BillEngine sendiri.
+        billing-gate.yaml dengan hasil generator berikut. Shared key diisi otomatis dari environment
+        server. Simpan perubahan URL sebelum menyalin YAML.
       </p>
-      <pre class="overflow-x-auto rounded bg-canvas p-3 text-xs"><code>{{ yaml }}</code></pre>
+      <GatewayYamlTemplate :check-url="data.data.checkUrl" />
     </details>
   </UiCard>
 </template>

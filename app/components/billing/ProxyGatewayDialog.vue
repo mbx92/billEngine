@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { ApiProxyGateway, ApiProxyGatewayPlan } from '#shared/schemas/gateway'
-import { gatewayMiddlewareYaml } from '#shared/utils/gateway-yaml'
 import { apiErrorMessage } from '~/lib/api-error'
 
 const props = defineProps<{ nodeId: string; nodeName: string }>()
@@ -15,7 +14,6 @@ const preview = ref<ApiProxyGatewayPlan | null>(null)
 const busy = ref(false)
 const message = ref('')
 const failure = ref('')
-const yaml = computed(() => gatewayMiddlewareYaml(checkUrl.value))
 
 watch(
   () => data.value,
@@ -159,11 +157,11 @@ async function save() {
           billing-gate.yaml untuk node ini
         </summary>
         <p class="my-3 text-xs text-muted">
-          Pasang manual di Coolify → server ini → Proxy → Dynamic Configurations. Ganti placeholder
-          shared key dengan nilai NUXT_BILLING_GATE_SHARED_KEY pada deployment BillEngine.
-          Pengaturan URL di dialog ini tidak mengubah file middleware otomatis.
+          Pasang manual di Coolify → server ini → Proxy → Dynamic Configurations. Shared key diisi
+          otomatis dari environment server BillEngine. Pengaturan URL di dialog ini tidak mengubah
+          file middleware otomatis.
         </p>
-        <pre class="overflow-x-auto rounded bg-canvas p-3 text-xs"><code>{{ yaml }}</code></pre>
+        <GatewayYamlTemplate :check-url="checkUrl" />
       </details>
       <div v-if="preview" class="space-y-3">
         <p class="text-sm font-semibold">

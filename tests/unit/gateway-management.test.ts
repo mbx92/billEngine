@@ -15,6 +15,7 @@ import {
   inspectGateway,
 } from '../../server/services/billing/gateway-probe'
 import { gatewaySettingsSchema } from '../../shared/schemas/gateway'
+import { parse } from 'yaml'
 
 const labels = [
   'traefik.enable=true',
@@ -175,6 +176,67 @@ describe('gateway management workflow', () => {
     expect((await service.verify('resource', actor)).reachable).toBe(true)
     await expect(service.save('resource', preview.revision, actor)).rejects.toThrow(/Servers/)
     expect(client.saveApplicationGatewayLabels).not.toHaveBeenCalled()
+  })
+  it('uses the saved URL, then env internal URL, then the public app domain for YAML defaults', async () => {
+    expect((await service.getSettings()).checkUrl).toBe(
+      'https://billing.example.test/api/billing-gate/check',
+    )
+    vi.stubGlobal('useRuntimeConfig', () => ({
+      billingGateSecret: 'secret',
+      billingGateSharedKey: 'key',
+      billingGateInternalUrl: 'http://billengine:3000/api/billing-gate/check',
+      public: { appUrl: 'https://billing.example.test' },
+    }))
+    expect((await service.getSettings()).checkUrl).toBe(
+      'http://billengine:3000/api/billing-gate/check',
+    )
+    repository.read.mockResolvedValue({
+      checkUrl: 'https://gate.example.test/api/billing-gate/check',
+    })
+    const result = await service.generateYaml()
+    const middleware = parse(result.yaml).http.middlewares
+    expect(middleware['billing-gate-forward'].forwardAuth.address).toBe(
+      'https://gate.example.test/api/billing-gate/check',
+    )
+    expect(middleware['billing-gate-key'].headers.customRequestHeaders['X-Billing-Gate-Key']).toBe(
+      'key',
+    )
+    expect(result.yaml).not.toContain('<NUXT_BILLING_GATE_SHARED_KEY>')
+    expect(result.yaml).not.toContain('secret')
+    expect(repository.save).not.toHaveBeenCalled()
+  })
+  it('uses the selected node URL and quotes the actual shared key safely in YAML', async () => {
+    const sharedKey = 'value: "quoted" # apostrophe\' \\ newline\nnext'
+    vi.stubGlobal('useRuntimeConfig', () => ({
+      billingGateSecret: 'signing-secret',
+      billingGateSharedKey: sharedKey,
+      public: { appUrl: 'https://billing.example.test' },
+    }))
+    const result = await service.generateYaml({
+      checkUrl: 'http://billengine:3000/api/billing-gate/check',
+    })
+    const middleware = parse(result.yaml).http.middlewares
+    expect(middleware['billing-gate-key'].headers.customRequestHeaders['X-Billing-Gate-Key']).toBe(
+      sharedKey,
+    )
+    expect(middleware['billing-gate-forward'].forwardAuth.address).toBe(
+      'http://billengine:3000/api/billing-gate/check',
+    )
+    expect(
+      middleware['billing-gate-key-clear'].headers.customRequestHeaders['X-Billing-Gate-Key'],
+    ).toBe('')
+    expect(JSON.stringify(await service.getSettings())).not.toContain(sharedKey)
+    expect(result.yaml).not.toContain('signing-secret')
+    expect(repository.save).not.toHaveBeenCalled()
+  })
+  it('refuses YAML with missing secrets or an invalid check URL', async () => {
+    await expect(
+      service.generateYaml({ checkUrl: 'https://user:pass@host/wrong' }),
+    ).rejects.toThrow()
+    vi.stubGlobal('useRuntimeConfig', () => ({
+      public: { appUrl: 'https://billing.example.test' },
+    }))
+    await expect(service.generateYaml()).rejects.toThrow(/NUXT_BILLING_GATE/)
   })
   it('rejects unmapped domains without changing Coolify', async () => {
     app.build_pack = 'dockerfile'
