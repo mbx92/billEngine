@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { authClient } from '~/lib/auth-client'
+import {
+  loginDestination,
+  safeLoginRedirect,
+  type LoginRole,
+} from '#shared/utils/login-destination'
 
 definePageMeta({ layout: 'auth' })
 useHead({ title: 'Sign in · Billing Infra' })
@@ -12,27 +17,45 @@ const errorMessage = ref('')
 const pending = ref(false)
 
 async function submit() {
+  if (pending.value) return
   pending.value = true
   errorMessage.value = ''
-  const { error } = await authClient.signIn.email({ email: email.value, password: password.value })
-  pending.value = false
-
-  if (error) {
-    errorMessage.value = error.message || 'Sign in gagal.'
-    return
+  try {
+    const { error } = await authClient.signIn.email({
+      email: email.value.trim(),
+      password: password.value,
+    })
+    if (error) {
+      errorMessage.value = error.message || 'Email atau password tidak sesuai.'
+      return
+    }
+    const session = await $fetch<{ user: { role: LoginRole; customerId?: string | null } } | null>(
+      '/api/auth/get-session',
+    )
+    if (!session) {
+      errorMessage.value = 'Sesi login belum terbentuk. Coba masuk kembali.'
+      return
+    }
+    clearNuxtData()
+    await navigateTo(
+      loginDestination(session.user.role, route.query.redirect, session.user.customerId),
+    )
+  } catch {
+    errorMessage.value = 'Tidak dapat terhubung ke layanan login. Silakan coba lagi.'
+  } finally {
+    pending.value = false
   }
-
-  await navigateTo(typeof route.query.redirect === 'string' ? route.query.redirect : '/')
 }
+
+const portalLogin = computed(
+  () => safeLoginRedirect(route.query.redirect)?.startsWith('/portal') === true,
+)
 </script>
 
 <template>
   <div class="w-full max-w-sm">
     <div class="mb-7 flex items-center gap-3">
-      <span
-        class="flex size-10 items-center justify-center rounded-md border border-brand/30 bg-brand/10 font-mono text-sm font-bold text-brand"
-        >B_</span
-      >
+      <AppLogo class="size-10 shrink-0" />
       <div>
         <strong class="block text-sm">Billing Infra</strong
         ><span class="font-mono text-[10px] tracking-wider text-muted uppercase"
@@ -43,7 +66,15 @@ async function submit() {
     <UiCard>
       <h1 class="text-xl font-semibold tracking-tight">Masuk</h1>
       <p class="mt-2 text-sm leading-6 text-muted">
-        Masuk dengan akun admin atau customer portal. Kredensial Coolify tidak diterima di sini.
+        {{
+          portalLogin
+            ? 'Masuk dengan akun customer yang terhubung ke layanan Anda untuk melihat invoice dan status layanan.'
+            : 'Masuk dengan akun admin atau customer portal.'
+        }}
+      </p>
+      <p v-if="portalLogin" class="mt-2 text-xs leading-5 text-muted">
+        Belum memiliki akun? Hubungi pengelola layanan. Email pada invoice belum tentu sudah
+        memiliki akun login.
       </p>
       <form class="mt-6 space-y-4" @submit.prevent="submit">
         <UiInput
@@ -64,6 +95,7 @@ async function submit() {
         />
         <div
           v-if="errorMessage"
+          role="alert"
           class="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
         >
           {{ errorMessage }}

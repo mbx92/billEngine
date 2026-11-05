@@ -64,6 +64,13 @@ npm run test:e2e
    needed. All applications on selected entrypoints depend on BillEngine availability.
    See [the gateway setup](docs/BILLING-GATE.md).
 
+Customer portal login requires a user with role **customer**, linked to the
+intended customer under **Users**. Creating a customer record alone does not
+create login credentials. After login, the requested invoice opens directly;
+an admin follows the same link to the admin invoice page. Portal links reuse
+an existing session, and unlinked customer accounts show an access explanation.
+Login/logout clears cached page data so switching accounts needs no refresh.
+
 Suspend/cancel updates billing and gateway access only. Reactivation resumes
 billing and reevaluates unpaid invoices. Deployment, start/stop/restart,
 CPU/RAM changes, domain/SSL configuration, database provisioning, and tunnel

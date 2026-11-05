@@ -119,8 +119,13 @@ export async function requireSuperAdmin(event: H3Event) {
 
 export async function requireCustomer(event: H3Event) {
   const session = await requireSession(event)
-  if (session.user.role !== 'customer' || !session.user.customerId) {
+  if (session.user.role !== 'customer') {
     throw DomainError.forbidden()
+  }
+  if (!session.user.customerId) {
+    throw DomainError.invalidState(
+      'Akun Anda belum terhubung ke customer. Hubungi pengelola layanan.',
+    )
   }
   return { ...session, customerId: session.user.customerId }
 }

@@ -882,9 +882,9 @@ async function deleteService() {
       <div
         class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
       >
-        Hanya service berstatus cancelled yang dapat dihapus, dan hanya jika belum pernah
-        ditagihkan. Aplikasi Coolify dan database PostgreSQL tidak dihapus. Tindakan ini tidak dapat
-        dibatalkan.
+        Hanya service berstatus cancelled yang dapat dihapus setelah semua invoice terkait dihapus.
+        Membatalkan invoice saja belum cukup. Aplikasi Coolify dan database PostgreSQL tidak
+        dihapus. Tindakan ini tidak dapat dibatalkan.
       </div>
       <template #footer>
         <div class="flex justify-end gap-2">

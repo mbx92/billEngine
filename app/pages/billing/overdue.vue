@@ -81,8 +81,8 @@ function leaveFor(url: string) {
       </h1>
       <p class="mt-2 text-sm leading-6 text-muted">
         <template v-if="notice.state === 'grace'">
-          Layanan masih dapat digunakan selama grace period. Selesaikan pembayaran sebelum batas
-          waktu agar akses tidak dibatasi.
+          Layanan masih dapat digunakan selama grace period. Selesaikan invoice atau hubungi
+          pengelola layanan sebelum batas waktu agar akses tidak dibatasi.
         </template>
         <template v-else-if="notice.state === 'suspended' || notice.state === 'cancelled'">
           Layanan ini {{ notice.state === 'suspended' ? 'sedang disuspend' : 'telah dibatalkan' }}.
@@ -127,7 +127,8 @@ function leaveFor(url: string) {
       </div>
 
       <p v-if="notice.state === 'grace'" class="mt-4 text-center text-xs leading-5 text-muted">
-        Pemberitahuan akan ditampilkan kembali secara berkala sampai invoice dilunasi.
+        Pemberitahuan akan ditampilkan kembali secara berkala selama invoice masih belum
+        diselesaikan.
       </p>
     </UiCard>
   </div>

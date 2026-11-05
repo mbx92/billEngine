@@ -7,10 +7,13 @@ import { PDFDocument, registerStdFonts } from '#pdfkit-browser'
 import Helvetica from 'pdfkit/standard-fonts/Helvetica'
 // @ts-expect-error -- no types for pdfkit/standard-fonts/*
 import HelveticaBold from 'pdfkit/standard-fonts/HelveticaBold'
+// @ts-expect-error -- no types for pdfkit/standard-fonts/*
+import CourierBold from 'pdfkit/standard-fonts/CourierBold'
+import { SYSTEM_LOGO } from '../../../shared/constants/branding'
 import { billingPeriodMonths, monthlyEquivalent } from '../../../shared/utils/billing-display'
 import type { InvoiceRepository } from '../../repositories/invoices'
 
-registerStdFonts(Helvetica, HelveticaBold)
+registerStdFonts(Helvetica, HelveticaBold, CourierBold)
 
 type InvoiceDetail = NonNullable<Awaited<ReturnType<InvoiceRepository['findDetail']>>>
 type PdfDocument = InstanceType<typeof PDFDocument>
@@ -104,16 +107,32 @@ function drawHeader(document: PdfDocument, detail: InvoiceDetail) {
   const markX = LAYOUT.left
   const markY = 28
 
-  fillRect(document, markX, markY, markSize, markSize, COLORS.brandSoft)
+  const logo = SYSTEM_LOGO
+  const scale = markSize / logo.size
+  document.save()
+  document.roundedRect(markX, markY, markSize, markSize, logo.radius * scale).fill(logo.background)
   document
-    .font('Helvetica-Bold')
-    .fontSize(10)
-    .fillColor(COLORS.brandInk)
-    .text(sellerInitials(invoice.sellerName), markX, markY + 9, {
+    .roundedRect(
+      markX + logo.borderInset * scale,
+      markY + logo.borderInset * scale,
+      markSize - 2 * logo.borderInset * scale,
+      markSize - 2 * logo.borderInset * scale,
+      (logo.radius - logo.borderInset) * scale,
+    )
+    .lineWidth(logo.borderWidth * scale)
+    .strokeOpacity(logo.borderOpacity)
+    .stroke(logo.foreground)
+  document
+    .font('Courier-Bold')
+    .fontSize(logo.fontSize * scale)
+    .fillColor(logo.foreground)
+    .text(logo.text, markX, markY + logo.textBaseline * scale, {
       width: markSize,
       align: 'center',
       lineBreak: false,
+      baseline: 'alphabetic',
     })
+  document.restore()
 
   const sellerX = markX + markSize + 10
   const sellerWidth = 250
@@ -603,15 +622,6 @@ function totalRow(
   document
     .fillColor(COLORS.ink)
     .text(value, x + 106, y, { width: width - 126, align: 'right', lineBreak: false })
-}
-
-function sellerInitials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  const first = parts[0]
-  const last = parts.length > 1 ? parts[parts.length - 1] : undefined
-  if (!first) return 'IN'
-  if (!last) return first.slice(0, 2).toUpperCase()
-  return `${first[0] ?? ''}${last[0] ?? ''}`.toUpperCase()
 }
 
 function formatDate(value: string) {

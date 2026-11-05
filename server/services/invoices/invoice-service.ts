@@ -102,8 +102,8 @@ export class InvoiceService {
     const config = await useBillingConfig()
     const totals = computeManualInvoiceTotals(input, config.defaultTaxRate)
 
-    if (totals.totalAmount <= 0n) {
-      throw DomainError.validation('Total invoice harus lebih dari 0.')
+    if (totals.totalAmount < 0n) {
+      throw DomainError.validation('Total invoice tidak boleh negatif.')
     }
 
     return this.database.transaction(async (transaction) => {
@@ -202,8 +202,8 @@ export class InvoiceService {
 
     const config = await useBillingConfig()
     const totals = computeManualInvoiceTotals(input, config.defaultTaxRate)
-    if (totals.totalAmount <= 0n) {
-      throw DomainError.validation('Total invoice harus lebih dari 0.')
+    if (totals.totalAmount < 0n) {
+      throw DomainError.validation('Total invoice tidak boleh negatif.')
     }
 
     const today = todayIsoDate(config.timezone)

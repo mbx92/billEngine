@@ -6,6 +6,14 @@ while API, webhook, and asset requests continue normally. After grace expires,
 browser navigations are redirected to the overdue page and non-browser requests
 receive `402 Payment Required`.
 
+Access is determined by invoice status and due date, not its amount. An `unpaid`
+or `overdue` invoice past its due date triggers the same grace/blocked policy
+even when its total or remaining balance is zero, including free trials and
+100% discounts. `draft`, `paid`, and `cancelled` invoices do not trigger this
+policy. The due date itself remains normal; grace starts on the next calendar
+day in the configured billing timezone. Zero-value invoices can be created or
+edited and are not automatically marked paid merely because their total is zero.
+
 The gate does not stop Coolify resources. This is intentional: stopping an
 application can also remove its generated Traefik route, which would produce a
 proxy error instead of the billing page.

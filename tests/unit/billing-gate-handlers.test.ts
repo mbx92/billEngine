@@ -124,6 +124,35 @@ describe('gateway HTTP handlers', () => {
     expect(await response.text()).not.toContain('SVC-1')
   })
 
+  it.each(['grace', 'blocked'] as const)(
+    'redirects %s browser navigation to a usable invoice notice',
+    async (state) => {
+      evaluate.mockResolvedValue({
+        ...decision,
+        state,
+        invoice: {
+          id: 'i1',
+          invoiceNumber: 'INV-1',
+          dueDate: '2026-01-01',
+          fingerprint: 'invoice',
+        },
+      })
+      const response = await fetch(`${baseUrl}/check`, { headers, redirect: 'manual' })
+      expect(response.status).toBe(302)
+      const location = new URL(response.headers.get('location')!)
+      expect(location.pathname).toBe('/billing/overdue')
+      const notice = await fetch(
+        `${baseUrl}/notice?token=${encodeURIComponent(location.searchParams.get('token')!)}`,
+      )
+      expect(notice.status).toBe(200)
+      const { data } = await notice.json()
+      expect(data.state).toBe(state)
+      expect(data.invoiceNumber).toBe('INV-1')
+      expect(data.portalUrl).toBe('/portal/invoices/i1')
+      expect(Boolean(data.continueUrl)).toBe(state === 'grace')
+    },
+  )
+
   it('keeps API access and valid acknowledgements working during grace', async () => {
     evaluate.mockResolvedValue({
       ...decision,

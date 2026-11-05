@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 import type {
   CreateServiceInput,
   TransitionServiceInput,
@@ -218,10 +218,15 @@ export class ServiceCatalogService {
     }
   }
 
-  /** Permanently removes a cancelled service that has no invoice history. */
+  /** Permanently removes a cancelled service once all its invoices have been deleted. */
   async removeCancelled(id: string, actor: ActorContext) {
     return this.database.transaction(async (transaction) => {
-      const existing = await this.repository.findById(transaction, id)
+      // Serialize deletion with status changes and new foreign-key references.
+      const [existing] = await transaction
+        .select()
+        .from(services)
+        .where(eq(services.id, id))
+        .for('update')
       if (!existing) throw DomainError.notFound('Service tidak ditemukan.')
       if (existing.status !== 'cancelled') {
         throw DomainError.invalidState('Hanya service yang sudah dibatalkan yang dapat dihapus.')
@@ -230,10 +235,12 @@ export class ServiceCatalogService {
       const [billingRun] = await transaction
         .select({ id: serviceBillingRuns.id })
         .from(serviceBillingRuns)
-        .where(eq(serviceBillingRuns.serviceId, id))
+        .where(and(eq(serviceBillingRuns.serviceId, id), isNotNull(serviceBillingRuns.invoiceId)))
         .limit(1)
       if (billingRun) {
-        throw DomainError.invalidState('Service yang sudah memiliki invoice tidak dapat dihapus.')
+        throw DomainError.invalidState(
+          'Service masih memiliki invoice. Hapus invoice terkait terlebih dahulu; membatalkan invoice saja belum cukup.',
+        )
       }
 
       const [invoiceItem] = await transaction
@@ -242,9 +249,16 @@ export class ServiceCatalogService {
         .where(eq(invoiceItems.serviceId, id))
         .limit(1)
       if (invoiceItem) {
-        throw DomainError.invalidState('Service yang sudah memiliki invoice tidak dapat dihapus.')
+        throw DomainError.invalidState(
+          'Service masih memiliki invoice. Hapus invoice terkait terlebih dahulu; membatalkan invoice saja belum cukup.',
+        )
       }
 
+      // Detached periods prevent rebilling while a service exists. Once that cancelled
+      // service is removed they can be deleted too, in the same transaction.
+      await transaction
+        .delete(serviceBillingRuns)
+        .where(and(eq(serviceBillingRuns.serviceId, id), isNull(serviceBillingRuns.invoiceId)))
       await transaction.delete(serviceResources).where(eq(serviceResources.serviceId, id))
       await transaction.delete(provisioningJobs).where(eq(provisioningJobs.serviceId, id))
       await transaction.delete(serviceDatabases).where(eq(serviceDatabases.serviceId, id))

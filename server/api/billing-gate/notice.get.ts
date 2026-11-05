@@ -44,7 +44,7 @@ export default defineEventHandler(async (event) => {
       daysPastDue: decision.daysPastDue,
       graceEndsAt: decision.graceEndsAt,
       continueUrl: decision.state === 'grace' ? continueUrl : null,
-      portalUrl: `/login?redirect=${encodeURIComponent(decision.invoice ? `/portal/invoices/${decision.invoice.id}` : '/portal/services')}`,
+      portalUrl: decision.invoice ? `/portal/invoices/${decision.invoice.id}` : '/portal/services',
     },
   }
 })

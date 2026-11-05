@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, lt } from 'drizzle-orm'
+import { and, asc, eq, inArray, lt } from 'drizzle-orm'
 import { useDatabase, type Database } from '../database/client'
 import {
   coolifyResources,
@@ -58,7 +58,8 @@ export class BillingAccessRepository {
         and(
           eq(invoiceItems.serviceId, serviceId),
           inArray(invoices.status, ['unpaid', 'overdue']),
-          gt(invoices.balanceDue, 0n),
+          // Access follows invoice status and due date, including zero-value trials
+          // and fully discounted invoices. Amount alone never settles an invoice.
           lt(invoices.dueDate, asOf),
         ),
       )

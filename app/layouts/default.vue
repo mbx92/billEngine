@@ -65,6 +65,7 @@ function isActive(path: string) {
 
 async function signOut() {
   await authClient.signOut()
+  clearNuxtData()
   await navigateTo('/login')
 }
 </script>
@@ -88,10 +89,7 @@ async function signOut() {
           class="flex items-center gap-3"
           @click="mobileOpen = false"
         >
-          <span
-            class="flex size-8 items-center justify-center rounded-md border border-brand/30 bg-brand/10 font-mono text-sm font-bold text-brand"
-            >B_</span
-          >
+          <AppLogo class="size-8 shrink-0" />
           <span>
             <strong class="block max-w-40 truncate text-sm leading-tight">{{
               appSettings.companyName

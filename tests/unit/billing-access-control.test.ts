@@ -57,32 +57,35 @@ describe('billing access control service', () => {
     expect(repository.findServiceByHost).not.toHaveBeenCalled()
   })
 
-  it('returns grace and blocked decisions from the oldest open invoice', async () => {
-    const repository = {
-      findServiceByHost: vi.fn().mockResolvedValue({
-        id: 'service-1',
-        name: 'Customer app',
-        serviceNumber: 'SVC-1',
-      }),
-      findOldestOpenOverdueInvoice: vi.fn().mockResolvedValue({
-        id: 'invoice-1',
-        invoiceNumber: 'INV-1',
-        dueDate: '2026-09-10',
-        balanceDue: 100n,
-      }),
-    } as unknown as BillingAccessRepository
-    const settingsService = {
-      getBillingSettings: vi.fn().mockResolvedValue(settings),
-    } as unknown as SettingsService
-    const service = new BillingAccessControlService(repository, settingsService)
+  it.each([0n, 100n])(
+    'returns grace and blocked decisions regardless of balance %s',
+    async (balanceDue) => {
+      const repository = {
+        findServiceByHost: vi.fn().mockResolvedValue({
+          id: 'service-1',
+          name: 'Customer app',
+          serviceNumber: 'SVC-1',
+        }),
+        findOldestOpenOverdueInvoice: vi.fn().mockResolvedValue({
+          id: 'invoice-1',
+          invoiceNumber: 'INV-1',
+          dueDate: '2026-09-10',
+          balanceDue,
+        }),
+      } as unknown as BillingAccessRepository
+      const settingsService = {
+        getBillingSettings: vi.fn().mockResolvedValue(settings),
+      } as unknown as SettingsService
+      const service = new BillingAccessControlService(repository, settingsService)
 
-    await expect(
-      service.evaluate('app.example.test', 'secret', '2026-09-17'),
-    ).resolves.toMatchObject({ state: 'grace', daysPastDue: 7, graceEndsAt: '2026-09-17' })
-    await expect(
-      service.evaluate('app.example.test', 'secret', '2026-09-18'),
-    ).resolves.toMatchObject({ state: 'blocked', daysPastDue: 8 })
-  })
+      await expect(
+        service.evaluate('app.example.test', 'secret', '2026-09-17'),
+      ).resolves.toMatchObject({ state: 'grace', daysPastDue: 7, graceEndsAt: '2026-09-17' })
+      await expect(
+        service.evaluate('app.example.test', 'secret', '2026-09-18'),
+      ).resolves.toMatchObject({ state: 'blocked', daysPastDue: 8 })
+    },
+  )
 
   it.each(['suspended', 'cancelled'])(
     'blocks %s services even without an invoice',

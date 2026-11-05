@@ -11,6 +11,7 @@ import { CreditNoteRepository } from '../../server/repositories/credit-notes'
 import { CustomerRepository } from '../../server/repositories/customers'
 import { InvoiceRepository } from '../../server/repositories/invoices'
 import { BillingAccessRepository } from '../../server/repositories/billing-access'
+import { BillingAccessControlService } from '../../server/services/billing/access-control-service'
 import { PaymentRepository } from '../../server/repositories/payments'
 import { PlanRepository } from '../../server/repositories/plans'
 import { ServiceRepository } from '../../server/repositories/services'
@@ -478,6 +479,119 @@ describeWithDatabase('billing flow integration', () => {
     expect(await database.select().from(invoices)).toHaveLength(0)
   })
 
+  it('deletes a cancelled service after invoice deletion without reopening the billed period', async () => {
+    const { service } = await createCustomerPlanAndService()
+    const other = await createCustomerPlanAndService('2026-01-01', ' other')
+    const generated = await invoiceService.generateRecurring(
+      { asOf: '2026-01-01', limit: 100 },
+      actor,
+    )
+    const invoiceId = generated.created.find((row) => row.serviceId === service.id)!.invoiceId
+    await invoiceService.cancel(invoiceId, actor)
+    await invoiceService.removeCancelled(invoiceId, actor)
+
+    expect(
+      await database
+        .select()
+        .from(serviceBillingRuns)
+        .where(eq(serviceBillingRuns.serviceId, service.id)),
+    ).toEqual([expect.objectContaining({ invoiceId: null, periodStart: '2026-01-01' })])
+    expect(
+      (await invoiceService.generateRecurring({ asOf: '2026-01-01', limit: 100 }, actor)).created,
+    ).toHaveLength(0)
+    await expect(services.removeCancelled(service.id, actor)).rejects.toMatchObject({
+      code: 'STATE_INVALID',
+    })
+    await services.transition(
+      service.id,
+      { status: 'cancelled', reason: 'Remove unused service' },
+      actor,
+    )
+
+    await expect(services.removeCancelled(service.id, actor)).resolves.toMatchObject({
+      id: service.id,
+    })
+    expect(
+      await database.select().from(schema.services).where(eq(schema.services.id, service.id)),
+    ).toHaveLength(0)
+    expect(
+      await database
+        .select()
+        .from(serviceBillingRuns)
+        .where(eq(serviceBillingRuns.serviceId, service.id)),
+    ).toHaveLength(0)
+    expect(
+      await database
+        .select()
+        .from(serviceBillingRuns)
+        .where(eq(serviceBillingRuns.serviceId, other.service.id)),
+    ).toHaveLength(1)
+    expect(
+      await database
+        .select()
+        .from(schema.auditLogs)
+        .where(eq(schema.auditLogs.entityId, service.id)),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'service.deleted' })]))
+  })
+
+  it.each(['unpaid', 'cancelled'] as const)(
+    'preserves a cancelled service while a %s recurring invoice still exists',
+    async (status) => {
+      const { service } = await createCustomerPlanAndService()
+      const generated = await invoiceService.generateRecurring(
+        { asOf: '2026-01-01', limit: 100 },
+        actor,
+      )
+      const invoiceId = generated.created[0]!.invoiceId
+      if (status === 'cancelled') await invoiceService.cancel(invoiceId, actor)
+      await services.transition(
+        service.id,
+        { status: 'cancelled', reason: 'Customer cancelled' },
+        actor,
+      )
+      await expect(services.removeCancelled(service.id, actor)).rejects.toMatchObject({
+        code: 'STATE_INVALID',
+      })
+      expect(
+        await database.select().from(schema.services).where(eq(schema.services.id, service.id)),
+      ).toHaveLength(1)
+      expect(
+        await database
+          .select()
+          .from(serviceBillingRuns)
+          .where(eq(serviceBillingRuns.serviceId, service.id)),
+      ).toHaveLength(1)
+      expect(await database.select().from(invoices).where(eq(invoices.id, invoiceId))).toHaveLength(
+        1,
+      )
+    },
+  )
+
+  it('protects manual invoice items even without a billing period record', async () => {
+    const invoice = await createManualInvoice()
+    const [item] = await database
+      .select()
+      .from(schema.invoiceItems)
+      .where(eq(schema.invoiceItems.invoiceId, invoice.id))
+    const serviceId = item!.serviceId!
+    await database.delete(serviceBillingRuns).where(eq(serviceBillingRuns.serviceId, serviceId))
+    await invoiceService.cancel(invoice.id, actor)
+    await services.transition(
+      serviceId,
+      { status: 'cancelled', reason: 'Customer cancelled' },
+      actor,
+    )
+    await expect(services.removeCancelled(serviceId, actor)).rejects.toMatchObject({
+      code: 'STATE_INVALID',
+    })
+    expect(
+      await database
+        .select()
+        .from(schema.invoiceItems)
+        .where(eq(schema.invoiceItems.invoiceId, invoice.id)),
+    ).toHaveLength(1)
+  })
+
   it('creates at most one recurring invoice for the same service period', async () => {
     const { customer, service } = await createCustomerPlanAndService('2026-01-01')
 
@@ -526,6 +640,127 @@ describeWithDatabase('billing flow integration', () => {
       },
     ])
     expect(storedService?.nextDueDate).toBe('2026-02-01')
+  })
+
+  it.each(['free', 'discount', 'recurring'] as const)(
+    'applies grace and blocking to a zero-value %s invoice using status and due date',
+    async (kind) => {
+      const { customer, service } = await createCustomerPlanAndService()
+      const [server] = await database
+        .insert(schema.coolifyServers)
+        .values({ name: 'Gate test', baseUrl: 'https://coolify.example.test' })
+        .returning()
+      const [resource] = await database
+        .insert(schema.coolifyResources)
+        .values({
+          coolifyServerId: server!.id,
+          coolifyUuid: 'trial-app',
+          resourceType: 'application',
+          name: 'Trial app',
+          classification: 'billable',
+          fqdn: 'https://trial.example.test',
+        })
+        .returning()
+      await database
+        .insert(schema.serviceResources)
+        .values({ serviceId: service.id, resourceId: resource!.id })
+      let invoiceId: string
+      if (kind === 'recurring') {
+        await database
+          .update(schema.services)
+          .set({ priceAmount: 0n })
+          .where(eq(schema.services.id, service.id))
+        const generated = await invoiceService.generateRecurring(
+          { asOf: '2026-01-01', limit: 100 },
+          actor,
+        )
+        invoiceId = generated.created[0]!.invoiceId
+      } else {
+        const invoice = await invoiceService.createManual(
+          {
+            customerId: customer.id,
+            issueDate: '2026-01-01',
+            dueDate: '2026-01-08',
+            discountPercent: kind === 'discount' ? '1' : undefined,
+            items: [
+              {
+                serviceId: service.id,
+                description: 'Trial access',
+                quantity: '1',
+                unitPriceAmount: kind === 'discount' ? 100_000n : 0n,
+                taxRate: '0',
+              },
+            ],
+          },
+          actor,
+        )
+        invoiceId = invoice.id
+      }
+      const [stored] = await database.select().from(invoices).where(eq(invoices.id, invoiceId))
+      expect(stored).toMatchObject({ status: 'unpaid', totalAmount: 0n, balanceDue: 0n })
+      const gate = new BillingAccessControlService(new BillingAccessRepository(database), {
+        getBillingSettings: async () => ({
+          billingAccessControlEnabled: true,
+          billingTimezone: 'Asia/Makassar',
+          overdueGraceDays: 7,
+          graceNoticeIntervalHours: 24,
+        }),
+      } as never)
+      await expect(
+        gate.evaluate('trial.example.test', 'test-secret', '2026-01-08'),
+      ).resolves.toMatchObject({ state: 'normal' })
+      await expect(
+        gate.evaluate('trial.example.test', 'test-secret', '2026-01-09'),
+      ).resolves.toMatchObject({ state: 'grace', invoice: { id: invoiceId } })
+      await invoiceService.markOverdue('2026-01-09', actor)
+      await expect(
+        gate.evaluate('trial.example.test', 'test-secret', '2026-01-15'),
+      ).resolves.toMatchObject({ state: 'grace' })
+      await expect(
+        gate.evaluate('trial.example.test', 'test-secret', '2026-01-16'),
+      ).resolves.toMatchObject({ state: 'blocked' })
+      for (const status of ['draft', 'paid', 'cancelled'] as const) {
+        await database.update(invoices).set({ status }).where(eq(invoices.id, invoiceId))
+        await expect(
+          gate.evaluate('trial.example.test', 'test-secret', '2026-01-16'),
+        ).resolves.toMatchObject({ state: 'normal' })
+      }
+    },
+  )
+
+  it('allows editing an invoice to a 100% discount without settling its status', async () => {
+    const invoice = await createManualInvoice()
+    const [item] = await database
+      .select()
+      .from(schema.invoiceItems)
+      .where(eq(schema.invoiceItems.invoiceId, invoice.id))
+    await invoiceService.update(
+      invoice.id,
+      {
+        customerId: invoice.customerId,
+        issueDate: '2026-01-01',
+        dueDate: '2099-01-31',
+        discountPercent: '1',
+        items: [
+          {
+            serviceId: item!.serviceId!,
+            description: 'Discounted service',
+            quantity: '1',
+            unitPriceAmount: 1_000_000n,
+            taxRate: '0',
+          },
+        ],
+      },
+      actor,
+    )
+    const [stored] = await database.select().from(invoices).where(eq(invoices.id, invoice.id))
+    expect(stored).toMatchObject({
+      status: 'unpaid',
+      totalAmount: 0n,
+      balanceDue: 0n,
+      discountAmount: 1_000_000n,
+    })
+    expect(await database.select().from(payments)).toHaveLength(0)
   })
 
   it('uses synced Coolify domains instead of legacy managed domain records', async () => {
